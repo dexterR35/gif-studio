@@ -3,7 +3,6 @@ import { StudioProvider } from './context/studio-provider'
 import { StudioLayout } from './layout/studio-layout'
 import MotionPage from './pages/motion-page'
 import TextPage from './pages/text-page'
-import FramesPage from './pages/frames-page'
 import EditPage from './pages/edit-page'
 import OutputPage from './pages/output-page'
 import { ROUTES } from './lib/routes'
@@ -17,7 +16,7 @@ function GifApp() {
           <Route path="motion" element={<MotionPage />} />
           <Route path="elements" element={<Navigate to="../motion" replace />} />
           <Route path="text" element={<TextPage />} />
-          <Route path="frames" element={<FramesPage />} />
+          <Route path="frames" element={<Navigate to="../motion" replace />} />
           <Route path="edit" element={<EditPage />} />
           <Route path="output" element={<OutputPage />} />
           <Route path="preview" element={<Navigate to="../motion" replace />} />

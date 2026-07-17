@@ -10,19 +10,29 @@ import { StudioHeader } from './studio-header'
 import { ToolsRail } from './tools-rail'
 import { WorkspaceNav } from './workspace-nav'
 
+const FOCUS_TABS = new Set(['edit', 'output'])
+
+const FOCUS_TITLES = {
+  edit: 'Effects',
+  output: 'Export',
+}
+
 export function StudioLayout() {
   const {
     mobilePanel, setMobilePanel, exporting, frames, progress, toast,
     baseImageSelected, selectedElements, clearLayerSelection, setSelectedText,
+    selectedOverlay, setSelectedOverlay,
     maskEditing, setMaskEditing, selectMode, setSelectMode, cancelSelection,
     activeTab, setPlaying,
   } = useStudio()
 
+  const isFocus = FOCUS_TABS.has(activeTab)
   const isOutput = activeTab === 'output'
-  const inspectorOpen = !isOutput && (baseImageSelected || selectedElements.length > 0 || maskEditing || selectMode)
+  const inspectorOpen = !isFocus && (baseImageSelected || selectedElements.length > 0 || Boolean(selectedOverlay) || maskEditing || selectMode)
 
   const closeInspector = () => {
     clearLayerSelection()
+    setSelectedOverlay(null)
     setSelectedText(null)
     setMaskEditing(false)
     if (selectMode) {
@@ -31,18 +41,20 @@ export function StudioLayout() {
     }
   }
 
-  // Clean export/preview mode — no edit chrome or selection tools.
+  // Focus workspaces: clear edit chrome so the stage + right panel stay clean.
   useEffect(() => {
-    if (!isOutput) return undefined
+    if (!isFocus) return undefined
     clearLayerSelection()
     setSelectedText(null)
     setMaskEditing(false)
     cancelSelection()
     setSelectMode(false)
     setMobilePanel(false)
-    setPlaying(true)
-    return () => setPlaying(false)
-  }, [isOutput]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (isOutput) setPlaying(true)
+    return () => {
+      if (isOutput) setPlaying(false)
+    }
+  }, [isFocus, isOutput]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="flex h-screen max-h-screen flex-col overflow-hidden bg-ink text-zinc-100">
@@ -50,7 +62,7 @@ export function StudioLayout() {
       <WorkspaceNav />
 
       <main className="relative flex min-h-0 flex-1 overflow-hidden">
-        {!isOutput && (
+        {!isFocus && (
           <>
             <ProjectAside />
             <ToolsRail />
@@ -70,11 +82,11 @@ export function StudioLayout() {
 
         <PreviewStage />
 
-        {isOutput ? (
+        {isFocus ? (
           <aside className="scrollbar flex h-full w-[300px] shrink-0 flex-col overflow-y-auto overscroll-contain border-l border-white/[.06] bg-panel px-3.5">
             <div className="flex h-11 shrink-0 items-center border-b border-white/[.06]">
               <span className="text-[10px] font-semibold uppercase tracking-[.14em] text-zinc-500">
-                Export
+                {FOCUS_TITLES[activeTab] || 'Panel'}
               </span>
             </div>
             <div className="pb-4">

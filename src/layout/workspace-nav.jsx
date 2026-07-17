@@ -1,4 +1,4 @@
-import { Film, Settings2, SlidersHorizontal, Sparkles, Type } from 'lucide-react'
+import { Settings2, SlidersHorizontal, Sparkles, Type } from 'lucide-react'
 import { WorkspaceTabs } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
 import { GIF_WORKSPACES } from '../lib/routes'
@@ -6,7 +6,6 @@ import { GIF_WORKSPACES } from '../lib/routes'
 const TAB_META = {
   motion: Sparkles,
   text: Type,
-  frames: Film,
   edit: SlidersHorizontal,
   output: Settings2,
 }

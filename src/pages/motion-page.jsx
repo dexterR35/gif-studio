@@ -1,11 +1,11 @@
-import { Cpu } from 'lucide-react'
-import { Field, FormGrid, Section, SelectField, Slider } from '../components/ui'
+import { Cpu, ImagePlus } from 'lucide-react'
+import { Button, Field, FormGrid, Section, SelectField, Slider } from '../components/ui'
 import { BASE_MOTIONS, PRESETS } from '../lib/presets'
 import { useStudio } from '../context/studio-provider'
 import { cn } from '../lib/cn'
 
 export default function MotionPage() {
-  const { settings, update, applyPreset } = useStudio()
+  const { settings, update, applyPreset, overlayFileRef, addOverlay } = useStudio()
 
   const animationActive = (settings.motion || 'None') !== 'None'
 
@@ -66,6 +66,23 @@ export default function MotionPage() {
             onChange={(v) => update('speed', v)}
           />
         </div>
+      </Section>
+
+      <Section title="Image overlays" info="Added as layers — select one in the layers bar to edit.">
+        <Button variant="soft" size="lg" full onClick={() => overlayFileRef.current?.click()}>
+          <ImagePlus className="h-4 w-4" />
+          Add image
+        </Button>
+        <input
+          ref={overlayFileRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            addOverlay(e.target.files[0])
+            e.target.value = ''
+          }}
+        />
       </Section>
     </>
   )

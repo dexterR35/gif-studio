@@ -28,7 +28,6 @@ export function StudioProvider({ children }) {
   const stageRef = useRef(null)
   const fileRef = useRef(null)
   const fontFileRef = useRef(null)
-  const frameFileRef = useRef(null)
   const overlayFileRef = useRef(null)
   const compressGifRef = useRef(null)
   const rafRef = useRef(null)
@@ -74,9 +73,6 @@ export function StudioProvider({ children }) {
   const [lastExport, setLastExport] = useState(null)
   const [maskEditing, setMaskEditing] = useState(false)
   const [maskBrush, setMaskBrush] = useState({ mode: 'Hide', size: 48, hardness: 70, opacity: 100, feather: 8 })
-  const [frameSequence, setFrameSequence] = useState([])
-  const [frameMode, setFrameMode] = useState(false)
-  const [frameOptions, setFrameOptions] = useState({ fit: 'Contain', crossfade: false, crossfadeFrames: 3 })
   const maskPainting = useRef(false)
   const [imageEdits, setImageEdits] = useState({ rotation: 0, flipX: false, flipY: false, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 })
   const [censor, setCensor] = useState({ enabled: false, x: 25, y: 25, w: 30, h: 20, pixelSize: 14 })
@@ -97,9 +93,8 @@ export function StudioProvider({ children }) {
     ...(quality === 'High quality' ? { palette: 256, dither: true, lossy: 0, compressionMethod: 'Lossless' } : {}),
   }))
   const timedFrames = Math.max(2, Math.round(settings.duration * settings.fps))
-  const sequenceFrames = frameSequence.length + (frameOptions.crossfade ? frameSequence.length * frameOptions.crossfadeFrames : 0)
-  const frames = frameMode && frameSequence.length ? Math.max(timedFrames, sequenceFrames) : timedFrames
-  const timingFps = frameMode && frameSequence.length ? frames / settings.duration : settings.fps
+  const frames = timedFrames
+  const timingFps = settings.fps
   const frameDelays = useMemo(() => Array.from({ length: frames }, (_, index) => {
     const start = Math.round(index * 1000 / timingFps / 10) * 10
     const end = Math.round((index + 1) * 1000 / timingFps / 10) * 10
@@ -133,12 +128,6 @@ export function StudioProvider({ children }) {
       .catch(() => setApiAvailable(false))
   }, [])
 
-  useEffect(() => {
-    if (!frameMode || !frameSequence.length) return
-    const sequenceDuration = Math.max(.1, Math.min(120, frameSequence.reduce((sum, frame) => sum + frame.delay, 0) / 100))
-    setSettings((current) => Math.abs(current.duration - sequenceDuration) < .001 ? current : { ...current, duration: sequenceDuration })
-  }, [frameMode, frameSequence])
-
   const draw = useCallback((rawT, target = canvasRef.current, exportScale = 1) => {
     if (!target || !image) return
     const ctx = target.getContext('2d', { willReadFrequently: true })
@@ -166,36 +155,21 @@ export function StudioProvider({ children }) {
       if (motion === 'Orbit') { x += Math.cos(phase) * amp; y += Math.sin(phase) * amp }
     }
     const opacity = (settings.opacityStart + (settings.opacityEnd - settings.opacityStart) * t) / 100
-    let activeImages = [{ image, alpha: 1 }]
-    if (frameMode && frameSequence.length) {
-      const totalDelay = frameSequence.reduce((total, frame) => total + frame.delay, 0)
-      let position = rawT * totalDelay, frameIndex = 0
-      while (frameIndex < frameSequence.length - 1 && position >= frameSequence[frameIndex].delay) { position -= frameSequence[frameIndex].delay; frameIndex++ }
-      const current = frameSequence[frameIndex], frameProgress = position / Math.max(1, current.delay)
-      activeImages = [{ image: current.image, alpha: 1 }]
-      const fadeStart = Math.max(.1, 1 - frameOptions.crossfadeFrames / 10)
-      if (frameOptions.crossfade && frameProgress > fadeStart) {
-        const fade = (frameProgress - fadeStart) / (1 - fadeStart), next = frameSequence[(frameIndex + 1) % frameSequence.length]
-        activeImages = [{ image: current.image, alpha: 1 - fade }, { image: next.image, alpha: fade }]
-      }
-    }
     ctx.save(); ctx.translate(W / 2 + x / 100 * W, H / 2 + y / 100 * H); ctx.rotate((rotation + imageEdits.rotation) * Math.PI / 180); ctx.scale(imageEdits.flipX ? -1 : 1, imageEdits.flipY ? -1 : 1)
     ctx.filter = `brightness(${imageEdits.brightness}%) contrast(${imageEdits.contrast}%) saturate(${imageEdits.saturation}%) blur(${imageEdits.blur}px) hue-rotate(${imageEdits.hue}deg) grayscale(${imageEdits.grayscale}%) sepia(${imageEdits.sepia}%)`
-    activeImages.forEach(({ image: frameImage, alpha }) => {
-      const iw = frameImage.naturalWidth, ih = frameImage.naturalHeight
-      const contain = Math.min(W / iw, H / ih), cover = Math.max(W / iw, H / ih)
-      const fitMode = frameMode ? frameOptions.fit : settings.fit
-      // Match Python engine._base_size: Contain/Cover scale to canvas; Original size = 1:1 source pixels.
-      const base = fitMode === 'Cover'
-        ? cover
-        : fitMode === 'Original size'
-          ? exportScale
-          : contain
-      const dw = iw * base * scale, dh = ih * base * scale
-      ctx.globalAlpha = opacity * alpha
-      if (fitMode === 'Stretch') ctx.drawImage(frameImage, 0, 0, iw, ih, -W * scale / 2, -H * scale / 2, W * scale, H * scale)
-      else ctx.drawImage(frameImage, 0, 0, iw, ih, -dw / 2, -dh / 2, dw, dh)
-    })
+    const iw = image.naturalWidth, ih = image.naturalHeight
+    const contain = Math.min(W / iw, H / ih), cover = Math.max(W / iw, H / ih)
+    const fitMode = settings.fit
+    // Match Python engine._base_size: Contain/Cover scale to canvas; Original size = 1:1 source pixels.
+    const base = fitMode === 'Cover'
+      ? cover
+      : fitMode === 'Original size'
+        ? exportScale
+        : contain
+    const dw = iw * base * scale, dh = ih * base * scale
+    ctx.globalAlpha = opacity
+    if (fitMode === 'Stretch') ctx.drawImage(image, 0, 0, iw, ih, -W * scale / 2, -H * scale / 2, W * scale, H * scale)
+    else ctx.drawImage(image, 0, 0, iw, ih, -dw / 2, -dh / 2, dw, dh)
     ctx.restore()
 
     if (censor.enabled) {
@@ -350,7 +324,7 @@ export function StudioProvider({ children }) {
       if (gifEffects.frame === 'Fuzzy') { ctx.setLineDash([line, line * .7]); ctx.lineCap = 'round'; ctx.strokeRect(line / 2, line / 2, W - line, H - line) }
       ctx.restore()
     }
-  }, [image, settings, elements, textLayers, parallax, frameMode, frameSequence, frameOptions, imageEdits, censor, overlays, gifEffects])
+  }, [image, settings, elements, textLayers, parallax, imageEdits, censor, overlays, gifEffects])
 
   useEffect(() => {
     if (!image) return
@@ -384,7 +358,7 @@ export function StudioProvider({ children }) {
         setToast(`Image dimensions must be at most ${MAX_UPLOAD_DIMENSION}×${MAX_UPLOAD_DIMENSION} px (got ${probe.naturalWidth}×${probe.naturalHeight}).`)
         return
       }
-      setElements([]); setSelectedElements([]); setBaseImageSelected(false); setImageLocked(false); setTextLayers([]); setSelectedText(null); setFrameSequence([]); setFrameMode(false); setOverlays([]); setSelectedOverlay(null); setGifEffects({ ...EFFECT_DEFAULTS }); setImageEdits({ rotation: 0, flipX: false, flipY: false, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 }); setCensor((current) => ({ ...current, enabled: false })); setParallax((current) => ({ ...current, enabled: false }))
+      setElements([]); setSelectedElements([]); setBaseImageSelected(false); setImageLocked(false); setTextLayers([]); setSelectedText(null); setOverlays([]); setSelectedOverlay(null); setGifEffects({ ...EFFECT_DEFAULTS }); setImageEdits({ rotation: 0, flipX: false, flipY: false, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 }); setCensor((current) => ({ ...current, enabled: false })); setParallax((current) => ({ ...current, enabled: false }))
       // Canvas size is applied when the image loads (original size, capped at MAX_CANVAS).
       setSource({ name: file.name, width: probe.naturalWidth, height: probe.naturalHeight, url })
       setToast(`Image loaded at ${probe.naturalWidth} × ${probe.naturalHeight} px`)
@@ -424,7 +398,7 @@ export function StudioProvider({ children }) {
   }
 
   const applyPreset = (name) => setSettings((s) => ({ ...s, preset: name, ...PRESETS[name] }))
-  const reset = () => { setSettings(INITIAL); setElements([]); setSelectedElements([]); setTextLayers([]); setSelectedText(null); setFrameSequence([]); setFrameMode(false); setMaskEditing(false); setOverlays([]); setSelectedOverlay(null); setGifEffects({ ...EFFECT_DEFAULTS }); setImageEdits({ rotation: 0, flipX: false, flipY: false, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 }); setCensor({ enabled: false, x: 25, y: 25, w: 30, h: 20, pixelSize: 14 }); setParallax({ enabled: false, direction: 'Horizontal', strength: 6, speed: 1 }); setProgress(0); setPlaying(false); setToast('Settings reset') }
+  const reset = () => { setSettings(INITIAL); setElements([]); setSelectedElements([]); setTextLayers([]); setSelectedText(null); setMaskEditing(false); setOverlays([]); setSelectedOverlay(null); setGifEffects({ ...EFFECT_DEFAULTS }); setImageEdits({ rotation: 0, flipX: false, flipY: false, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 }); setCensor({ enabled: false, x: 25, y: 25, w: 30, h: 20, pixelSize: 14 }); setParallax({ enabled: false, direction: 'Horizontal', strength: 6, speed: 1 }); setProgress(0); setPlaying(false); setToast('Settings reset') }
 
   const pointerPosition = (event) => {
     const bounds = stageRef.current.getBoundingClientRect()
@@ -630,6 +604,7 @@ export function StudioProvider({ children }) {
     const el = elements.find((item) => item.id === id)
     if (!el) return
     setBaseImageSelected(false)
+    setSelectedOverlay(null)
     setSelectedText(null)
     setPlaying(false)
     setSelectMode(false)
@@ -711,9 +686,32 @@ export function StudioProvider({ children }) {
     if (imageLocked) { setToast('Base image is locked'); return }
     setBaseImageSelected(true)
     setSelectedElements([])
+    setSelectedOverlay(null)
     setSelectedText(null)
     setPlaying(false)
     goToWorkspace('motion')
+  }
+  const selectOverlay = (id) => {
+    const overlay = overlays.find((item) => item.id === id)
+    if (!overlay) return
+    setSelectedOverlay(id)
+    setSelectedElements([])
+    setBaseImageSelected(false)
+    setSelectedText(null)
+    setPlaying(false)
+    setSelectMode(false)
+    setMaskEditing(false)
+    setEffectTarget('Selected overlay')
+  }
+  const toggleOverlayVisible = (id) => {
+    setOverlays((current) => current.map((overlay) => (
+      overlay.id === id ? { ...overlay, visible: !overlay.visible } : overlay
+    )))
+  }
+  const removeOverlay = (id) => {
+    setOverlays((current) => current.filter((overlay) => overlay.id !== id))
+    setSelectedOverlay((current) => current === id ? null : current)
+    setToast('Overlay removed')
   }
   const selectStageElement = (id, event) => {
     const el = elements.find((item) => item.id === id)
@@ -939,53 +937,6 @@ export function StudioProvider({ children }) {
     } catch { setToast('This font file could not be loaded') }
   }
   const imageFromUrl = (url) => new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = url })
-  const loadFrameFiles = async (files) => {
-    const selected = [...files]; if (!selected.length) return
-    setToast(`Loading ${selected.length} frame source${selected.length > 1 ? 's' : ''}…`)
-    const additions = []
-    for (const file of selected) {
-      const blocked = uploadImageError(file)
-      if (blocked) { setToast(blocked); continue }
-      let extracted = null
-      if (apiAvailable) {
-        try {
-          const form = new FormData(); form.append('image', file, file.name)
-          const response = await fetch('/api/extract-frames', { method: 'POST', body: form })
-          if (response.ok) extracted = (await response.json()).frames
-          else {
-            const detail = await response.json().catch(() => ({}))
-            setToast(apiErrorMessage(detail.detail, 'Frame upload rejected'))
-            continue
-          }
-        } catch { /* Browser fallback below. */ }
-      }
-      if (extracted) {
-        for (const frame of extracted) additions.push({ id: `${Date.now()}-${additions.length}`, name: `${file.name} · ${frame.index + 1}`, image: await imageFromUrl(frame.image), url: frame.image, delay: frame.delay })
-      } else {
-        const url = URL.createObjectURL(file)
-        const image = await imageFromUrl(url)
-        if (Math.max(image.naturalWidth, image.naturalHeight) > MAX_UPLOAD_DIMENSION) {
-          URL.revokeObjectURL(url)
-          setToast(`Image dimensions must be at most ${MAX_UPLOAD_DIMENSION}×${MAX_UPLOAD_DIMENSION} px (got ${image.naturalWidth}×${image.naturalHeight}).`)
-          continue
-        }
-        additions.push({ id: `${Date.now()}-${additions.length}`, name: file.name, image, url, delay: 10 })
-      }
-    }
-    if (!additions.length) return
-    setFrameSequence((current) => [...current, ...additions]); setFrameMode(true); goToWorkspace('frames'); setPlaying(false)
-    const first = additions[0]?.image
-    if (first) { const cap = Math.min(1, 1920 / Math.max(first.naturalWidth, first.naturalHeight)); setSettings((current) => ({ ...current, width: Math.round(first.naturalWidth * cap), height: Math.round(first.naturalHeight * cap), duration: Math.max(.1, additions.reduce((sum, frame) => sum + frame.delay, 0) / 100) })) }
-    setToast(`${additions.length} frame${additions.length > 1 ? 's' : ''} added`)
-  }
-  const updateFrame = (id, values) => setFrameSequence((current) => current.map((frame) => frame.id === id ? { ...frame, ...values } : frame))
-  const moveFrame = (id, direction) => setFrameSequence((current) => {
-    const index = current.findIndex((frame) => frame.id === id), next = index + direction
-    if (index < 0 || next < 0 || next >= current.length) return current
-    const copy = [...current]; [copy[index], copy[next]] = [copy[next], copy[index]]; return copy
-  })
-  const duplicateFrame = (frame) => setFrameSequence((current) => [...current.slice(0, current.indexOf(frame) + 1), { ...frame, id: `${Date.now()}-copy`, name: `${frame.name} copy` }, ...current.slice(current.indexOf(frame) + 1)])
-  const removeFrame = (id) => setFrameSequence((current) => current.filter((frame) => frame.id !== id))
   const activeEffects = effectTarget === 'Selected element'
     ? (elements.find((element) => element.id === selectedElement)?.effects || EFFECT_DEFAULTS)
     : effectTarget === 'Selected overlay'
@@ -996,15 +947,22 @@ export function StudioProvider({ children }) {
     else if (effectTarget === 'Selected overlay' && selectedOverlay) setOverlays((current) => current.map((overlay) => overlay.id === selectedOverlay ? { ...overlay, effects: { ...(overlay.effects || EFFECT_DEFAULTS), [key]: value } } : overlay))
     else setGifEffects((current) => ({ ...current, [key]: value }))
   }
-  const reorderFrame = (draggedId, targetId) => setFrameSequence((current) => {
-    const from = current.findIndex((frame) => frame.id === draggedId), to = current.findIndex((frame) => frame.id === targetId)
-    if (from < 0 || to < 0 || from === to) return current
-    const copy = [...current], [moved] = copy.splice(from, 1); copy.splice(to, 0, moved); return copy
-  })
   const addOverlay = async (file) => {
     if (!file) return
     const url = URL.createObjectURL(file), overlayImage = await imageFromUrl(url), id = Date.now()
-    setOverlays((current) => [...current, { id, name: file.name, image: overlayImage, url, x: 50, y: 50, width: 30, scaleX: 100, scaleY: 100, rotation: 0, opacity: 100, flipX: false, flipY: false, effects: { ...EFFECT_DEFAULTS }, visible: true }]); setSelectedOverlay(id); setEffectTarget('Selected overlay'); goToWorkspace('edit'); setToast('Image overlay added')
+    setOverlays((current) => [...current, {
+      id, name: file.name, image: overlayImage, url,
+      x: 50, y: 50, width: 30, scaleX: 100, scaleY: 100, rotation: 0, opacity: 100,
+      flipX: false, flipY: false, effects: { ...EFFECT_DEFAULTS }, visible: true,
+    }])
+    setSelectedOverlay(id)
+    setSelectedElements([])
+    setBaseImageSelected(false)
+    setSelectedText(null)
+    setEffectTarget('Selected overlay')
+    setPlaying(false)
+    goToWorkspace('motion')
+    setToast('Image overlay added')
   }
   const updateOverlay = (key, value) => setOverlays((current) => current.map((overlay) => {
     if (overlay.id !== selectedOverlay) return overlay
@@ -1139,7 +1097,7 @@ export function StudioProvider({ children }) {
 
   const value = {
     // refs
-    canvasRef, stageRef, fileRef, fontFileRef, frameFileRef, overlayFileRef, compressGifRef,
+    canvasRef, stageRef, fileRef, fontFileRef, overlayFileRef, compressGifRef,
     // state
     settings, setSettings, image, source, playing, setPlaying, progress, setProgress, exporting,
     dropActive, setDropActive, mobilePanel, setMobilePanel, toast, setToast, activeTab, goToWorkspace, zoom, setZoom, canvasZoom,
@@ -1152,7 +1110,6 @@ export function StudioProvider({ children }) {
     selection, setSelection, selectionPoints, setSelectionPoints, extractTolerance, setExtractTolerance,
     apiAvailable, apiInfo, segmenting, textLayers, setTextLayers, selectedText, setSelectedText, fontOptions,
     parallax, setParallax, lastExport, maskEditing, setMaskEditing, maskBrush, setMaskBrush,
-    frameSequence, setFrameSequence, frameMode, setFrameMode, frameOptions, setFrameOptions,
     imageEdits, setImageEdits, censor, setCensor, censorSelecting, setCensorSelecting,
     overlays, setOverlays, selectedOverlay, setSelectedOverlay, effectTarget, setEffectTarget, gifEffects, setGifEffects,
     // derived
@@ -1163,8 +1120,8 @@ export function StudioProvider({ children }) {
     toggleElementLock, toggleElementVisible, toggleImageLock, toggleFlip, rotateSelection, selectionFlip, toggleTextLock, selectBaseImage, selectStageElement,
     beginTransform, moveTransform, endTransform,
     resetElementMask, invertElementMask, featherElementMask, addTextLayer, updateText, removeText, moveText,
-    uploadFont, loadFrameFiles, updateFrame, moveFrame, duplicateFrame, removeFrame, reorderFrame, updateEffect,
-    addOverlay, updateOverlay, saveCurrentPng, compressExistingGif, beginTextDrag, dragTextLayer, endTextDrag,
+    uploadFont, updateEffect,
+    addOverlay, updateOverlay, selectOverlay, toggleOverlayVisible, removeOverlay, saveCurrentPng, compressExistingGif, beginTextDrag, dragTextLayer, endTextDrag,
     exportGif, textBounds,
   }
 

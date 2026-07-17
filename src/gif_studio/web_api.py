@@ -84,18 +84,6 @@ def _ai_mask(payload: bytes, model: str) -> np.ndarray:
     return decoded[:, :, 3]
 
 
-def _frame_duration_ms(duration: object) -> float:
-    """Normalize ImageIO/Pillow frame durations to milliseconds."""
-    try:
-        value = float(duration)
-    except (TypeError, ValueError):
-        return 100.0
-    if value <= 0:
-        return 100.0
-    # Durations below 10 are almost always seconds (e.g. 0.1s); larger values are ms.
-    return value * 1000.0 if value < 10 else value
-
-
 def _grabcut_mask(source: np.ndarray, rect: tuple[int, int, int, int], iterations: int) -> np.ndarray:
     mask = np.zeros(source.shape[:2], np.uint8)
     background_model = np.zeros((1, 65), np.float64)
@@ -222,47 +210,6 @@ async def segment_element(
         "fill": "opencv-content-aware",
         "rect": {"x": x, "y": y, "width": width, "height": height},
     }
-
-
-@app.post("/api/extract-frames")
-async def extract_frames(
-    image: Annotated[UploadFile, File(description="PNG or JPG image")],
-) -> dict[str, object]:
-    payload = await image.read()
-    _require_upload_image(payload, filename=image.filename)
-    extension = Path(image.filename or "image.png").suffix.lower() or ".png"
-    extracted: list[dict[str, object]] = []
-    try:
-        for index, frame in enumerate(iio.imiter(payload, extension=extension)):
-            if index >= 500:
-                raise HTTPException(400, "Animated inputs are limited to 500 frames.")
-            try:
-                metadata = iio.immeta(payload, extension=extension, index=index)
-                duration_ms = _frame_duration_ms(metadata.get("duration", 100))
-            except Exception:
-                duration_ms = 100
-            if frame.ndim == 2:
-                encoded_frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGRA)
-            elif frame.ndim == 3 and frame.shape[2] == 4:
-                encoded_frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGRA)
-            elif frame.ndim == 3 and frame.shape[2] == 3:
-                encoded_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            else:
-                raise ValueError(f"Unsupported frame shape: {getattr(frame, 'shape', None)}")
-            extracted.append(
-                {
-                    "image": _png_data_url(encoded_frame),
-                    "delay": max(2, int(round(duration_ms / 10))),
-                    "index": index,
-                }
-            )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(422, f"ImageIO could not extract this file: {exc}") from exc
-    if not extracted:
-        raise HTTPException(422, "No image frames were found.")
-    return {"filename": image.filename, "frames": extracted}
 
 
 @app.post("/api/optimize-png")

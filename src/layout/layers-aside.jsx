@@ -10,8 +10,11 @@ export function LayersAside() {
     elements, selectedElements, selectLayer, selectBaseImage,
     baseImageSelected, imageLocked, toggleImageLock,
     toggleElementLock, toggleElementVisible, removeElement,
+    overlays, selectedOverlay, selectOverlay, toggleOverlayVisible, removeOverlay,
     setSelectMode, setMaskEditing,
   } = useStudio()
+
+  const layerCount = elements.length + overlays.length
 
   return (
     <aside
@@ -20,7 +23,7 @@ export function LayersAside() {
     >
       <div className="flex h-11 shrink-0 items-center border-b border-white/[.06] px-3">
         <span className="text-[10px] font-semibold uppercase tracking-[.14em] text-zinc-500">
-          Layers · {elements.length}
+          Layers · {layerCount}
         </span>
       </div>
 
@@ -41,9 +44,9 @@ export function LayersAside() {
           className="!rounded-md !p-1.5"
         />
 
-        {!elements.length && (
+        {!elements.length && !overlays.length && (
           <EmptyState icon={Layers3} className="mt-2 px-1">
-            Use a selection tool to extract layers
+            Use a selection tool to extract layers, or add an image overlay
           </EmptyState>
         )}
 
@@ -67,6 +70,29 @@ export function LayersAside() {
             onToggleVisible={() => toggleElementVisible(el.id)}
             onToggleLock={() => toggleElementLock(el.id)}
             onRemove={() => removeElement(el.id)}
+            className="!rounded-md !p-1.5"
+          />
+        ))}
+
+        {overlays.map((overlay) => (
+          <LayerRow
+            key={overlay.id}
+            selected={selectedOverlay === overlay.id}
+            onClick={() => {
+              selectOverlay(overlay.id)
+              setSelectMode(false)
+              setMaskEditing(false)
+            }}
+            thumb={(
+              <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded checker ring-1 ring-white/[.08]">
+                <img src={overlay.url} alt="" className="max-h-full max-w-full object-contain" />
+              </span>
+            )}
+            title={overlay.name}
+            subtitle="Overlay"
+            visible={overlay.visible}
+            onToggleVisible={() => toggleOverlayVisible(overlay.id)}
+            onRemove={() => removeOverlay(overlay.id)}
             className="!rounded-md !p-1.5"
           />
         ))}

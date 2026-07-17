@@ -6,7 +6,6 @@ export const ROUTES = {
     motion: '/gif/motion',
     elements: '/gif/elements',
     text: '/gif/text',
-    frames: '/gif/frames',
     edit: '/gif/edit',
     output: '/gif/output',
   },
@@ -15,7 +14,6 @@ export const ROUTES = {
 export const GIF_WORKSPACES = [
   'motion',
   'text',
-  'frames',
   'edit',
   'output',
 ]

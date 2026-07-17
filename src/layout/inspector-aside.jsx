@@ -256,12 +256,60 @@ function ParallaxPanel({ layers }) {
   )
 }
 
+function OverlayTransformPanel({ overlay }) {
+  const { updateOverlay, removeOverlay } = useStudio()
+
+  return (
+    <>
+      <Section title="Transform" info="Position, size, and appearance of this image overlay." open>
+        <div className="space-y-1">
+          <Slider label="X position" value={overlay.x} onChange={(v) => updateOverlay('x', v)} min={-100} max={200} />
+          <Slider label="Y position" value={overlay.y} onChange={(v) => updateOverlay('y', v)} min={-100} max={200} />
+          <Slider label="Size" value={overlay.width} onChange={(v) => updateOverlay('width', v)} min={1} max={300} />
+          <Slider label="Scale X" value={overlay.scaleX || 100} onChange={(v) => updateOverlay('scaleX', v)} min={1} max={500} />
+          <Slider label="Scale Y" value={overlay.scaleY || 100} onChange={(v) => updateOverlay('scaleY', v)} min={1} max={500} />
+          <Slider label="Rotation" value={overlay.rotation} onChange={(v) => updateOverlay('rotation', v)} min={-360} max={360} />
+          <Slider label="Opacity" value={overlay.opacity} onChange={(v) => updateOverlay('opacity', v)} min={0} max={100} />
+        </div>
+        <RotateControls
+          className="mt-3"
+          value={overlay.rotation}
+          onChange={(v) => updateOverlay('rotation', v)}
+        />
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <Switch label="Flip H" checked={overlay.flipX} onChange={(v) => updateOverlay('flipX', v)} />
+          <Switch label="Flip V" checked={overlay.flipY} onChange={(v) => updateOverlay('flipY', v)} />
+        </div>
+      </Section>
+
+      <Section title="Layer" open>
+        <Switch
+          label="Show overlay"
+          checked={overlay.visible}
+          onChange={(v) => updateOverlay('visible', v)}
+        />
+        <Button
+          variant="danger"
+          full
+          className="mt-3 text-[10px]"
+          onClick={() => removeOverlay(overlay.id)}
+        >
+          Remove overlay
+        </Button>
+      </Section>
+    </>
+  )
+}
+
 /** Properties inspector (2nd bar) — transform, mask paint, selection, parallax. */
 export function InspectorAside() {
   const {
     baseImageSelected,
     selectedElements,
     elements,
+    overlays,
+    selectedOverlay,
+    setSelectedOverlay,
     clearLayerSelection,
     setSelectedText,
     maskEditing,
@@ -274,18 +322,21 @@ export function InspectorAside() {
   const selectedLayers = elements.filter((el) => selectedElements.includes(el.id))
   const multi = selectedLayers.length >= 2
   const single = selectedLayers.length === 1 ? selectedLayers[0] : null
+  const overlay = overlays.find((item) => item.id === selectedOverlay) || null
 
-  const open = baseImageSelected || selectedLayers.length > 0 || maskEditing || selectMode
+  const open = baseImageSelected || selectedLayers.length > 0 || Boolean(overlay) || maskEditing || selectMode
 
   let title = 'Properties'
   if (maskEditing) title = 'Mask'
   else if (selectMode) title = 'Selection'
   else if (multi) title = `${selectedLayers.length} layers`
   else if (single) title = single.name || 'Layer'
+  else if (overlay) title = overlay.name || 'Overlay'
   else if (baseImageSelected) title = 'Base image'
 
   const close = () => {
     clearLayerSelection()
+    setSelectedOverlay(null)
     setSelectedText(null)
     setMaskEditing(false)
     if (selectMode) {
@@ -299,6 +350,7 @@ export function InspectorAside() {
   else if (selectMode) body = <SelectionOptionsPanel />
   else if (multi) body = <ParallaxPanel layers={selectedLayers} />
   else if (single) body = <ElementTransformPanel el={single} />
+  else if (overlay) body = <OverlayTransformPanel overlay={overlay} />
   else if (baseImageSelected) body = <BaseTransformPanel />
 
   return (

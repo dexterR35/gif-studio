@@ -4,18 +4,8 @@ import { useStudio } from '../context/studio-provider'
 
 export default function TextPage() {
   const {
-    settings, update, applyPreset, applyQuality, setSettings,
     textLayers, selectedText, setSelectedText, setPlaying, addTextLayer, updateText, removeText, moveText,
     fontOptions, fontFileRef, uploadFont,
-    frameFileRef, loadFrameFiles, frameMode, setFrameMode, frameOptions, setFrameOptions,
-    frameSequence, setFrameSequence, updateFrame, moveFrame, duplicateFrame, removeFrame, reorderFrame,
-    effectTarget, setEffectTarget, elements, selectedElement, setSelectedElement, overlays, selectedOverlay, setSelectedOverlay,
-    updateElement, updateOverlay, imageEdits, setImageEdits, activeEffects, updateEffect, gifEffects, setGifEffects,
-    censor, setCensor, setCensorSelecting, setMaskEditing, setSelectMode, overlayFileRef, addOverlay,
-    saveCurrentPng, compressGifRef, compressExistingGif, lastExport,
-    apiAvailable, apiInfo, selectionTool, setSelectionTool, cancelSelection, segmenting, setSelection, setSelectionPoints,
-    selectMode, setMobilePanel, extractTolerance, setExtractTolerance, removeElement,
-    parallax, setParallax, maskEditing, maskBrush, setMaskBrush, resetElementMask, invertElementMask, featherElementMask,
   } = useStudio()
 
   return (
