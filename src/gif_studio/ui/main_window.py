@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..engine import load_source_image
+from ..numbers import nice
 from ..models import (
     SUPPORTED_DITHERING,
     SUPPORTED_EASING,
@@ -56,8 +57,8 @@ from ..worker import RenderWorker
 from .widgets import ColorButton, ImagePreviewLabel
 
 IMAGE_FILTER = (
-    "Images (*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff *.gif);;"
-    "PNG (*.png);;JPEG (*.jpg *.jpeg);;WebP (*.webp);;All files (*)"
+    "Images (*.png *.jpg *.jpeg);;"
+    "PNG (*.png);;JPEG (*.jpg *.jpeg)"
 )
 
 
@@ -258,16 +259,16 @@ class MainWindow(QMainWindow):
         transform_layout.addWidget(QLabel("Start"), 0, 1)
         transform_layout.addWidget(QLabel("End"), 0, 2)
 
-        self.scale_start_spin = self._double_spin(1, 1000, 1, " %")
-        self.scale_end_spin = self._double_spin(1, 1000, 1, " %")
-        self.rotation_start_spin = self._double_spin(-3600, 3600, 1, "°")
-        self.rotation_end_spin = self._double_spin(-3600, 3600, 1, "°")
-        self.offset_x_start_spin = self._double_spin(-300, 300, 1, " %")
-        self.offset_x_end_spin = self._double_spin(-300, 300, 1, " %")
-        self.offset_y_start_spin = self._double_spin(-300, 300, 1, " %")
-        self.offset_y_end_spin = self._double_spin(-300, 300, 1, " %")
-        self.opacity_start_spin = self._double_spin(0, 100, 1, " %")
-        self.opacity_end_spin = self._double_spin(0, 100, 1, " %")
+        self.scale_start_spin = self._double_spin(1, 1000, 1, " %", 1)
+        self.scale_end_spin = self._double_spin(1, 1000, 1, " %", 1)
+        self.rotation_start_spin = self._double_spin(-3600, 3600, 1, "°", 1)
+        self.rotation_end_spin = self._double_spin(-3600, 3600, 1, "°", 1)
+        self.offset_x_start_spin = self._double_spin(-300, 300, 1, " %", 1)
+        self.offset_x_end_spin = self._double_spin(-300, 300, 1, " %", 1)
+        self.offset_y_start_spin = self._double_spin(-300, 300, 1, " %", 1)
+        self.offset_y_end_spin = self._double_spin(-300, 300, 1, " %", 1)
+        self.opacity_start_spin = self._double_spin(0, 100, 1, " %", 1)
+        self.opacity_end_spin = self._double_spin(0, 100, 1, " %", 1)
 
         transform_rows = (
             ("Scale", self.scale_start_spin, self.scale_end_spin),
@@ -441,7 +442,13 @@ class MainWindow(QMainWindow):
         spin.setSingleStep(step)
         spin.setDecimals(decimals)
         spin.setSuffix(suffix)
+        # Keep displayed/edited values tidy (no 212.75675675765).
+        spin.setCorrectionMode(QDoubleSpinBox.CorrectionMode.CorrectToNearestValue)
         return spin
+
+    @staticmethod
+    def _set_double(spin: QDoubleSpinBox, value: float) -> None:
+        spin.setValue(nice(value, spin.decimals()))
 
     # --------------------------------------------------------------- event wiring
     def _connect_change_signals(self) -> None:
@@ -515,7 +522,7 @@ class MainWindow(QMainWindow):
 
         self._source_path = path
         self._source_size = image.size
-        self._source_aspect = image.width / image.height
+        self._source_aspect = image.width / max(1, image.height)
         self._settings_store.setValue("last_image_directory", str(path.parent))
         self.source_info_label.setText(
             f"{path.name}\n{image.width} × {image.height} px · {path.suffix.upper().lstrip('.')}"
@@ -531,9 +538,9 @@ class MainWindow(QMainWindow):
         if not self._source_size:
             return
         source_w, source_h = self._source_size
-        scale = min(1.0, 1200 / max(source_w, source_h))
-        width = max(1, int(round(source_w * scale)))
-        height = max(1, int(round(source_h * scale)))
+        # Start at original image size (safety-capped), matching the web studio.
+        width = max(1, min(8192, source_w))
+        height = max(1, min(8192, source_h))
         with QSignalBlocker(self.width_spin), QSignalBlocker(self.height_spin):
             self.width_spin.setValue(width)
             self.height_spin.setValue(height)
@@ -588,7 +595,10 @@ class MainWindow(QMainWindow):
         try:
             for key, widget in mapping.items():
                 if key in values:
-                    widget.setValue(values[key])
+                    if isinstance(widget, QDoubleSpinBox):
+                        self._set_double(widget, values[key])
+                    else:
+                        widget.setValue(values[key])
             if "ping_pong" in values:
                 with QSignalBlocker(self.ping_pong_check):
                     self.ping_pong_check.setChecked(bool(values["ping_pong"]))
@@ -680,22 +690,22 @@ class MainWindow(QMainWindow):
             background_color=self.background_button.color_name,
             transparent_background=self.transparent_check.isChecked(),
             preset=self.preset_combo.currentText(),
-            duration_seconds=self.duration_spin.value(),
+            duration_seconds=nice(self.duration_spin.value(), 2),
             fps=self.fps_spin.value(),
             easing=self.easing_combo.currentText(),
             ping_pong=self.ping_pong_check.isChecked(),
-            scale_start_percent=self.scale_start_spin.value(),
-            scale_end_percent=self.scale_end_spin.value(),
-            rotation_start_degrees=self.rotation_start_spin.value(),
-            rotation_end_degrees=self.rotation_end_spin.value(),
-            offset_x_start_percent=self.offset_x_start_spin.value(),
-            offset_x_end_percent=self.offset_x_end_spin.value(),
-            offset_y_start_percent=self.offset_y_start_spin.value(),
-            offset_y_end_percent=self.offset_y_end_spin.value(),
-            opacity_start_percent=self.opacity_start_spin.value(),
-            opacity_end_percent=self.opacity_end_spin.value(),
-            amplitude_percent=self.amplitude_spin.value(),
-            cycles=self.cycles_spin.value(),
+            scale_start_percent=nice(self.scale_start_spin.value(), 1),
+            scale_end_percent=nice(self.scale_end_spin.value(), 1),
+            rotation_start_degrees=nice(self.rotation_start_spin.value(), 1),
+            rotation_end_degrees=nice(self.rotation_end_spin.value(), 1),
+            offset_x_start_percent=nice(self.offset_x_start_spin.value(), 1),
+            offset_x_end_percent=nice(self.offset_x_end_spin.value(), 1),
+            offset_y_start_percent=nice(self.offset_y_start_spin.value(), 1),
+            offset_y_end_percent=nice(self.offset_y_end_spin.value(), 1),
+            opacity_start_percent=nice(self.opacity_start_spin.value(), 1),
+            opacity_end_percent=nice(self.opacity_end_spin.value(), 1),
+            amplitude_percent=nice(self.amplitude_spin.value(), 1),
+            cycles=nice(self.cycles_spin.value(), 1),
             loop_count=self.loop_spin.value(),
             palette_colors=self.palette_spin.value(),
             dithering=self.dither_combo.currentText(),

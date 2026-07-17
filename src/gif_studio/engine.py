@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import math
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -12,6 +13,11 @@ from .models import AnimationSettings, GifMetadata
 
 ProgressCallback = Callable[[int, str], None]
 CancelCallback = Callable[[], bool]
+
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+MAX_UPLOAD_DIMENSION = 5000
+ALLOWED_UPLOAD_FORMATS = frozenset({"PNG", "JPEG"})
+ALLOWED_UPLOAD_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg"})
 
 
 class RenderCancelled(RuntimeError):
@@ -27,15 +33,48 @@ class FrameTransform:
     opacity: float
 
 
+def validate_uploaded_image(
+    payload: bytes,
+    *,
+    filename: str | None = None,
+) -> Image.Image:
+    """Reject uploads that are missing, oversized, wrong type, or larger than 5k px."""
+    if not payload:
+        raise ValueError("An image file is required.")
+    if len(payload) > MAX_UPLOAD_BYTES:
+        raise ValueError("Image exceeds the 20 MB upload limit.")
+
+    suffix = Path(filename or "").suffix.lower()
+    if suffix and suffix not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise ValueError("Only PNG and JPG images are allowed.")
+
+    try:
+        with Image.open(io.BytesIO(payload)) as opened:
+            image_format = (opened.format or "").upper()
+            if image_format not in ALLOWED_UPLOAD_FORMATS:
+                raise ValueError("Only PNG and JPG images are allowed.")
+            oriented = ImageOps.exif_transpose(opened) or opened
+            width, height = oriented.size
+            if max(width, height) > MAX_UPLOAD_DIMENSION:
+                raise ValueError(
+                    f"Image dimensions must be at most {MAX_UPLOAD_DIMENSION}×{MAX_UPLOAD_DIMENSION} px "
+                    f"(got {width}×{height})."
+                )
+            return oriented.convert("RGBA")
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"Could not open image: {exc}") from exc
+
+
 def load_source_image(path: str | Path) -> Image.Image:
     source_path = Path(path)
     if not source_path.is_file():
         raise FileNotFoundError(f"Source image does not exist: {source_path}")
+    payload = source_path.read_bytes()
     try:
-        with Image.open(source_path) as opened:
-            oriented = ImageOps.exif_transpose(opened)
-            return oriented.convert("RGBA")
-    except Exception as exc:  # Pillow raises several format-specific exceptions.
+        return validate_uploaded_image(payload, filename=source_path.name)
+    except ValueError as exc:
         raise ValueError(f"Could not open '{source_path.name}' as an image: {exc}") from exc
 
 

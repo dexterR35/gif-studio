@@ -19,6 +19,8 @@ from fastapi.responses import Response
 from PIL import Image
 from starlette.concurrency import run_in_threadpool
 
+from .engine import MAX_UPLOAD_BYTES, validate_uploaded_image
+
 app = FastAPI(title="GIF Studio Local API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
@@ -29,15 +31,31 @@ app.add_middleware(
     expose_headers=["X-GIF-Encoder", "X-GIF-Optimized", "X-GIF-Original-Bytes", "X-GIF-Bytes", "X-GIF-Compression"],
 )
 
-MAX_IMAGE_BYTES = 30 * 1024 * 1024
+MAX_IMAGE_BYTES = MAX_UPLOAD_BYTES
 MAX_FRAMES = 240
 AI_MODEL = "isnet-general-use"
 _rembg_session = None
+_rembg_model: str | None = None
+
+
+def _reject_upload(exc: ValueError) -> HTTPException:
+    message = str(exc)
+    status = 413 if "20 MB" in message or "exceeds" in message.lower() else 400
+    if "required" in message.lower():
+        status = 422
+    return HTTPException(status, message)
+
+
+def _require_upload_image(payload: bytes, filename: str | None = None) -> Image.Image:
+    try:
+        return validate_uploaded_image(payload, filename=filename)
+    except ValueError as exc:
+        raise _reject_upload(exc) from exc
 
 
 def _decode_image(payload: bytes) -> np.ndarray:
     if not payload or len(payload) > MAX_IMAGE_BYTES:
-        raise HTTPException(413, "Image is empty or exceeds the 30 MB local API limit.")
+        raise HTTPException(413, "Image is empty or exceeds the 20 MB local API limit.")
     image = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         raise HTTPException(400, "OpenCV could not decode this image.")
@@ -53,16 +71,29 @@ def _png_data_url(image: np.ndarray) -> str:
 
 def _ai_mask(payload: bytes, model: str) -> np.ndarray:
     """Return a full-size alpha mask using one reusable local ONNX session."""
-    global _rembg_session
+    global _rembg_session, _rembg_model
     from rembg import new_session, remove
 
-    if _rembg_session is None:
+    if _rembg_session is None or _rembg_model != model:
         _rembg_session = new_session(model)
+        _rembg_model = model
     result = remove(payload, session=_rembg_session, post_process_mask=True)
     decoded = cv2.imdecode(np.frombuffer(result, np.uint8), cv2.IMREAD_UNCHANGED)
     if decoded is None or decoded.ndim != 3 or decoded.shape[2] < 4:
         raise RuntimeError("The AI model did not return an alpha mask.")
     return decoded[:, :, 3]
+
+
+def _frame_duration_ms(duration: object) -> float:
+    """Normalize ImageIO/Pillow frame durations to milliseconds."""
+    try:
+        value = float(duration)
+    except (TypeError, ValueError):
+        return 100.0
+    if value <= 0:
+        return 100.0
+    # Durations below 10 are almost always seconds (e.g. 0.1s); larger values are ms.
+    return value * 1000.0 if value < 10 else value
 
 
 def _grabcut_mask(source: np.ndarray, rect: tuple[int, int, int, int], iterations: int) -> np.ndarray:
@@ -195,11 +226,10 @@ async def segment_element(
 
 @app.post("/api/extract-frames")
 async def extract_frames(
-    image: Annotated[UploadFile, File(description="Static or animated image")],
+    image: Annotated[UploadFile, File(description="PNG or JPG image")],
 ) -> dict[str, object]:
     payload = await image.read()
-    if not payload or len(payload) > 50 * 1024 * 1024:
-        raise HTTPException(413, "Frame source is empty or exceeds 50 MB.")
+    _require_upload_image(payload, filename=image.filename)
     extension = Path(image.filename or "image.png").suffix.lower() or ".png"
     extracted: list[dict[str, object]] = []
     try:
@@ -208,16 +238,17 @@ async def extract_frames(
                 raise HTTPException(400, "Animated inputs are limited to 500 frames.")
             try:
                 metadata = iio.immeta(payload, extension=extension, index=index)
-                duration = metadata.get("duration", 100)
-                duration_ms = float(duration) * 1000 if 0 < float(duration) < 10 else float(duration)
+                duration_ms = _frame_duration_ms(metadata.get("duration", 100))
             except Exception:
                 duration_ms = 100
             if frame.ndim == 2:
                 encoded_frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGRA)
-            elif frame.shape[2] == 4:
+            elif frame.ndim == 3 and frame.shape[2] == 4:
                 encoded_frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGRA)
-            else:
+            elif frame.ndim == 3 and frame.shape[2] == 3:
                 encoded_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            else:
+                raise ValueError(f"Unsupported frame shape: {getattr(frame, 'shape', None)}")
             extracted.append(
                 {
                     "image": _png_data_url(encoded_frame),
@@ -240,8 +271,8 @@ async def optimize_png(
     palette: Annotated[bool, Form()] = False,
 ) -> Response:
     payload = await image.read()
-    if not payload or len(payload) > 50 * 1024 * 1024:
-        raise HTTPException(413, "PNG is empty or exceeds 50 MB.")
+    if not payload or len(payload) > MAX_IMAGE_BYTES:
+        raise HTTPException(413, "PNG is empty or exceeds the 20 MB limit.")
     try:
         source = Image.open(io.BytesIO(payload))
         output = io.BytesIO()
@@ -312,8 +343,10 @@ async def export_gif(
     expected_shape: tuple[int, ...] | None = None
     for upload in frames:
         payload = await upload.read()
+        if not payload:
+            raise HTTPException(422, "An image file is required.")
         if len(payload) > MAX_IMAGE_BYTES:
-            raise HTTPException(413, "One or more frames exceed 30 MB.")
+            raise HTTPException(413, "One or more frames exceed the 20 MB upload limit.")
         frame = iio.imread(payload, extension=".png")
         if expected_shape is None:
             expected_shape = frame.shape
@@ -423,7 +456,8 @@ async def compress_gif(
         raise HTTPException(400, "The compressor accepts GIF files only.")
     if not shutil.which("gifsicle"):
         raise HTTPException(503, "gifsicle is not installed on this machine.")
-    lossy = max(0, min(lossy, 200)); colors = max(2, min(colors, 256))
+    lossy = max(0, min(lossy, 200))
+    colors = max(2, min(colors, 256))
     try:
         from pygifsicle import optimize as optimize_gif
 

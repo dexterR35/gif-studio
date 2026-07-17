@@ -1,0 +1,294 @@
+import { ImagePlus, Info, Pause, Play } from 'lucide-react'
+import { Button, CanvasViewport, SelectionPath, StageHint, Switch, TransformBox, ZoomControls } from '../components/ui'
+import { fmtBytes } from '../lib/format'
+import { useStudio } from '../context/studio-provider'
+
+export function PreviewStage() {
+  const {
+    stageRef, stageStyle, startSelection, moveSelection, finishSelection,
+    selectMode, selectionTool, completePathSelection, canvasRef, image, selection,
+    selectionPoints, smoothSelectionPath, maskEditing, playing, elements, selectedElement,
+    textLayers, textBounds, beginTextDrag, dragTextLayer,
+    endTextDrag, selectedText, setSelectionPoints, cancelSelection, censorSelecting,
+    setPlaying, progress, setProgress, actualDuration, frames, draw, frameDelays, actualFps,
+    settings, update, memory, canvasZoom,
+    baseImageSelected, imageLocked, imageTransformBox, selectBaseImage, selectStageElement,
+    toggleImageLock, toggleElementLock, beginTransform, moveTransform, endTransform,
+    clearLayerSelection, selectedElements, setSelectedText,
+  } = useStudio()
+
+  const interacting = selectMode || maskEditing || censorSelecting
+  const selectedEl = elements.find((el) => el.id === selectedElement)
+  const multiSelect = selectedElements.length >= 2
+
+  const clearSelection = () => {
+    clearLayerSelection()
+    setSelectedText(null)
+  }
+
+  const onStagePointerDown = (event) => {
+    if (interacting) {
+      startSelection(event)
+      return
+    }
+    // Click empty stage → select base image (unless locked / hitting a layer).
+    if (event.target === event.currentTarget || event.target === canvasRef.current) {
+      if (!imageLocked) selectBaseImage()
+      else clearSelection()
+    }
+  }
+
+  return (
+    <section data-canvas-stage className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-stage">
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-white/[.06] px-4 md:px-5">
+        <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[.15em] text-zinc-600">
+          <span className="h-1.5 w-1.5 rounded-full bg-acid" />Live preview
+        </div>
+        <div className="flex items-center gap-3">
+          <Switch
+            label="Loop"
+            checked={settings.pingPong}
+            onChange={(v) => update('pingPong', v)}
+            className="justify-start gap-2 text-[10px] font-bold uppercase tracking-[.15em] text-zinc-600"
+          />
+          <ZoomControls
+            zoom={canvasZoom.zoom}
+            onZoomChange={canvasZoom.setZoom}
+            onZoomIn={canvasZoom.zoomIn}
+            onZoomOut={canvasZoom.zoomOut}
+            onFit={canvasZoom.fit}
+            onReset={canvasZoom.reset}
+            onFullscreen={canvasZoom.toggleFullscreen}
+            isFullscreen={canvasZoom.isFullscreen}
+          />
+        </div>
+      </div>
+
+      <CanvasViewport
+        zoomApi={canvasZoom}
+        contentWidth={settings.width}
+        contentHeight={settings.height}
+        panEnabled
+        className="min-h-[360px] p-0"
+        onBackgroundPointerDown={() => {
+          if (!interacting) clearSelection()
+        }}
+      >
+        <div
+          ref={stageRef}
+          style={stageStyle}
+          onPointerDown={onStagePointerDown}
+          onPointerMove={(e) => { moveTransform(e); moveSelection(e) }}
+          onPointerUp={(e) => { endTransform(e); finishSelection(e) }}
+          onDoubleClick={() => {
+            if (selectMode && (selectionTool === 'Polygonal Lasso' || selectionTool === 'Pen Path')) completePathSelection()
+          }}
+          className={`card-shadow relative h-full w-full overflow-hidden rounded-[4px] ring-1 ring-white/10 ${interacting ? 'cursor-crosshair ring-2 ring-acid' : ''} ${canvasZoom.spaceDown ? 'cursor-grab' : ''}`}
+        >
+          <canvas ref={canvasRef} className="block h-full w-full" />
+          {!image && (
+            <div className="absolute inset-0 grid place-items-center bg-zinc-900">
+              <ImagePlus className="h-8 w-8 text-zinc-700" />
+            </div>
+          )}
+          {selection && selectionTool === 'Rectangle' && (
+            <div
+              className="pointer-events-none absolute border-2 border-acid bg-acid/10 shadow-[0_0_0_9999px_rgba(0,0,0,.38)]"
+              style={{ left: `${selection.x * 100}%`, top: `${selection.y * 100}%`, width: `${selection.w * 100}%`, height: `${selection.h * 100}%` }}
+            />
+          )}
+          {selectMode && selectionPoints.length > 0 && (
+            <SelectionPath points={selectionPoints} tool={selectionTool} smoothPath={smoothSelectionPath} />
+          )}
+
+          {!selectMode && !maskEditing && !playing && elements.map((el) => (
+            <button
+              key={el.id}
+              type="button"
+              onPointerDown={(e) => {
+                e.stopPropagation()
+                selectStageElement(el.id, e)
+              }}
+              title={el.locked ? `${el.name} (locked)` : el.name}
+              className={`absolute border transition ${selectedElements.includes(el.id) ? 'border-acid shadow-[0_0_0_1px_#d8ff3e]' : el.locked ? 'border-amber-400/50 border-dashed' : 'border-white/30 hover:border-acid/70'} ${el.visible ? '' : 'opacity-30'} ${el.locked ? 'cursor-not-allowed' : 'cursor-move'}`}
+              style={{ left: `${el.x * 100}%`, top: `${el.y * 100}%`, width: `${el.w * 100}%`, height: `${el.h * 100}%`, transform: `rotate(${el.rotation}deg)` }}
+            >
+              <span className="absolute -left-px -top-5 rounded-t bg-black/70 px-1.5 py-0.5 text-[8px] font-bold text-zinc-300">
+                {el.locked ? 'Locked · ' : ''}{el.name}
+              </span>
+            </button>
+          ))}
+
+          {!selectMode && !maskEditing && !playing && textLayers.filter((layer) => layer.visible).map((layer) => {
+            const box = textBounds(layer)
+            return (
+              <button
+                key={layer.id}
+                type="button"
+                onPointerDown={(e) => beginTextDrag(e, layer)}
+                onPointerMove={dragTextLayer}
+                onPointerUp={endTextDrag}
+                title={layer.locked ? `${layer.name} (locked)` : 'Drag to position text'}
+                className={`absolute border border-dashed transition ${selectedText === layer.id ? 'border-acid bg-acid/[.04]' : layer.locked ? 'cursor-not-allowed border-amber-400/50' : 'cursor-move border-white/30 hover:border-acid/70'}`}
+                style={{ left: `${box.left}%`, top: `${box.top}%`, width: `${box.width}%`, height: `${box.height}%`, transform: `rotate(${layer.rotation}deg)` }}
+              >
+                <span className="absolute -left-px -top-5 rounded-t bg-black/70 px-1.5 py-0.5 text-[8px] font-bold text-zinc-300">
+                  {layer.locked ? 'Locked · ' : ''}{layer.name}
+                </span>
+              </button>
+            )
+          })}
+
+          {!selectMode && !maskEditing && !playing && baseImageSelected && image && (
+            <TransformBox
+              x={imageTransformBox.x}
+              y={imageTransformBox.y}
+              w={imageTransformBox.w}
+              h={imageTransformBox.h}
+              rotation={imageTransformBox.rotation}
+              locked={imageLocked}
+              label={imageLocked ? 'Image · locked' : 'Image'}
+              onToggleLock={toggleImageLock}
+              onPointerDownMove={(event) => beginTransform(event, {
+                kind: 'image',
+                mode: 'move',
+                origin: {},
+              })}
+              onPointerDownHandle={(event, handle) => beginTransform(event, {
+                kind: 'image',
+                mode: `resize-${handle}`,
+                origin: {
+                  scale: (settings.scaleStart + settings.scaleEnd) / 2,
+                  scaleStart: settings.scaleStart,
+                  scaleEnd: settings.scaleEnd,
+                },
+              })}
+              onPointerDownRotate={(event) => {
+                const box = imageTransformBox
+                const bounds = stageRef.current.getBoundingClientRect()
+                const cx = (box.x + box.w / 2) * bounds.width
+                const cy = (box.y + box.h / 2) * bounds.height
+                const startAngle = Math.atan2(event.clientY - bounds.top - cy, event.clientX - bounds.left - cx) * 180 / Math.PI
+                beginTransform(event, {
+                  kind: 'image',
+                  mode: 'rotate',
+                  origin: {
+                    box,
+                    startAngle,
+                    rotateStart: settings.rotateStart,
+                    rotateEnd: settings.rotateEnd,
+                  },
+                })
+              }}
+            />
+          )}
+
+          {!selectMode && !maskEditing && !playing && !multiSelect && selectedEl && (
+            <TransformBox
+              x={selectedEl.x}
+              y={selectedEl.y}
+              w={selectedEl.w}
+              h={selectedEl.h}
+              rotation={selectedEl.rotation}
+              locked={Boolean(selectedEl.locked)}
+              label={selectedEl.locked ? `${selectedEl.name} · locked` : selectedEl.name}
+              onToggleLock={() => toggleElementLock(selectedEl.id)}
+              onPointerDownMove={(event) => beginTransform(event, {
+                kind: 'element',
+                id: selectedEl.id,
+                mode: 'move',
+                origin: { x: selectedEl.x, y: selectedEl.y, w: selectedEl.w, h: selectedEl.h, rotation: selectedEl.rotation },
+              })}
+              onPointerDownHandle={(event, handle) => beginTransform(event, {
+                kind: 'element',
+                id: selectedEl.id,
+                mode: `resize-${handle}`,
+                origin: { x: selectedEl.x, y: selectedEl.y, w: selectedEl.w, h: selectedEl.h, rotation: selectedEl.rotation },
+              })}
+              onPointerDownRotate={(event) => {
+                const bounds = stageRef.current.getBoundingClientRect()
+                const cx = (selectedEl.x + selectedEl.w / 2) * bounds.width
+                const cy = (selectedEl.y + selectedEl.h / 2) * bounds.height
+                const startAngle = Math.atan2(event.clientY - bounds.top - cy, event.clientX - bounds.left - cx) * 180 / Math.PI
+                beginTransform(event, {
+                  kind: 'element',
+                  id: selectedEl.id,
+                  mode: 'rotate',
+                  origin: { x: selectedEl.x, y: selectedEl.y, w: selectedEl.w, h: selectedEl.h, rotation: selectedEl.rotation, startAngle },
+                })
+              }}
+            />
+          )}
+
+          {selectMode && !selection && selectionPoints.length === 0 && (
+            <StageHint>
+              {selectionTool === 'Rectangle'
+                ? 'Drag a box around the object'
+                : selectionTool === 'Freehand Lasso'
+                  ? 'Draw around the object continuously'
+                  : 'Click to place selection anchors'}
+            </StageHint>
+          )}
+          {selectMode && (selectionTool === 'Polygonal Lasso' || selectionTool === 'Pen Path') && selectionPoints.length > 0 && (
+            <div
+              className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 gap-2 rounded-xl border border-white/10 bg-black/80 p-2 shadow-xl backdrop-blur"
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <Button size="sm" className="rounded-lg text-[9px] font-bold" onClick={() => setSelectionPoints((points) => points.slice(0, -1))}>Undo point</Button>
+              <Button variant="primary" size="sm" className="rounded-lg text-[9px] font-bold" disabled={selectionPoints.length < 3} onClick={completePathSelection}>Complete</Button>
+              <Button size="sm" className="rounded-lg text-[9px] font-bold" onClick={cancelSelection}>Cancel</Button>
+            </div>
+          )}
+          {censorSelecting && !selection && <StageHint>Drag over the area to censor</StageHint>}
+        </div>
+      </CanvasViewport>
+
+      <div className="pointer-events-none absolute bottom-[7.5rem] left-4 z-10 hidden items-center gap-2 rounded-lg border border-white/[.07] bg-black/40 px-2.5 py-1.5 text-[10px] text-zinc-500 backdrop-blur sm:flex">
+        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />Processed locally
+      </div>
+
+      <div className="shrink-0 border-t border-white/[.07] bg-panel px-4 pb-4 pt-3 md:px-6">
+        <div className="mb-3 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setPlaying(!playing)}
+            className="focus-ring grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white text-black transition hover:scale-105"
+          >
+            {playing ? <Pause className="h-4 w-4 fill-current" /> : <Play className="ml-0.5 h-4 w-4 fill-current" />}
+          </button>
+          <span className="w-11 text-right font-mono text-[10px] text-zinc-500">{(progress * actualDuration).toFixed(1)}s</span>
+          <input
+            aria-label="Timeline"
+            type="range"
+            min="0"
+            max={frames - 1}
+            step="1"
+            value={Math.round(progress * frames)}
+            onChange={(e) => {
+              const t = Number(e.target.value) / frames
+              setPlaying(false)
+              setProgress(t)
+              draw(t)
+            }}
+            className="gs-range"
+          />
+          <span className="w-11 font-mono text-[10px] text-zinc-500">{actualDuration.toFixed(1)}s</span>
+        </div>
+        <div className="flex items-center justify-between gap-4 border-t border-white/[.05] pt-3 text-[10px] text-zinc-600">
+          <div className="flex gap-4">
+            <span><b className="text-zinc-400">{frames}</b> frames</span>
+            <span title={`GIF delays: ${[...new Set(frameDelays)].join('/')} ms`}>
+              <b className="text-zinc-400">{actualFps.toFixed(2)}</b> real fps
+            </span>
+            <span className="hidden sm:inline">
+              <b className="text-zinc-400">{settings.width} × {settings.height}</b> px
+            </span>
+          </div>
+          <div className={`flex items-center gap-1.5 ${memory > 1.8e9 ? 'text-red-400' : ''}`}>
+            <Info className="h-3.5 w-3.5" /> {fmtBytes(memory)} render memory
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
