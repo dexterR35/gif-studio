@@ -3,7 +3,8 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { GIFEncoder, applyPalette, quantize } from 'gifenc'
 import { PRESETS, INITIAL, TEXT_DEFAULT, SYSTEM_FONTS, EFFECT_DEFAULTS, transformsFromAmount } from '../lib/presets'
 import { clamp, clampNice, fmtBytes, ease, MAX_CANVAS, MAX_UPLOAD_DIMENSION, nice, uploadImageError } from '../lib/format'
-import { applyPixelEffects, ditherToPalette, presetFilter } from '../lib/effects'
+import { applyPixelEffects, applyDistortion, ditherToPalette, presetFilter } from '../lib/effects'
+import { sampleDistortions, sampleZoomScale, clampMotionEffects, createMotionEffect, MAX_MOTION_EFFECTS, isBaseMotionClip } from '../lib/motion-effects'
 import { gifWorkspacePath, workspaceFromPath } from '../lib/routes'
 import { useCanvasZoom } from '../hooks/use-canvas-zoom'
 
@@ -21,6 +22,18 @@ function moveInStack(list, id, direction) {
   const copy = [...list]
   const [item] = copy.splice(index, 1)
   copy.splice(nextIndex, 0, item)
+  return copy
+}
+
+/** Drag-reorder: place `fromId` where `toId` currently sits (same stack order semantics). */
+function reorderInStack(list, fromId, toId) {
+  if (fromId === toId) return list
+  const from = list.findIndex((item) => item.id === fromId)
+  const to = list.findIndex((item) => item.id === toId)
+  if (from < 0 || to < 0 || from === to) return list
+  const copy = [...list]
+  const [item] = copy.splice(from, 1)
+  copy.splice(to, 0, item)
   return copy
 }
 
@@ -116,11 +129,75 @@ export function StudioProvider({ children }) {
   const [selectedOverlay, setSelectedOverlay] = useState(null)
   const [effectTarget, setEffectTarget] = useState('Entire GIF')
   const [gifEffects, setGifEffects] = useState(EFFECT_DEFAULTS)
+  const [selectedMotionEffect, setSelectedMotionEffect] = useState(null)
 
-  const update = (key, value) => setSettings((s) => ({
-    ...s,
-    [key]: typeof value === 'number' ? nice(value, Number.isInteger(value) ? 0 : 1) : value,
-  }))
+  const update = (key, value) => setSettings((s) => {
+    const next = {
+      ...s,
+      [key]: typeof value === 'number' ? nice(value, Number.isInteger(value) ? 0 : 1) : value,
+    }
+    if (key === 'duration') {
+      next.motionEffects = clampMotionEffects(s.motionEffects, next.duration)
+    }
+    return next
+  })
+
+  const addMotionEffect = (type) => {
+    const current = settings.motionEffects || []
+    if (current.length >= MAX_MOTION_EFFECTS) {
+      setToast(`Max ${MAX_MOTION_EFFECTS} timeline effects`)
+      return null
+    }
+    const used = new Set(current.map((clip) => clip.track ?? 0))
+    let track = 0
+    while (used.has(track) && track < MAX_MOTION_EFFECTS) track += 1
+    const clip = createMotionEffect(type, settings.duration, track)
+    setSettings((s) => {
+      const list = s.motionEffects || []
+      if (list.length >= MAX_MOTION_EFFECTS) return s
+      return { ...s, motionEffects: [...list, clip] }
+    })
+    setSelectedMotionEffect(clip.id)
+    return clip.id
+  }
+
+  const updateMotionEffect = (id, patch) => {
+    if (isBaseMotionClip(id)) return
+    setSettings((s) => ({
+      ...s,
+      motionEffects: clampMotionEffects(
+        (s.motionEffects || []).map((clip) => (clip.id === id ? { ...clip, ...patch } : clip)),
+        s.duration,
+      ),
+    }))
+  }
+
+  const removeMotionEffect = (id) => {
+    if (isBaseMotionClip(id)) return
+    setSettings((s) => ({
+      ...s,
+      motionEffects: (s.motionEffects || []).filter((clip) => clip.id !== id),
+    }))
+    setSelectedMotionEffect((current) => (current === id ? null : current))
+  }
+
+  const moveMotionEffectTrack = (id, track) => {
+    if (isBaseMotionClip(id)) return
+    const nextTrack = Math.max(0, Math.min(MAX_MOTION_EFFECTS - 1, track))
+    setSettings((s) => {
+      const clips = [...(s.motionEffects || [])]
+      const from = clips.findIndex((clip) => clip.id === id)
+      if (from < 0) return s
+      const occupant = clips.find((clip) => clip.id !== id && (clip.track ?? 0) === nextTrack)
+      const moving = { ...clips[from], track: nextTrack }
+      const next = clips.map((clip) => {
+        if (clip.id === id) return moving
+        if (occupant && clip.id === occupant.id) return { ...clip, track: clips[from].track ?? 0 }
+        return clip
+      })
+      return { ...s, motionEffects: clampMotionEffects(next, s.duration) }
+    })
+  }
 
   /** Amount drives loop strength and timeline zoom/pan intensity for the active preset. */
   const setAmplitude = (amount) => setSettings((s) => ({
@@ -195,7 +272,10 @@ export function StudioProvider({ children }) {
       timeline = Math.min(1, rawT * motionSpeed)
     }
     const t = ease(timeline, settings.easing)
-    let scale = (settings.scaleStart + (settings.scaleEnd - settings.scaleStart) * t) / 100
+    const timeSec = rawT * (settings.duration || 1)
+    const motionFx = settings.motionEffects || []
+    const zoomFx = sampleZoomScale(motionFx, timeSec)
+    let scale = (settings.scaleStart + (settings.scaleEnd - settings.scaleStart) * t) / 100 * zoomFx
     let x = settings.xStart + (settings.xEnd - settings.xStart) * t
     let y = settings.yStart + (settings.yEnd - settings.yStart) * t
     let rotation = settings.rotateStart + (settings.rotateEnd - settings.rotateStart) * t
@@ -420,6 +500,20 @@ export function StudioProvider({ children }) {
       if (gifEffects.frame === 'Camera') { ctx.fillStyle = gifEffects.frameColor; ctx.fillRect(0, 0, W, line); ctx.fillRect(0, 0, line, H); ctx.fillRect(W - line, 0, line, H); ctx.fillRect(0, H - line * 2.5, W, line * 2.5) }
       if (gifEffects.frame === 'Fuzzy') { ctx.setLineDash([line, line * .7]); ctx.lineCap = 'round'; ctx.strokeRect(line / 2, line / 2, W - line, H - line) }
       ctx.restore()
+    }
+
+    // Timed liquify / warp clips (Motion timeline) — applied last for smooth GIF deformation.
+    const distortions = sampleDistortions(motionFx, timeSec)
+    for (const distort of distortions) {
+      applyDistortion(target, {
+        type: distort.type,
+        amount: distort.amount,
+        x: distort.x,
+        y: distort.y,
+        radius: distort.radius,
+        angle: distort.angle,
+        phase: distort.phase || 0,
+      })
     }
   }, [image, settings, elements, textLayers, parallax, imageEdits, censor, overlays, gifEffects])
 
@@ -745,6 +839,15 @@ export function StudioProvider({ children }) {
   }
   const moveOverlay = (id, direction) => {
     setOverlays((current) => moveInStack(current, id, direction))
+  }
+  const reorderElement = (fromId, toId) => {
+    setElements((current) => reorderInStack(current, fromId, toId))
+  }
+  const reorderOverlay = (fromId, toId) => {
+    setOverlays((current) => reorderInStack(current, fromId, toId))
+  }
+  const reorderText = (fromId, toId) => {
+    setTextLayers((current) => reorderInStack(current, fromId, toId))
   }
   const toggleElementLock = (id) => {
     setElements((current) => current.map((el) => el.id === id ? { ...el, locked: !el.locked } : el))
@@ -1362,6 +1465,7 @@ export function StudioProvider({ children }) {
     elements, setElements, selectedElement, setSelectedElement, selectedElements, setSelectedElements,
     secondaryElements, layerInsertAt, setLayerInsertAt,
     selectLayer, clearLayerSelection, updateElementById, moveElement, moveOverlay,
+    reorderElement, reorderOverlay, reorderText,
     baseImageSelected, setBaseImageSelected,
     imageLocked, setImageLocked, imageTransformBox,
     selectMode, setSelectMode, selectionTool, setSelectionTool,
@@ -1370,6 +1474,7 @@ export function StudioProvider({ children }) {
     parallax, setParallax, lastExport, maskEditing, setMaskEditing, maskBrush, setMaskBrush,
     imageEdits, setImageEdits, censor, setCensor, censorSelecting, setCensorSelecting,
     overlays, setOverlays, selectedOverlay, setSelectedOverlay, effectTarget, setEffectTarget, gifEffects, setGifEffects,
+    selectedMotionEffect, setSelectedMotionEffect,
     // derived
     frames, frameDelays, actualDuration, actualFps, memory, timedFrames, timingFps, activeEffects, stageStyle,
     // actions
@@ -1381,6 +1486,7 @@ export function StudioProvider({ children }) {
     uploadFont, updateEffect,
     addOverlay, updateOverlay, selectOverlay, selectStageOverlay, overlayBounds, toggleOverlayVisible, removeOverlay, saveCurrentPng, compressExistingGif, beginTextDrag, dragTextLayer, endTextDrag,
     beginAnchorDrag, moveAnchorDrag, endAnchorDrag, resetMotionAnchor,
+    addMotionEffect, updateMotionEffect, removeMotionEffect, moveMotionEffectTrack,
     exportGif, textBounds,
   }
 

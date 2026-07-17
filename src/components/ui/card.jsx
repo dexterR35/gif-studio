@@ -1,6 +1,6 @@
 import { cn } from '../../lib/cn'
 import {
-  ArrowDown, ArrowUp, ChevronsDown, ChevronsUp, Eye, EyeOff, Lock, Trash2, Unlock,
+  ArrowDown, ArrowUp, ChevronsDown, ChevronsUp, Eye, EyeOff, GripVertical, Lock, Trash2, Unlock,
 } from 'lucide-react'
 
 export function Card({ children, selected = false, interactive = false, className, as: Tag = 'div', ...props }) {
@@ -43,13 +43,51 @@ export function LayerRow({
   canMoveUp = false,
   canMoveDown = false,
   canMoveBack = false,
+  /** Pointer drag handle — same idea as timeline clip drag. */
+  onDragStart,
+  onDragMove,
+  onDragEnd,
+  dragging = false,
+  dropTarget = false,
   className,
 }) {
   const showArrange = onMoveFront || onMoveUp || onMoveDown || onMoveBack
+  const canDrag = Boolean(onDragStart)
 
   return (
-    <Card as="div" selected={selected} className={cn('flex flex-col gap-1', className)}>
-      <div className="flex items-center gap-1">
+    <Card
+      as="div"
+      selected={selected}
+      className={cn(
+        'flex flex-col gap-1 transition',
+        dragging && 'opacity-55 ring-1 ring-acid/40',
+        dropTarget && !dragging && 'border-acid/50 bg-acid/[.08]',
+        className,
+      )}
+    >
+      <div className="flex items-center gap-0.5">
+        {canDrag && (
+          <button
+            type="button"
+            title="Drag to reorder (z-index)"
+            aria-label="Drag to reorder"
+            className="grid h-6 w-5 shrink-0 cursor-grab place-items-center rounded text-zinc-600 touch-none hover:text-zinc-300 active:cursor-grabbing"
+            onPointerDown={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              onDragStart?.(event)
+              event.currentTarget.setPointerCapture?.(event.pointerId)
+            }}
+            onPointerMove={(event) => onDragMove?.(event)}
+            onPointerUp={(event) => {
+              onDragEnd?.(event)
+              try { event.currentTarget.releasePointerCapture?.(event.pointerId) } catch { /* ignore */ }
+            }}
+            onPointerCancel={(event) => onDragEnd?.(event)}
+          >
+            <GripVertical className="h-3.5 w-3.5" />
+          </button>
+        )}
         {typeof visible === 'boolean' && (
           <button
             type="button"
@@ -108,8 +146,8 @@ export function LayerRow({
           </button>
         )}
       </div>
-      {showArrange && selected && (
-        <div className="flex items-center justify-end gap-0.5 pl-7">
+      {showArrange && (
+        <div className="flex items-center justify-end gap-0.5 pl-6">
           <ArrangeButton title="Bring to front" disabled={!canMoveFront} onClick={onMoveFront}>
             <ChevronsUp className="h-3 w-3" />
           </ArrangeButton>

@@ -75,10 +75,13 @@ input[type='number']::-webkit-inner-spin-button { opacity: .35; }
     @apply grid shrink-0 cursor-pointer place-items-center border-0 bg-transparent p-0 text-inherit;
   }
   .gs-section-title {
-    @apply mb-0 flex items-center gap-1.5 tracking-[0.14em];
+    @apply mb-0 flex items-center gap-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-acid;
+  }
+  .gs-section-meta {
+    @apply shrink-0 font-mono text-[10px] normal-case tracking-normal text-zinc-600;
   }
   .gs-section-chevron {
-    @apply h-3.5 w-3.5 shrink-0 text-zinc-600 transition-transform duration-150;
+    @apply h-3.5 w-3.5 shrink-0 text-acid/70 transition-transform duration-150;
   }
   .gs-section-chevron.is-open { @apply rotate-180; }
   .gs-section-body { @apply mt-2.5; }
@@ -233,5 +236,67 @@ input[type='number']::-webkit-inner-spin-button { opacity: .35; }
   .gs-motion-anchor__dot {
     @apply pointer-events-none absolute left-1/2 top-1/2 h-[2px] w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-acid;
     box-shadow: 0 0 0 1px rgb(0 0 0 / 50%);
+  }
+
+  /* Motion effect timeline — Premiere-style lanes */
+  .gs-timeline-lanes {
+    @apply flex gap-2;
+  }
+  .gs-timeline-labels {
+    @apply flex w-5 shrink-0 flex-col gap-1;
+  }
+  .gs-timeline-lane-label {
+    @apply flex h-7 items-center justify-center font-mono text-[9px] font-bold text-zinc-600;
+  }
+  .gs-timeline-rails {
+    @apply relative min-w-0 flex-1 space-y-1;
+  }
+  .gs-timeline-lane-rail {
+    @apply relative h-7 w-full overflow-hidden rounded-md border border-white/[.08] bg-black/40;
+  }
+  .gs-timeline-clip {
+    @apply absolute top-0.5 bottom-0.5 z-[1] flex cursor-grab touch-none items-center overflow-hidden rounded border-0 px-2 text-left opacity-85;
+    color: rgb(0 0 0 / 75%);
+  }
+  .gs-timeline-clip:active { @apply cursor-grabbing; }
+  .gs-timeline-clip span {
+    @apply pointer-events-none min-w-0 flex-1 truncate text-[9px] font-bold uppercase tracking-wide;
+  }
+  .gs-timeline-clip em {
+    @apply pointer-events-none;
+  }
+  .gs-timeline-clip:hover { @apply opacity-100; }
+  .gs-timeline-clip.is-active {
+    @apply opacity-100 ring-1 ring-white/50;
+  }
+  /* Base motion (lane M) — visible, locked; only changes via Motion dropdown */
+  .gs-timeline-clip-base {
+    @apply cursor-default opacity-70;
+    background: repeating-linear-gradient(
+      -45deg,
+      #3f3f46,
+      #3f3f46 4px,
+      #52525b 4px,
+      #52525b 8px
+    ) !important;
+    color: rgb(244 244 245 / 90%);
+  }
+  .gs-timeline-clip-base:active { @apply cursor-default; }
+  .gs-timeline-clip-base.is-active {
+    @apply opacity-95 ring-1 ring-acid/50;
+  }
+  .gs-timeline-lock {
+    @apply pointer-events-none shrink-0 pr-0.5 text-[8px] font-semibold uppercase not-italic tracking-wider text-zinc-400;
+  }
+  .gs-timeline-handle {
+    @apply absolute top-0 bottom-0 z-[2] w-1.5 cursor-ew-resize border-0 bg-black/25 p-0 opacity-0 transition-opacity;
+  }
+  .gs-timeline-clip:hover .gs-timeline-handle,
+  .gs-timeline-clip.is-active .gs-timeline-handle { @apply opacity-100; }
+  .gs-timeline-handle-in { @apply left-0 rounded-l; }
+  .gs-timeline-handle-out { @apply right-0 rounded-r; }
+  .gs-timeline-playhead {
+    @apply pointer-events-none absolute inset-y-0 z-[3] w-px bg-acid;
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 40%);
   }
 }

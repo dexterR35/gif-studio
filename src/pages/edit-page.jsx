@@ -214,9 +214,28 @@ export default function EditPage() {
         </SelectField>
         <div className="mt-3">
           <SelectField label="Distortion" value={activeEffects.distortion} onChange={(v) => updateEffect('distortion', v)}>
-            {['None', 'Swirl', 'Implode', 'Wave'].map((x) => <option key={x}>{x}</option>)}
+            {['None', 'Bloat', 'Pucker', 'Twirl', 'Push', 'Swirl', 'Implode', 'Wave'].map((x) => <option key={x}>{x}</option>)}
           </SelectField>
         </div>
+        {activeEffects.distortion !== 'None' && activeEffects.distortion !== 'Wave' && activeEffects.distortion !== 'Swirl' && activeEffects.distortion !== 'Implode' && (
+          <>
+            <Slider className="mt-3 gs-row" label="Center X" suffix="%" min={0} max={100} step={0.5} value={activeEffects.distortX ?? 50} onChange={(v) => updateEffect('distortX', v)} />
+            <Slider className="gs-row" label="Center Y" suffix="%" min={0} max={100} step={0.5} value={activeEffects.distortY ?? 50} onChange={(v) => updateEffect('distortY', v)} />
+            <Slider className="mt-2 gs-row" label="Brush radius" suffix="%" min={5} max={100} value={activeEffects.distortRadius ?? 50} onChange={(v) => updateEffect('distortRadius', v)} />
+            {activeEffects.distortion === 'Push' && (
+              <Slider className="gs-row" label="Push angle" suffix="°" min={0} max={360} value={activeEffects.distortAngle ?? 0} onChange={(v) => updateEffect('distortAngle', v)} />
+            )}
+          </>
+        )}
+        <Slider
+          className="mt-2 gs-row"
+          label="Distortion amount"
+          suffix="%"
+          min={0}
+          max={100}
+          value={activeEffects.distortionAmount}
+          onChange={(v) => updateEffect('distortionAmount', v)}
+        />
       </Section>
 
       <Section title="Decorative frame" open={false}>
@@ -249,15 +268,6 @@ export default function EditPage() {
           max={500}
           value={activeEffects.rounded}
           onChange={(v) => updateEffect('rounded', v)}
-        />
-        <Slider
-          className="gs-row"
-          label="Distortion amount"
-          suffix="%"
-          min={0}
-          max={100}
-          value={activeEffects.distortionAmount}
-          onChange={(v) => updateEffect('distortionAmount', v)}
         />
         <Button full className="mt-3 text-[10px]" onClick={resetAdvanced}>
           Reset advanced effects

@@ -75,13 +75,15 @@ export const PRESETS = {
 }
 
 export const INITIAL = {
-  preset: 'Zoom in', duration: 10, fps: 24, easing: 'Ease in-out', width: 480, height: 300,
+  preset: 'Still', duration: 10, fps: 24, easing: 'Ease in-out', width: 480, height: 300,
   fit: 'Contain', background: '#111114', transparent: false, quality: 'High quality', palette: 256,
   dither: true, lossy: 0, compressionMethod: 'Lossless', loop: 0, disposal: 2,
   motion: 'None', speed: 1,
   /** Pivot for scale / rotate / pulse (canvas %, 50 = center). */
   anchorX: 50, anchorY: 50,
-  ...PRESETS['Zoom in'],
+  /** Timed liquify / zoom clips — see motion-effects.js */
+  motionEffects: [],
+  ...PRESETS.Still,
 }
 
 export const TEXT_DEFAULT = {
@@ -106,5 +108,6 @@ export const EFFECT_DEFAULTS = {
   transparentEnabled: false, transparentColor: '#ffffff', fuzz: 2, edgeCleanup: 2,
   blur: 0, sharpen: 0, posterize: 0, solarize: 0, noise: 0, emboss: 0, oilPaint: 0,
   distortion: 'None', distortionAmount: 0, dither: 'None',
+  distortX: 50, distortY: 50, distortRadius: 50, distortAngle: 0,
   frame: 'None', frameColor: '#ffffff', frameWidth: 12, rounded: 28,
 }

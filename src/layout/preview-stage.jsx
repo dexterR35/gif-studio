@@ -1,5 +1,6 @@
 import { Crosshair, ImagePlus, Info, Pause, Play } from 'lucide-react'
 import { Button, CanvasViewport, SelectionPath, StageHint, Switch, TransformBox, ZoomControls } from '../components/ui'
+import { EffectTimeline } from '../components/studio/effect-timeline'
 import { fmtBytes, MAX_CANVAS } from '../lib/format'
 import { useStudio } from '../context/studio-provider'
 import { cn } from '../lib/cn'
@@ -461,11 +462,11 @@ export function PreviewStage() {
         </div>
       </CanvasViewport>
 
-      <div className="pointer-events-none absolute bottom-[7.5rem] left-4 z-10 hidden items-center gap-2 rounded-lg border border-white/[.07] bg-black/40 px-2.5 py-1.5 text-[10px] text-zinc-500 backdrop-blur sm:flex">
+      <div className="pointer-events-none absolute bottom-[12rem] left-4 z-10 hidden items-center gap-2 rounded-lg border border-white/[.07] bg-black/40 px-2.5 py-1.5 text-[10px] text-zinc-500 backdrop-blur sm:flex">
         <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />Processed locally
       </div>
 
-      <div className="shrink-0 border-t border-white/[.07] bg-panel px-4 pb-4 pt-3 md:px-6">
+      <div className="max-h-[38vh] shrink-0 overflow-y-auto border-t border-white/[.07] bg-panel px-4 pb-4 pt-3 scrollbar md:px-6">
         <div className="mb-3 flex items-center gap-3">
           <button
             type="button"
@@ -492,7 +493,10 @@ export function PreviewStage() {
           />
           <span className="w-11 font-mono text-[10px] text-zinc-500">{actualDuration.toFixed(1)}s</span>
         </div>
-        <div className="flex items-center justify-between gap-4 border-t border-white/[.05] pt-3 text-[10px] text-zinc-600">
+
+        <EffectTimeline />
+
+        <div className="mt-3 flex items-center justify-between gap-4 border-t border-white/[.05] pt-3 text-[10px] text-zinc-600">
           <div className="flex gap-4">
             <span><b className="text-zinc-400">{frames}</b> frames</span>
             <span title={`GIF delays: ${[...new Set(frameDelays)].join('/')} ms`}>

@@ -1,25 +1,62 @@
-import { ImageIcon, Layers3 } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { ImageIcon, Layers3, Type } from 'lucide-react'
 import { EmptyState, LayerRow } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
 import { cn } from '../lib/cn'
 
 /**
- * Third sidebar — Photoshop-style layers (front at top · show / lock / arrange / remove).
+ * Third sidebar — Photoshop-style layers (front at top · drag z-index · show / lock / arrange / remove).
  */
 export function LayersAside() {
   const {
     elements, selectedElements, selectedElement, selectLayer, selectBaseImage,
     baseImageSelected, imageLocked, toggleImageLock,
-    toggleElementLock, toggleElementVisible, removeElement, moveElement,
-    overlays, selectedOverlay, selectOverlay, toggleOverlayVisible, removeOverlay, moveOverlay,
+    toggleElementLock, toggleElementVisible, removeElement, moveElement, reorderElement,
+    overlays, selectedOverlay, selectOverlay, toggleOverlayVisible, removeOverlay, moveOverlay, reorderOverlay,
+    textLayers, selectedText, setSelectedText, setPlaying, removeText, moveText, reorderText, toggleTextLock, updateText,
+    goToWorkspace,
     layerInsertAt, setLayerInsertAt,
     setSelectMode, setMaskEditing,
   } = useStudio()
 
-  const layerCount = elements.length + overlays.length
+  const dragRef = useRef(null)
+  const [dragState, setDragState] = useState(null) // { kind, id, overId }
+
+  const layerCount = elements.length + overlays.length + textLayers.length
   // Front of stack at top of list (array end → first).
   const elementsFrontFirst = [...elements].reverse()
   const overlaysFrontFirst = [...overlays].reverse()
+  const textFrontFirst = [...textLayers].reverse()
+
+  const beginLayerDrag = (event, kind, id) => {
+    event.preventDefault()
+    event.stopPropagation()
+    dragRef.current = { kind, id, moved: false }
+    setDragState({ kind, id, overId: id })
+    setSelectMode(false)
+    setPlaying(false)
+  }
+
+  const moveLayerDrag = (event, kind, overId) => {
+    const drag = dragRef.current
+    if (!drag || drag.kind !== kind || drag.id === overId) return
+    drag.moved = true
+    if (kind === 'element') reorderElement(drag.id, overId)
+    if (kind === 'overlay') reorderOverlay(drag.id, overId)
+    if (kind === 'text') reorderText(drag.id, overId)
+    setDragState({ kind, id: drag.id, overId })
+  }
+
+  const endLayerDrag = () => {
+    if (!dragRef.current) return
+    dragRef.current = null
+    setDragState(null)
+  }
+
+  const isDragging = (kind, id) => dragState?.kind === kind && dragState?.id === id
+  const isDropTarget = (kind, id) => (
+    dragState?.kind === kind && dragState?.overId === id && dragState?.id !== id
+  )
 
   return (
     <aside
@@ -62,11 +99,55 @@ export function LayersAside() {
           </button>
         </div>
 
-        {!elements.length && !overlays.length && (
+        <p className="mb-1 px-0.5 text-[9px] text-zinc-600">
+          Drag grip to change z-index · front / back buttons below each layer
+        </p>
+
+        {!elements.length && !overlays.length && !textLayers.length && (
           <EmptyState icon={Layers3} className="mt-2 px-1">
             Use a selection tool to extract layers, or add an image overlay
           </EmptyState>
         )}
+
+        {textFrontFirst.map((layer) => {
+          const index = textLayers.findIndex((item) => item.id === layer.id)
+          const selected = selectedText === layer.id
+          return (
+            <LayerRow
+              key={layer.id}
+              selected={selected}
+              onClick={() => {
+                setSelectedText(layer.id)
+                setPlaying(false)
+                setSelectMode(false)
+                setMaskEditing(false)
+                goToWorkspace('text')
+              }}
+              icon={Type}
+              title={layer.text || 'Empty text'}
+              subtitle="Text"
+              visible={layer.visible}
+              locked={layer.locked}
+              onToggleVisible={() => updateText('visible', !layer.visible)}
+              onToggleLock={() => toggleTextLock(layer.id)}
+              onRemove={() => removeText(layer.id)}
+              onMoveFront={() => moveText(layer.id, 'front')}
+              onMoveUp={() => moveText(layer.id, 1)}
+              onMoveDown={() => moveText(layer.id, -1)}
+              onMoveBack={() => moveText(layer.id, 'back')}
+              canMoveFront={index < textLayers.length - 1}
+              canMoveUp={index < textLayers.length - 1}
+              canMoveDown={index > 0}
+              canMoveBack={index > 0}
+              onDragStart={(e) => beginLayerDrag(e, 'text', layer.id)}
+              onDragMove={(e) => moveLayerDrag(e, 'text', layer.id)}
+              onDragEnd={endLayerDrag}
+              dragging={isDragging('text', layer.id)}
+              dropTarget={isDropTarget('text', layer.id)}
+              className="!rounded-md !p-1.5"
+            />
+          )
+        })}
 
         {elementsFrontFirst.map((el) => {
           const index = elements.findIndex((item) => item.id === el.id)
@@ -104,6 +185,11 @@ export function LayersAside() {
               canMoveUp={index < elements.length - 1}
               canMoveDown={index > 0}
               canMoveBack={index > 0}
+              onDragStart={(e) => beginLayerDrag(e, 'element', el.id)}
+              onDragMove={(e) => moveLayerDrag(e, 'element', el.id)}
+              onDragEnd={endLayerDrag}
+              dragging={isDragging('element', el.id)}
+              dropTarget={isDropTarget('element', el.id)}
               className="!rounded-md !p-1.5"
             />
           )
@@ -139,6 +225,11 @@ export function LayersAside() {
               canMoveUp={index < overlays.length - 1}
               canMoveDown={index > 0}
               canMoveBack={index > 0}
+              onDragStart={(e) => beginLayerDrag(e, 'overlay', overlay.id)}
+              onDragMove={(e) => moveLayerDrag(e, 'overlay', overlay.id)}
+              onDragEnd={endLayerDrag}
+              dragging={isDragging('overlay', overlay.id)}
+              dropTarget={isDropTarget('overlay', overlay.id)}
               className="!rounded-md !p-1.5"
             />
           )

@@ -57,22 +57,118 @@ export const convolveCanvas = (canvas, kernel, mix = 1) => {
   context.putImageData(output, 0, 0)
 }
 
+/**
+ * Photoshop-like liquify / warp. Options:
+ *   type, amount (0–100), x/y (%), radius (% of min side), angle (Push direction °)
+ */
+export const applyDistortion = (canvas, {
+  type = 'None',
+  amount = 0,
+  x = 50,
+  y = 50,
+  radius = 50,
+  angle = 0,
+  phase = 0,
+} = {}) => {
+  if (!type || type === 'None' || !(amount > 0)) return canvas
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  const width = canvas.width
+  const height = canvas.height
+  const source = document.createElement('canvas')
+  source.width = width
+  source.height = height
+  source.getContext('2d').drawImage(canvas, 0, 0)
+  const original = source.getContext('2d').getImageData(0, 0, width, height)
+  const output = context.createImageData(width, height)
+  const cx = (x / 100) * width
+  const cy = (y / 100) * height
+  const brush = Math.max(4, (Math.min(width, height) * Math.max(5, radius)) / 100)
+  const maxRadius = Math.hypot(Math.max(cx, width - cx), Math.max(cy, height - cy))
+  const strength = amount / 100
+  const pushRad = (angle * Math.PI) / 180
+  const pushX = Math.cos(pushRad)
+  const pushY = Math.sin(pushRad)
+  const spin = (angle * Math.PI) / 180
+
+  for (let py = 0; py < height; py++) {
+    for (let px = 0; px < width; px++) {
+      let sx = px
+      let sy = py
+      const dx = px - cx
+      const dy = py - cy
+      const dist = Math.hypot(dx, dy)
+      const falloff = dist < brush ? 1 - (dist / brush) ** 2 : 0
+
+      if (type === 'Swirl') {
+        const r = Math.hypot(dx, dy)
+        let a = Math.atan2(dy, dx)
+        a -= (strength * 3 + spin * 0.35) * (1 - Math.min(1, r / maxRadius))
+        sx = cx + Math.cos(a) * r
+        sy = cy + Math.sin(a) * r
+      } else if (type === 'Implode' || type === 'Pucker') {
+        if (falloff > 0) {
+          const mapped = dist * (1 + strength * 1.6 * falloff)
+          const a = Math.atan2(dy, dx)
+          sx = cx + Math.cos(a) * mapped
+          sy = cy + Math.sin(a) * mapped
+        }
+      } else if (type === 'Bloat') {
+        if (falloff > 0) {
+          const mapped = dist * Math.max(0.05, 1 - strength * 0.85 * falloff)
+          const a = Math.atan2(dy, dx)
+          sx = cx + Math.cos(a) * mapped
+          sy = cy + Math.sin(a) * mapped
+        }
+      } else if (type === 'Twirl') {
+        if (falloff > 0) {
+          const a = Math.atan2(dy, dx) - (strength * 4.2 + spin) * falloff
+          sx = cx + Math.cos(a) * dist
+          sy = cy + Math.sin(a) * dist
+        }
+      } else if (type === 'Push') {
+        if (falloff > 0) {
+          const shift = strength * brush * 0.55 * falloff
+          sx = px - pushX * shift
+          sy = py - pushY * shift
+        }
+      } else if (type === 'Wave') {
+        const wavelength = Math.max(4, 24 - strength * 18)
+        sx -= Math.sin(py / wavelength + phase) * strength * 24
+        sy -= Math.cos(px / (wavelength * 1.35) + phase * 0.85) * strength * 10
+      } else if (type === 'ImplodeLegacy') {
+        const mapped = maxRadius * Math.pow(Math.min(1, dist / maxRadius), 1 + strength * 2)
+        const a = Math.atan2(dy, dx)
+        sx = cx + Math.cos(a) * mapped
+        sy = cy + Math.sin(a) * mapped
+      }
+
+      const sourceIndex = (
+        Math.max(0, Math.min(height - 1, Math.round(sy))) * width
+        + Math.max(0, Math.min(width - 1, Math.round(sx)))
+      ) * 4
+      const targetIndex = (py * width + px) * 4
+      output.data[targetIndex] = original.data[sourceIndex]
+      output.data[targetIndex + 1] = original.data[sourceIndex + 1]
+      output.data[targetIndex + 2] = original.data[sourceIndex + 2]
+      output.data[targetIndex + 3] = original.data[sourceIndex + 3]
+    }
+  }
+  context.putImageData(output, 0, 0)
+  return canvas
+}
+
 export const applyPixelEffects = (canvas, effects) => {
   if (!effects) return canvas
   const context = canvas.getContext('2d', { willReadFrequently: true }), width = canvas.width, height = canvas.height
   if (effects.distortion !== 'None' && effects.distortionAmount > 0) {
-    const source = document.createElement('canvas'); source.width = width; source.height = height; source.getContext('2d').drawImage(canvas, 0, 0)
-    const original = source.getContext('2d').getImageData(0, 0, width, height), output = context.createImageData(width, height)
-    const cx = width / 2, cy = height / 2, maxRadius = Math.hypot(cx, cy), strength = effects.distortionAmount / 100
-    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-      let sx = x, sy = y, dx = x - cx, dy = y - cy, radius = Math.hypot(dx, dy), angle = Math.atan2(dy, dx)
-      if (effects.distortion === 'Swirl') { angle -= strength * 3 * (1 - Math.min(1, radius / maxRadius)); sx = cx + Math.cos(angle) * radius; sy = cy + Math.sin(angle) * radius }
-      if (effects.distortion === 'Implode') { const mapped = maxRadius * Math.pow(Math.min(1, radius / maxRadius), 1 + strength * 2); sx = cx + Math.cos(angle) * mapped; sy = cy + Math.sin(angle) * mapped }
-      if (effects.distortion === 'Wave') sx -= Math.sin(y / Math.max(4, 24 - strength * 18)) * strength * 24
-      const sourceIndex = (Math.max(0, Math.min(height - 1, Math.round(sy))) * width + Math.max(0, Math.min(width - 1, Math.round(sx)))) * 4, targetIndex = (y * width + x) * 4
-      output.data[targetIndex] = original.data[sourceIndex]; output.data[targetIndex + 1] = original.data[sourceIndex + 1]; output.data[targetIndex + 2] = original.data[sourceIndex + 2]; output.data[targetIndex + 3] = original.data[sourceIndex + 3]
-    }
-    context.putImageData(output, 0, 0)
+    applyDistortion(canvas, {
+      type: effects.distortion === 'Implode' ? 'ImplodeLegacy' : effects.distortion,
+      amount: effects.distortionAmount,
+      x: effects.distortX ?? 50,
+      y: effects.distortY ?? 50,
+      radius: effects.distortRadius ?? 100,
+      angle: effects.distortAngle ?? 0,
+    })
   }
   const pixels = context.getImageData(0, 0, width, height), data = pixels.data
   const tint = [parseInt(effects.tintColor.slice(1, 3), 16), parseInt(effects.tintColor.slice(3, 5), 16), parseInt(effects.tintColor.slice(5, 7), 16)]
