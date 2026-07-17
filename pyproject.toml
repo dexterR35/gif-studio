@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gif-studio-local"
+version = "0.1.0"
+description = "A local desktop app and automation CLI for animating a static image into a configurable GIF."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "GIF Studio contributors" }]
+dependencies = [
+  "PySide6>=6.6",
+  "Pillow>=10.2",
+  "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "ruff>=0.5",
+  "pyinstaller>=6.3",
+]
+
+[project.scripts]
+gif-studio = "gif_studio.app:main"
+gif-studio-cli = "gif_studio.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]

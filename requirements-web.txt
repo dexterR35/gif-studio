@@ -1,0 +1,10 @@
+fastapi>=0.139
+uvicorn[standard]>=0.35
+python-multipart>=0.0.20
+opencv-python-headless>=5.0.0.93
+imageio>=2.37
+numpy>=1.26
+Pillow>=10.2
+pygifsicle>=1.1
+gifsicle-bin>=1.96.4; platform_system == "Windows"
+rembg[cpu]>=2.0.76
