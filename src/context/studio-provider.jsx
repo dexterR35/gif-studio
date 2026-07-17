@@ -78,7 +78,7 @@ export function StudioProvider({ children }) {
   const [frameMode, setFrameMode] = useState(false)
   const [frameOptions, setFrameOptions] = useState({ fit: 'Contain', crossfade: false, crossfadeFrames: 3 })
   const maskPainting = useRef(false)
-  const [imageEdits, setImageEdits] = useState({ rotation: 0, flipX: false, flipY: false, cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 })
+  const [imageEdits, setImageEdits] = useState({ rotation: 0, flipX: false, flipY: false, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 })
   const [censor, setCensor] = useState({ enabled: false, x: 25, y: 25, w: 30, h: 20, pixelSize: 14 })
   const [censorSelecting, setCensorSelecting] = useState(false)
   const [overlays, setOverlays] = useState([])
@@ -183,10 +183,7 @@ export function StudioProvider({ children }) {
     ctx.filter = `brightness(${imageEdits.brightness}%) contrast(${imageEdits.contrast}%) saturate(${imageEdits.saturation}%) blur(${imageEdits.blur}px) hue-rotate(${imageEdits.hue}deg) grayscale(${imageEdits.grayscale}%) sepia(${imageEdits.sepia}%)`
     activeImages.forEach(({ image: frameImage, alpha }) => {
       const iw = frameImage.naturalWidth, ih = frameImage.naturalHeight
-      const sx = imageEdits.cropLeft / 100 * iw, sy = imageEdits.cropTop / 100 * ih
-      const cropWidth = Math.max(1, iw * (1 - (imageEdits.cropLeft + imageEdits.cropRight) / 100))
-      const cropHeight = Math.max(1, ih * (1 - (imageEdits.cropTop + imageEdits.cropBottom) / 100))
-      const contain = Math.min(W / cropWidth, H / cropHeight), cover = Math.max(W / cropWidth, H / cropHeight)
+      const contain = Math.min(W / iw, H / ih), cover = Math.max(W / iw, H / ih)
       const fitMode = frameMode ? frameOptions.fit : settings.fit
       // Match Python engine._base_size: Contain/Cover scale to canvas; Original size = 1:1 source pixels.
       const base = fitMode === 'Cover'
@@ -194,10 +191,10 @@ export function StudioProvider({ children }) {
         : fitMode === 'Original size'
           ? exportScale
           : contain
-      const dw = cropWidth * base * scale, dh = cropHeight * base * scale
+      const dw = iw * base * scale, dh = ih * base * scale
       ctx.globalAlpha = opacity * alpha
-      if (fitMode === 'Stretch') ctx.drawImage(frameImage, sx, sy, cropWidth, cropHeight, -W * scale / 2, -H * scale / 2, W * scale, H * scale)
-      else ctx.drawImage(frameImage, sx, sy, cropWidth, cropHeight, -dw / 2, -dh / 2, dw, dh)
+      if (fitMode === 'Stretch') ctx.drawImage(frameImage, 0, 0, iw, ih, -W * scale / 2, -H * scale / 2, W * scale, H * scale)
+      else ctx.drawImage(frameImage, 0, 0, iw, ih, -dw / 2, -dh / 2, dw, dh)
     })
     ctx.restore()
 
@@ -221,9 +218,7 @@ export function StudioProvider({ children }) {
         processedContext.drawImage(overlay.image, 0, 0); processedContext.filter = 'none'; applyPixelEffects(processed, overlay.effects); overlayImage = processed
       }
       const sourceWidth = overlayImage.width || overlay.image.naturalWidth, sourceHeight = overlayImage.height || overlay.image.naturalHeight
-      const sx = (overlay.cropLeft || 0) / 100 * sourceWidth, sy = (overlay.cropTop || 0) / 100 * sourceHeight
-      const sw = Math.max(1, sourceWidth * (1 - ((overlay.cropLeft || 0) + (overlay.cropRight || 0)) / 100)), sh = Math.max(1, sourceHeight * (1 - ((overlay.cropTop || 0) + (overlay.cropBottom || 0)) / 100))
-      ctx.drawImage(overlayImage, sx, sy, sw, sh, -width / 2, -height / 2, width, height); ctx.restore()
+      ctx.drawImage(overlayImage, 0, 0, sourceWidth, sourceHeight, -width / 2, -height / 2, width, height); ctx.restore()
     })
 
     if (elements.length) {
@@ -389,7 +384,7 @@ export function StudioProvider({ children }) {
         setToast(`Image dimensions must be at most ${MAX_UPLOAD_DIMENSION}×${MAX_UPLOAD_DIMENSION} px (got ${probe.naturalWidth}×${probe.naturalHeight}).`)
         return
       }
-      setElements([]); setSelectedElements([]); setBaseImageSelected(false); setImageLocked(false); setTextLayers([]); setSelectedText(null); setFrameSequence([]); setFrameMode(false); setOverlays([]); setSelectedOverlay(null); setGifEffects({ ...EFFECT_DEFAULTS }); setImageEdits({ rotation: 0, flipX: false, flipY: false, cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 }); setCensor((current) => ({ ...current, enabled: false })); setParallax((current) => ({ ...current, enabled: false }))
+      setElements([]); setSelectedElements([]); setBaseImageSelected(false); setImageLocked(false); setTextLayers([]); setSelectedText(null); setFrameSequence([]); setFrameMode(false); setOverlays([]); setSelectedOverlay(null); setGifEffects({ ...EFFECT_DEFAULTS }); setImageEdits({ rotation: 0, flipX: false, flipY: false, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 }); setCensor((current) => ({ ...current, enabled: false })); setParallax((current) => ({ ...current, enabled: false }))
       // Canvas size is applied when the image loads (original size, capped at MAX_CANVAS).
       setSource({ name: file.name, width: probe.naturalWidth, height: probe.naturalHeight, url })
       setToast(`Image loaded at ${probe.naturalWidth} × ${probe.naturalHeight} px`)
@@ -429,7 +424,7 @@ export function StudioProvider({ children }) {
   }
 
   const applyPreset = (name) => setSettings((s) => ({ ...s, preset: name, ...PRESETS[name] }))
-  const reset = () => { setSettings(INITIAL); setElements([]); setSelectedElements([]); setTextLayers([]); setSelectedText(null); setFrameSequence([]); setFrameMode(false); setMaskEditing(false); setOverlays([]); setSelectedOverlay(null); setGifEffects({ ...EFFECT_DEFAULTS }); setImageEdits({ rotation: 0, flipX: false, flipY: false, cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 }); setCensor({ enabled: false, x: 25, y: 25, w: 30, h: 20, pixelSize: 14 }); setParallax({ enabled: false, direction: 'Horizontal', strength: 6, speed: 1 }); setProgress(0); setPlaying(false); setToast('Settings reset') }
+  const reset = () => { setSettings(INITIAL); setElements([]); setSelectedElements([]); setTextLayers([]); setSelectedText(null); setFrameSequence([]); setFrameMode(false); setMaskEditing(false); setOverlays([]); setSelectedOverlay(null); setGifEffects({ ...EFFECT_DEFAULTS }); setImageEdits({ rotation: 0, flipX: false, flipY: false, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 }); setCensor({ enabled: false, x: 25, y: 25, w: 30, h: 20, pixelSize: 14 }); setParallax({ enabled: false, direction: 'Horizontal', strength: 6, speed: 1 }); setProgress(0); setPlaying(false); setToast('Settings reset') }
 
   const pointerPosition = (event) => {
     const bounds = stageRef.current.getBoundingClientRect()
@@ -565,7 +560,7 @@ export function StudioProvider({ children }) {
     cleanup.getContext('2d').putImageData(filled, 0, 0)
     const id = Date.now()
     const element = { id, name: `Element ${elements.length + 1}`, ...rect, bitmap, sourceBitmap, maskCanvas, cleanup, effects: { ...EFFECT_DEFAULTS }, rotation: 0, scaleX: 100, scaleY: 100, flipX: false, flipY: false, opacity: 100, motion: 'Float', amplitude: 5, speed: 1, depth: Math.min(100, 30 + elements.length * 20), visible: true, locked: false }
-    setElements((current) => [...current, element]); setSelectedElements([id]); goToWorkspace('elements')
+    setElements((current) => [...current, element]); setSelectedElements([id]); goToWorkspace('motion')
     setSettings((current) => ({ ...current, preset: 'Still', ...PRESETS.Still }))
     setToast('Element extracted — choose its motion')
   }
@@ -598,7 +593,7 @@ export function StudioProvider({ children }) {
       const id = Date.now()
       const smartRect = { x: result.rect.x / sourceCanvas.width, y: result.rect.y / sourceCanvas.height, w: result.rect.width / sourceCanvas.width, h: result.rect.height / sourceCanvas.height }
       const element = { id, name: `Element ${elements.length + 1}`, ...smartRect, bitmap, sourceBitmap, maskCanvas, cleanup: null, effects: { ...EFFECT_DEFAULTS }, rotation: 0, scaleX: 100, scaleY: 100, flipX: false, flipY: false, opacity: 100, motion: 'Float', amplitude: 5, speed: 1, depth: Math.min(100, 30 + elements.length * 20), visible: true, smart: true, locked: false }
-      setElements((current) => [...current, element]); setSelectedElements([id]); goToWorkspace('elements')
+      setElements((current) => [...current, element]); setSelectedElements([id]); goToWorkspace('motion')
       setSettings((current) => ({ ...current, preset: 'Still', fit: 'Contain', ...PRESETS.Still }))
       setSource((current) => ({ ...current, width: sourceCanvas.width, height: sourceCanvas.height, url: result.background }))
       setToast(`${result.engine.startsWith('rembg') ? 'AI' : 'GrabCut'} object ready · background content-filled`)
@@ -672,6 +667,46 @@ export function StudioProvider({ children }) {
       return next
     })
   }
+  /** Flip selected layer, or base image when none / base is selected. */
+  const toggleFlip = (axis) => {
+    const key = axis === 'y' ? 'flipY' : 'flipX'
+    if (selectedElement) {
+      const el = elements.find((item) => item.id === selectedElement)
+      if (!el) return
+      if (el.locked) { setToast('Unlock the layer to flip'); return }
+      updateElement(key, !el[key])
+      return
+    }
+    if (imageLocked) { setToast('Unlock the base image to flip'); return }
+    setImageEdits((current) => ({ ...current, [key]: !current[key] }))
+    if (!baseImageSelected) {
+      setBaseImageSelected(true)
+      setSelectedElements([])
+    }
+  }
+  const rotateSelection = (delta) => {
+    if (selectedElement) {
+      const el = elements.find((item) => item.id === selectedElement)
+      if (!el) return
+      if (el.locked) { setToast('Unlock the layer to rotate'); return }
+      updateElement('rotation', el.rotation + delta)
+      return
+    }
+    if (imageLocked) { setToast('Unlock the base image to rotate'); return }
+    setImageEdits((current) => ({ ...current, rotation: current.rotation + delta }))
+    if (!baseImageSelected) {
+      setBaseImageSelected(true)
+      setSelectedElements([])
+    }
+  }
+  const selectionFlip = (() => {
+    if (selectedElement) {
+      const el = elements.find((item) => item.id === selectedElement)
+      return { flipX: Boolean(el?.flipX), flipY: Boolean(el?.flipY) }
+    }
+    return { flipX: Boolean(imageEdits.flipX), flipY: Boolean(imageEdits.flipY) }
+  })()
+
   const selectBaseImage = () => {
     if (imageLocked) { setToast('Base image is locked'); return }
     setBaseImageSelected(true)
@@ -688,17 +723,15 @@ export function StudioProvider({ children }) {
       setToast('Element is locked — unlock to transform')
     }
     selectLayer(id, event)
-    goToWorkspace(additive ? 'motion' : 'elements')
+    goToWorkspace('motion')
   }
 
   const imageTransformBox = useMemo(() => {
     if (!source.width || !source.height || !settings.width || !settings.height) {
       return { x: 0.1, y: 0.1, w: 0.8, h: 0.8, rotation: 0 }
     }
-    const cropW = Math.max(0.01, 1 - (imageEdits.cropLeft + imageEdits.cropRight) / 100)
-    const cropH = Math.max(0.01, 1 - (imageEdits.cropTop + imageEdits.cropBottom) / 100)
-    const iw = source.width * cropW
-    const ih = source.height * cropH
+    const iw = source.width
+    const ih = source.height
     const timeline = settings.pingPong ? 1 - Math.abs(1 - progress * 2) : progress
     const t = ease(timeline, settings.easing)
     const scale = (settings.scaleStart + (settings.scaleEnd - settings.scaleStart) * t) / 100
@@ -728,7 +761,7 @@ export function StudioProvider({ children }) {
       h: Math.max(0.02, dh),
       rotation,
     }
-  }, [source.width, source.height, settings, imageEdits, progress])
+  }, [source.width, source.height, settings, imageEdits.rotation, progress])
 
   const beginTransform = (event, target) => {
     if (!stageRef.current) return
@@ -971,7 +1004,7 @@ export function StudioProvider({ children }) {
   const addOverlay = async (file) => {
     if (!file) return
     const url = URL.createObjectURL(file), overlayImage = await imageFromUrl(url), id = Date.now()
-    setOverlays((current) => [...current, { id, name: file.name, image: overlayImage, url, x: 50, y: 50, width: 30, scaleX: 100, scaleY: 100, rotation: 0, opacity: 100, flipX: false, flipY: false, cropLeft: 0, cropRight: 0, cropTop: 0, cropBottom: 0, effects: { ...EFFECT_DEFAULTS }, visible: true }]); setSelectedOverlay(id); setEffectTarget('Selected overlay'); goToWorkspace('edit'); setToast('Image overlay added')
+    setOverlays((current) => [...current, { id, name: file.name, image: overlayImage, url, x: 50, y: 50, width: 30, scaleX: 100, scaleY: 100, rotation: 0, opacity: 100, flipX: false, flipY: false, effects: { ...EFFECT_DEFAULTS }, visible: true }]); setSelectedOverlay(id); setEffectTarget('Selected overlay'); goToWorkspace('edit'); setToast('Image overlay added')
   }
   const updateOverlay = (key, value) => setOverlays((current) => current.map((overlay) => {
     if (overlay.id !== selectedOverlay) return overlay
@@ -1109,7 +1142,7 @@ export function StudioProvider({ children }) {
     canvasRef, stageRef, fileRef, fontFileRef, frameFileRef, overlayFileRef, compressGifRef,
     // state
     settings, setSettings, image, source, playing, setPlaying, progress, setProgress, exporting,
-    dropActive, setDropActive, mobilePanel, setMobilePanel, toast, activeTab, goToWorkspace, zoom, setZoom, canvasZoom,
+    dropActive, setDropActive, mobilePanel, setMobilePanel, toast, setToast, activeTab, goToWorkspace, zoom, setZoom, canvasZoom,
     lockAspect, setLockAspect, setCanvasWidth, setCanvasHeight, useSourceSize, sourceAspect,
     elements, setElements, selectedElement, setSelectedElement, selectedElements, setSelectedElements,
     selectLayer, clearLayerSelection, updateElementById,
@@ -1127,7 +1160,7 @@ export function StudioProvider({ children }) {
     // actions
     update, applyQuality, applyPreset, reset, loadFile, draw, cancelSelection, completePathSelection,
     startSelection, moveSelection, finishSelection, smoothSelectionPath, updateElement, removeElement,
-    toggleElementLock, toggleElementVisible, toggleImageLock, toggleTextLock, selectBaseImage, selectStageElement,
+    toggleElementLock, toggleElementVisible, toggleImageLock, toggleFlip, rotateSelection, selectionFlip, toggleTextLock, selectBaseImage, selectStageElement,
     beginTransform, moveTransform, endTransform,
     resetElementMask, invertElementMask, featherElementMask, addTextLayer, updateText, removeText, moveText,
     uploadFont, loadFrameFiles, updateFrame, moveFrame, duplicateFrame, removeFrame, reorderFrame, updateEffect,

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "api": "python run_web_api.py",
+    "api": ".venv/bin/python run_web_api.py",
     "build": "vite build",
     "preview": "vite preview"
   },

@@ -1,15 +1,21 @@
 import {
   BoxSelect,
+  Brush,
+  FlipHorizontal2,
+  FlipVertical2,
   Hexagon,
   Lasso,
   LoaderCircle,
   Move,
   PenTool,
+  RotateCcw,
+  RotateCw,
 } from 'lucide-react'
 import { useStudio } from '../context/studio-provider'
 import { cn } from '../lib/cn'
 
 const MOVE_TOOL = 'Move'
+const MASK_TOOL = 'Mask'
 
 const SELECTION_TOOLS = [
   {
@@ -45,11 +51,17 @@ export function ToolsRail() {
   const {
     selectMode, setSelectMode, selectionTool, setSelectionTool,
     cancelSelection, setSelection, setSelectionPoints,
-    setPlaying, setMobilePanel, setMaskEditing, segmenting,
-    goToWorkspace, activeTab,
+    setPlaying, setMobilePanel, maskEditing, setMaskEditing, segmenting,
+    selectedElement, setToast, setBaseImageSelected,
+    toggleFlip, rotateSelection, selectionFlip,
+    baseImageSelected,
   } = useStudio()
 
-  const activeId = selectMode ? selectionTool : MOVE_TOOL
+  const activeId = maskEditing ? MASK_TOOL : selectMode ? selectionTool : MOVE_TOOL
+  const hasTarget = Boolean(selectedElement || baseImageSelected)
+  const flipHint = selectedElement
+    ? 'Flip selected layer'
+    : 'Flip base image (select base or a layer first)'
 
   const activateMove = () => {
     cancelSelection()
@@ -66,7 +78,20 @@ export function ToolsRail() {
     setMaskEditing(false)
     setPlaying(false)
     setMobilePanel(false)
-    if (activeTab !== 'elements') goToWorkspace('elements')
+    setBaseImageSelected(false)
+  }
+
+  const activateMask = () => {
+    if (!selectedElement) {
+      setToast('Select a layer first to paint a mask')
+      return
+    }
+    cancelSelection()
+    setSelectMode(false)
+    setMaskEditing(true)
+    setPlaying(false)
+    setMobilePanel(false)
+    setBaseImageSelected(false)
   }
 
   return (
@@ -95,6 +120,46 @@ export function ToolsRail() {
           onClick={() => activateSelection(tool.id)}
         />
       ))}
+
+      <div className="my-1.5 h-px w-6 bg-white/[.08]" />
+
+      <ToolButton
+        label="Flip horizontal"
+        hint={flipHint}
+        icon={FlipHorizontal2}
+        active={hasTarget && selectionFlip.flipX}
+        onClick={() => toggleFlip('x')}
+      />
+      <ToolButton
+        label="Flip vertical"
+        hint={flipHint}
+        icon={FlipVertical2}
+        active={hasTarget && selectionFlip.flipY}
+        onClick={() => toggleFlip('y')}
+      />
+      <ToolButton
+        label="Rotate −90°"
+        hint="Rotate selected layer or base image"
+        icon={RotateCcw}
+        onClick={() => rotateSelection(-90)}
+      />
+      <ToolButton
+        label="Rotate +90°"
+        hint="Rotate selected layer or base image"
+        icon={RotateCw}
+        onClick={() => rotateSelection(90)}
+      />
+
+      <div className="my-1.5 h-px w-6 bg-white/[.08]" />
+
+      <ToolButton
+        label="Mask paint"
+        hint="Paint a layer mask — options open in the properties panel"
+        icon={Brush}
+        active={activeId === MASK_TOOL}
+        disabled={segmenting}
+        onClick={activateMask}
+      />
 
       {segmenting && (
         <div className="mt-auto pb-2" title="Separating object…">

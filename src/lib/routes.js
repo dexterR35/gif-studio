@@ -9,18 +9,15 @@ export const ROUTES = {
     frames: '/gif/frames',
     edit: '/gif/edit',
     output: '/gif/output',
-    preview: '/gif/preview',
   },
 }
 
 export const GIF_WORKSPACES = [
   'motion',
-  'elements',
   'text',
   'frames',
   'edit',
   'output',
-  'preview',
 ]
 
 export function gifWorkspacePath(workspace = 'motion') {

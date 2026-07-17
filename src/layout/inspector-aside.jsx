@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Lock, Move, Unlock } from 'lucide-react'
 import {
   Button,
+  CanvasSizeControls,
   Field,
   FormGrid,
   Hint,
@@ -10,6 +11,7 @@ import {
   SelectField,
   Slider,
   Switch,
+  StatusBadge,
   ToggleGroup,
 } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
@@ -24,8 +26,9 @@ const POSITION_AXES = {
 
 function BaseTransformPanel() {
   const {
-    settings, setSettings, imageLocked, toggleImageLock,
+    settings, setSettings, update, imageLocked, toggleImageLock,
     baseImageSelected, selectBaseImage, setBaseImageSelected,
+    source, lockAspect, setLockAspect, setCanvasWidth, setCanvasHeight, useSourceSize, memory,
   } = useStudio()
   const [positionAxis, setPositionAxis] = useState('X')
   const axis = POSITION_AXES[positionAxis]
@@ -36,7 +39,7 @@ function BaseTransformPanel() {
 
   return (
     <>
-      <Section title="Base image" info="Select and lock the background layer." open>
+      <Section title="Base image" info="Select the background on the canvas or layers panel." open>
         <div className="gs-chip-row stretch">
           <button
             type="button"
@@ -60,68 +63,56 @@ function BaseTransformPanel() {
         </div>
       </Section>
 
-      <Section title="Transform" info="One control per property. Pick X, Y, or Rotate from the dropdown." open>
+      <Section title="Canvas" info="Resize the output canvas. Smaller canvas = less render memory." open>
+        <CanvasSizeControls
+          width={settings.width}
+          height={settings.height}
+          fit={settings.fit}
+          lockAspect={lockAspect}
+          sourceWidth={source.width}
+          sourceHeight={source.height}
+          memoryBytes={memory}
+          onWidthChange={setCanvasWidth}
+          onHeightChange={setCanvasHeight}
+          onFitChange={(v) => update('fit', v)}
+          onLockAspectChange={setLockAspect}
+          onUseSourceSize={useSourceSize}
+        />
+      </Section>
+
+      <Section title="Transform" open>
         <div className={imageLocked ? 'pointer-events-none opacity-40' : ''}>
-          <Slider
-            className="border-t border-white/[.05] py-2"
-            label="Scale"
-            suffix="%"
-            min={5}
-            max={300}
-            value={settings.scaleStart}
-            onChange={(v) => setBoth('scaleStart', 'scaleEnd', v)}
-          />
+          <Slider className="border-t border-white/[.05] py-2" label="Scale" suffix="%" min={5} max={300} value={settings.scaleStart} onChange={(v) => setBoth('scaleStart', 'scaleEnd', v)} />
           <div className="border-t border-white/[.05] py-2">
             <SelectField label="Position" value={positionAxis} onChange={setPositionAxis}>
               <option value="X">X</option>
               <option value="Y">Y</option>
               <option value="Rotate">Rotate</option>
             </SelectField>
-            <Slider
-              className="mt-2"
-              label={axis.label}
-              suffix={axis.suffix}
-              min={axis.min}
-              max={axis.max}
-              value={settings[axis.startKey]}
-              onChange={(v) => setBoth(axis.startKey, axis.endKey, v)}
-            />
+            <Slider className="mt-2" label={axis.label} suffix={axis.suffix} min={axis.min} max={axis.max} value={settings[axis.startKey]} onChange={(v) => setBoth(axis.startKey, axis.endKey, v)} />
           </div>
-          <Slider
-            className="border-t border-white/[.05] py-2"
-            label="Opacity"
-            suffix="%"
-            min={0}
-            max={100}
-            value={settings.opacityStart}
-            onChange={(v) => setBoth('opacityStart', 'opacityEnd', v)}
-          />
+          <Slider className="border-t border-white/[.05] py-2" label="Opacity" suffix="%" min={0} max={100} value={settings.opacityStart} onChange={(v) => setBoth('opacityStart', 'opacityEnd', v)} />
         </div>
       </Section>
     </>
   )
 }
 
-function LayerMaskPanel() {
+function MaskPaintPanel() {
   const {
-    maskEditing, setMaskEditing, maskBrush, setMaskBrush,
-    resetElementMask, invertElementMask, featherElementMask,
-    setPlaying, setSelectMode,
+    maskBrush, setMaskBrush, resetElementMask, invertElementMask, featherElementMask,
+    selectedElement, elements,
   } = useStudio()
+  const el = elements.find((item) => item.id === selectedElement)
 
   return (
-    <Section title="Mask" info="Non-destructive mask — original pixels can be revealed again." open>
-      <Switch
-        label="Paint mask on canvas"
-        checked={maskEditing}
-        onChange={(v) => {
-          setMaskEditing(v)
-          setPlaying(false)
-          setSelectMode(false)
-        }}
-      />
+    <Section title="Mask paint" info="Hide or reveal pixels on the selected layer." open>
+      {el && (
+        <p className="mb-3 truncate text-[11px] text-zinc-500">
+          Layer: <span className="font-medium text-zinc-300">{el.name}</span>
+        </p>
+      )}
       <ToggleGroup
-        className="mt-4"
         value={maskBrush.mode}
         onChange={(mode) => setMaskBrush((current) => ({ ...current, mode }))}
         options={[
@@ -145,18 +136,39 @@ function LayerMaskPanel() {
   )
 }
 
+function SelectionOptionsPanel() {
+  const {
+    selectionTool, extractTolerance, setExtractTolerance,
+    apiAvailable, apiInfo,
+  } = useStudio()
+
+  return (
+    <Section title="Selection" info="Draw on the canvas to extract a new layer." open>
+      <StatusBadge className="mb-3" tone={apiAvailable ? 'success' : 'warning'}>
+        {apiAvailable
+          ? apiInfo?.ai ? 'AI + OpenCV connected' : 'OpenCV connected'
+          : 'Edge selector · start Python API'}
+      </StatusBadge>
+      <p className="mb-3 text-[11px] text-zinc-500">
+        <span className="font-medium text-zinc-300">{selectionTool}</span> active
+      </p>
+      <Slider
+        label="Edge tolerance"
+        min={5}
+        max={120}
+        value={extractTolerance}
+        onChange={setExtractTolerance}
+      />
+    </Section>
+  )
+}
+
 function ElementTransformPanel({ el }) {
-  const { updateElement, toggleElementLock, removeElement } = useStudio()
+  const { updateElement } = useStudio()
 
   return (
     <>
-      <Section title="Layer" info="Transform the active layer. Drag handles on the stage too." open>
-        <div className="mb-3">
-          <Button full className="text-[10px]" onClick={() => toggleElementLock(el.id)}>
-            {el.locked ? <Unlock className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
-            {el.locked ? 'Unlock layer' : 'Lock layer'}
-          </Button>
-        </div>
+      <Section title="Transform" info="Drag handles on the stage to move, scale, and rotate." open>
         <div className={`space-y-1 ${el.locked ? 'pointer-events-none opacity-40' : ''}`}>
           <Slider label="X position" value={Math.round(el.x * 1000) / 10} onChange={(v) => updateElement('x', v / 100)} min={-100} max={200} step={0.1} />
           <Slider label="Y position" value={Math.round(el.y * 1000) / 10} onChange={(v) => updateElement('y', v / 100)} min={-100} max={200} step={0.1} />
@@ -185,82 +197,30 @@ function ElementTransformPanel({ el }) {
               <option key={x}>{x}</option>
             ))}
           </SelectField>
-          <Slider
-            className="mt-3 border-t border-white/[.05] py-2"
-            label="Amount"
-            suffix="%"
-            min={0}
-            max={40}
-            value={el.amplitude}
-            onChange={(v) => updateElement('amplitude', v)}
-          />
-          <Slider
-            className="border-t border-white/[.05] py-2"
-            label="Speed"
-            suffix="×"
-            min={0.1}
-            max={8}
-            step={0.1}
-            value={el.speed}
-            onChange={(v) => updateElement('speed', v)}
-          />
-          <Slider
-            className="border-t border-white/[.05] py-2"
-            label="Parallax depth"
-            suffix="%"
-            min={0}
-            max={100}
-            value={el.depth ?? 50}
-            onChange={(v) => updateElement('depth', v)}
-          />
+          <Slider className="mt-3 border-t border-white/[.05] py-2" label="Amount" suffix="%" min={0} max={40} value={el.amplitude} onChange={(v) => updateElement('amplitude', v)} />
+          <Slider className="border-t border-white/[.05] py-2" label="Speed" suffix="×" min={0.1} max={8} step={0.1} value={el.speed} onChange={(v) => updateElement('speed', v)} />
+          <Slider className="border-t border-white/[.05] py-2" label="Parallax depth" suffix="%" min={0} max={100} value={el.depth ?? 50} onChange={(v) => updateElement('depth', v)} />
           <div className="mt-1 flex justify-between text-[9px] font-semibold uppercase tracking-wider text-zinc-700">
             <span>Far</span>
             <span>Near</span>
           </div>
-          <div className="mt-4">
-            <Switch label="Show layer" checked={el.visible} onChange={(v) => updateElement('visible', v)} />
-          </div>
         </div>
-        <Button
-          variant="danger"
-          full
-          className="mt-4"
-          disabled={el.locked}
-          onClick={() => removeElement(el.id)}
-        >
-          {el.locked ? 'Unlock to remove' : 'Remove layer'}
-        </Button>
       </Section>
-
-      <LayerMaskPanel />
     </>
   )
 }
 
 function ParallaxPanel({ layers }) {
-  const { parallax, setParallax, updateElementById, goToWorkspace } = useStudio()
+  const { parallax, setParallax, updateElementById } = useStudio()
 
   return (
     <>
-      <Section title="Selection" open>
-        <p className="text-[11px] leading-relaxed text-zinc-400">
-          {layers.length} layers selected. Group parallax needs two or more layers.
-        </p>
-        <ul className="mt-2 space-y-1">
-          {layers.map((el) => (
-            <li key={el.id} className="truncate text-[10px] text-zinc-500">· {el.name}</li>
-          ))}
-        </ul>
-      </Section>
-
-      <Section title="Parallax scene" info="Far layers travel less, near layers more. Seamless for GIF export." open>
+      <Section title="Parallax scene" info="Far layers travel less, near layers more." open>
+        <p className="mb-3 text-[11px] text-zinc-500">{layers.length} layers selected</p>
         <Switch
           label="Enable group parallax"
           checked={parallax.enabled}
-          onChange={(v) => {
-            setParallax((current) => ({ ...current, enabled: v }))
-            if (v) goToWorkspace('motion')
-          }}
+          onChange={(v) => setParallax((current) => ({ ...current, enabled: v }))}
         />
         <div className={`mt-3 transition ${parallax.enabled ? '' : 'pointer-events-none opacity-40'}`}>
           <SelectField
@@ -272,27 +232,10 @@ function ParallaxPanel({ layers }) {
               <option key={x}>{x}</option>
             ))}
           </SelectField>
-          <Slider
-            className="mt-2 border-t border-white/[.05] py-2"
-            label="Strength"
-            suffix="%"
-            min={0}
-            max={40}
-            value={parallax.strength}
-            onChange={(v) => setParallax((current) => ({ ...current, strength: v }))}
-          />
-          <Slider
-            className="border-t border-white/[.05] py-2"
-            label="Speed"
-            suffix="×"
-            min={0.1}
-            max={8}
-            step={0.1}
-            value={parallax.speed}
-            onChange={(v) => setParallax((current) => ({ ...current, speed: v }))}
-          />
+          <Slider className="mt-2 border-t border-white/[.05] py-2" label="Strength" suffix="%" min={0} max={40} value={parallax.strength} onChange={(v) => setParallax((current) => ({ ...current, strength: v }))} />
+          <Slider className="border-t border-white/[.05] py-2" label="Speed" suffix="×" min={0.1} max={8} step={0.1} value={parallax.speed} onChange={(v) => setParallax((current) => ({ ...current, speed: v }))} />
         </div>
-        <Hint className="mt-3">Depth per layer controls how far each moves in the group.</Hint>
+        <Hint className="mt-3">Set depth per layer below.</Hint>
       </Section>
 
       <Section title="Layer depths" open>
@@ -308,16 +251,12 @@ function ParallaxPanel({ layers }) {
             onChange={(v) => updateElementById(el.id, 'depth', v)}
           />
         ))}
-        <div className="mt-1 flex justify-between text-[9px] font-semibold uppercase tracking-wider text-zinc-700">
-          <span>Far</span>
-          <span>Near</span>
-        </div>
       </Section>
     </>
   )
 }
 
-/** Selection-driven inspector — base, single layer (+ mask), or multi-layer parallax. */
+/** Properties inspector (2nd bar) — transform, mask paint, selection, parallax. */
 export function InspectorAside() {
   const {
     baseImageSelected,
@@ -325,35 +264,46 @@ export function InspectorAside() {
     elements,
     clearLayerSelection,
     setSelectedText,
+    maskEditing,
+    setMaskEditing,
+    selectMode,
+    setSelectMode,
+    cancelSelection,
   } = useStudio()
 
   const selectedLayers = elements.filter((el) => selectedElements.includes(el.id))
   const multi = selectedLayers.length >= 2
   const single = selectedLayers.length === 1 ? selectedLayers[0] : null
 
-  const open = baseImageSelected || selectedLayers.length > 0
-  const title = multi
-    ? `${selectedLayers.length} layers`
-    : single
-      ? single.name || 'Layer'
-      : baseImageSelected
-        ? 'Base image'
-        : 'Inspector'
+  const open = baseImageSelected || selectedLayers.length > 0 || maskEditing || selectMode
+
+  let title = 'Properties'
+  if (maskEditing) title = 'Mask'
+  else if (selectMode) title = 'Selection'
+  else if (multi) title = `${selectedLayers.length} layers`
+  else if (single) title = single.name || 'Layer'
+  else if (baseImageSelected) title = 'Base image'
 
   const close = () => {
     clearLayerSelection()
     setSelectedText(null)
+    setMaskEditing(false)
+    if (selectMode) {
+      cancelSelection()
+      setSelectMode(false)
+    }
   }
+
+  let body = null
+  if (maskEditing) body = <MaskPaintPanel />
+  else if (selectMode) body = <SelectionOptionsPanel />
+  else if (multi) body = <ParallaxPanel layers={selectedLayers} />
+  else if (single) body = <ElementTransformPanel el={single} />
+  else if (baseImageSelected) body = <BaseTransformPanel />
 
   return (
     <SecondaryAside open={open} title={title} onClose={close}>
-      {multi ? (
-        <ParallaxPanel layers={selectedLayers} />
-      ) : single ? (
-        <ElementTransformPanel el={single} />
-      ) : baseImageSelected ? (
-        <BaseTransformPanel />
-      ) : null}
+      {body}
     </SecondaryAside>
   )
 }

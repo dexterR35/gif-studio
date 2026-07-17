@@ -1,24 +1,17 @@
 import { Crop, ImagePlus, RotateCw } from 'lucide-react'
-import { Button, CanvasSizeControls, ColorField, Field, FormGrid, Hint, LayerRow, RotateControls, Section, SelectField, Switch } from '../components/ui'
+import { Button, ColorField, Field, FormGrid, Hint, LayerRow, RotateControls, Section, SelectField, Switch } from '../components/ui'
 import { EFFECT_DEFAULTS } from '../lib/presets'
 import { useStudio } from '../context/studio-provider'
 import { cn } from '../lib/cn'
 
 export default function EditPage() {
   const {
-    settings, update, applyPreset, applyQuality, setSettings,
-    textLayers, selectedText, setSelectedText, setPlaying, addTextLayer, updateText, removeText, moveText,
-    fontOptions, fontFileRef, uploadFont,
-    frameFileRef, loadFrameFiles, frameMode, setFrameMode, frameOptions, setFrameOptions,
-    frameSequence, setFrameSequence, updateFrame, moveFrame, duplicateFrame, removeFrame, reorderFrame,
-    effectTarget, setEffectTarget, elements, selectedElement, setSelectedElement, overlays, selectedOverlay, setSelectedOverlay,
-    updateElement, updateOverlay, imageEdits, setImageEdits, activeEffects, updateEffect, gifEffects, setGifEffects,
+    settings, update,
+    effectTarget, setEffectTarget, elements, selectedElement, setElements,
+    overlays, selectedOverlay, setSelectedOverlay, setOverlays,
+    updateElement, updateOverlay, imageEdits, setImageEdits, activeEffects, updateEffect, setGifEffects,
     censor, setCensor, setCensorSelecting, setMaskEditing, setSelectMode, overlayFileRef, addOverlay,
-    saveCurrentPng, compressGifRef, compressExistingGif, lastExport,
-    apiAvailable, apiInfo, selectionTool, setSelectionTool, cancelSelection, segmenting, setSelection, setSelectionPoints,
-    selectMode, setMobilePanel, extractTolerance, setExtractTolerance, removeElement,
-    parallax, setParallax, maskEditing, maskBrush, setMaskBrush, resetElementMask, invertElementMask, featherElementMask,
-    source, lockAspect, setLockAspect, setCanvasWidth, setCanvasHeight, useSourceSize, memory,
+    saveCurrentPng, setPlaying, frameSequence, setFrameSequence,
   } = useStudio()
 
   return (
@@ -36,29 +29,7 @@ export default function EditPage() {
             <div className="grid grid-cols-2 gap-3"><Field label="X" value={overlay.x} onChange={(v) => updateOverlay('x', v)} min={-100} max={200} suffix="%" /><Field label="Y" value={overlay.y} onChange={(v) => updateOverlay('y', v)} min={-100} max={200} suffix="%" /><Field label="Size" value={overlay.width} onChange={(v) => updateOverlay('width', v)} min={1} max={300} suffix="%" /><Field label="Rotation" value={overlay.rotation} onChange={(v) => updateOverlay('rotation', v)} min={-360} max={360} suffix="°" /><Field label="Scale X" value={overlay.scaleX || 100} onChange={(v) => updateOverlay('scaleX', v)} min={1} max={500} suffix="%" /><Field label="Scale Y" value={overlay.scaleY || 100} onChange={(v) => updateOverlay('scaleY', v)} min={1} max={500} suffix="%" /><Field label="Opacity" value={overlay.opacity} onChange={(v) => updateOverlay('opacity', v)} min={0} max={100} suffix="%" /></div>
             <RotateControls className="mt-3" value={overlay.rotation} onChange={(v) => updateOverlay('rotation', v)} />
             <div className="mt-3 grid grid-cols-2 gap-3"><Switch label="Flip horizontal" checked={overlay.flipX} onChange={(v) => updateOverlay('flipX', v)} /><Switch label="Flip vertical" checked={overlay.flipY} onChange={(v) => updateOverlay('flipY', v)} /></div>
-            <div className="mt-4 grid grid-cols-2 gap-3"><Field label="Crop left" value={overlay.cropLeft || 0} onChange={(v) => updateOverlay('cropLeft', v)} min={0} max={95} suffix="%" /><Field label="Crop right" value={overlay.cropRight || 0} onChange={(v) => updateOverlay('cropRight', v)} min={0} max={95} suffix="%" /><Field label="Crop top" value={overlay.cropTop || 0} onChange={(v) => updateOverlay('cropTop', v)} min={0} max={95} suffix="%" /><Field label="Crop bottom" value={overlay.cropBottom || 0} onChange={(v) => updateOverlay('cropBottom', v)} min={0} max={95} suffix="%" /></div>
           </Section> : null })()}
-          <Section title="GIF canvas resize & crop" info="Canvas starts at the image’s original size. Shrink width/height to resize the output and lower render memory (MB). Image fit controls how the source scales inside the canvas.">
-            <CanvasSizeControls
-              width={settings.width}
-              height={settings.height}
-              fit={settings.fit}
-              lockAspect={lockAspect}
-              sourceWidth={source.width}
-              sourceHeight={source.height}
-              memoryBytes={memory}
-              onWidthChange={setCanvasWidth}
-              onHeightChange={setCanvasHeight}
-              onFitChange={(v) => update('fit', v)}
-              onLockAspectChange={setLockAspect}
-              onUseSourceSize={useSourceSize}
-            />
-            <div className="mt-3 grid grid-cols-2 gap-3"><Field label="Crop left" value={imageEdits.cropLeft} onChange={(v) => setImageEdits((s) => ({ ...s, cropLeft: v }))} min={0} max={90} suffix="%" /><Field label="Crop right" value={imageEdits.cropRight} onChange={(v) => setImageEdits((s) => ({ ...s, cropRight: v }))} min={0} max={90} suffix="%" /><Field label="Crop top" value={imageEdits.cropTop} onChange={(v) => setImageEdits((s) => ({ ...s, cropTop: v }))} min={0} max={90} suffix="%" /><Field label="Crop bottom" value={imageEdits.cropBottom} onChange={(v) => setImageEdits((s) => ({ ...s, cropBottom: v }))} min={0} max={90} suffix="%" /></div>
-          </Section>
-          <Section title="GIF base rotate & flip">
-            <RotateControls value={imageEdits.rotation} onChange={(v) => setImageEdits((s) => ({ ...s, rotation: v }))} />
-            <div className="mt-3 grid grid-cols-2 gap-3"><Switch label="Flip horizontal" checked={imageEdits.flipX} onChange={(v) => setImageEdits((s) => ({ ...s, flipX: v }))} /><Switch label="Flip vertical" checked={imageEdits.flipY} onChange={(v) => setImageEdits((s) => ({ ...s, flipY: v }))} /></div>
-          </Section>
           <Section title="Base image quick adjustments">
             <div className="grid grid-cols-2 gap-3"><Field label="Brightness" value={imageEdits.brightness} onChange={(v) => setImageEdits((s) => ({ ...s, brightness: v }))} min={0} max={300} suffix="%" /><Field label="Contrast" value={imageEdits.contrast} onChange={(v) => setImageEdits((s) => ({ ...s, contrast: v }))} min={0} max={300} suffix="%" /><Field label="Saturation" value={imageEdits.saturation} onChange={(v) => setImageEdits((s) => ({ ...s, saturation: v }))} min={0} max={300} suffix="%" /><Field label="Hue" value={imageEdits.hue} onChange={(v) => setImageEdits((s) => ({ ...s, hue: v }))} min={-180} max={180} suffix="°" /><Field label="Blur" value={imageEdits.blur} onChange={(v) => setImageEdits((s) => ({ ...s, blur: v }))} min={0} max={50} suffix="px" /><Field label="Grayscale" value={imageEdits.grayscale} onChange={(v) => setImageEdits((s) => ({ ...s, grayscale: v }))} min={0} max={100} suffix="%" /><Field label="Sepia" value={imageEdits.sepia} onChange={(v) => setImageEdits((s) => ({ ...s, sepia: v }))} min={0} max={100} suffix="%" /></div>
             <Button full className="mt-3 text-[10px]" onClick={() => setImageEdits((s) => ({ ...s, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 }))}>Reset effects</Button>

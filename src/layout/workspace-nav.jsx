@@ -1,16 +1,14 @@
-import { Eye, Film, Layers3, Settings2, SlidersHorizontal, Sparkles, Type } from 'lucide-react'
+import { Film, Settings2, SlidersHorizontal, Sparkles, Type } from 'lucide-react'
 import { WorkspaceTabs } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
 import { GIF_WORKSPACES } from '../lib/routes'
 
 const TAB_META = {
   motion: Sparkles,
-  elements: Layers3,
   text: Type,
   frames: Film,
   edit: SlidersHorizontal,
   output: Settings2,
-  preview: Eye,
 }
 
 const TABS = GIF_WORKSPACES.map((id) => ({ id, icon: TAB_META[id] }))
