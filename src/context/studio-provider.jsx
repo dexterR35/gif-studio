@@ -1,13 +1,41 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { GIFEncoder, applyPalette, quantize } from 'gifenc'
-import { PRESETS, INITIAL, TEXT_DEFAULT, SYSTEM_FONTS, EFFECT_DEFAULTS } from '../lib/presets'
+import { PRESETS, INITIAL, TEXT_DEFAULT, SYSTEM_FONTS, EFFECT_DEFAULTS, transformsFromAmount } from '../lib/presets'
 import { clamp, clampNice, fmtBytes, ease, MAX_CANVAS, MAX_UPLOAD_DIMENSION, nice, uploadImageError } from '../lib/format'
 import { applyPixelEffects, ditherToPalette, presetFilter } from '../lib/effects'
 import { gifWorkspacePath, workspaceFromPath } from '../lib/routes'
 import { useCanvasZoom } from '../hooks/use-canvas-zoom'
 
 const StudioContext = createContext(null)
+
+/** Array index 0 = back, last = front. direction: -1 back, +1 front, 'back', 'front'. */
+function moveInStack(list, id, direction) {
+  const index = list.findIndex((item) => item.id === id)
+  if (index < 0) return list
+  let nextIndex = index
+  if (direction === 'front') nextIndex = list.length - 1
+  else if (direction === 'back') nextIndex = 0
+  else nextIndex = index + direction
+  if (nextIndex < 0 || nextIndex >= list.length || nextIndex === index) return list
+  const copy = [...list]
+  const [item] = copy.splice(index, 1)
+  copy.splice(nextIndex, 0, item)
+  return copy
+}
+
+/** Insert relative to selected layer, or absolute front/back of the stack. */
+function insertInStack(list, item, mode, relativeId = null) {
+  if (relativeId != null) {
+    const index = list.findIndex((entry) => entry.id === relativeId)
+    if (index >= 0) {
+      const copy = [...list]
+      copy.splice(mode === 'front' ? index + 1 : index, 0, item)
+      return copy
+    }
+  }
+  return mode === 'front' ? [...list, item] : [item, ...list]
+}
 
 export function useStudio() {
   const ctx = useContext(StudioContext)
@@ -49,10 +77,16 @@ export function StudioProvider({ children }) {
   const [lockAspect, setLockAspect] = useState(true)
   const [elements, setElements] = useState([])
   const [selectedElements, setSelectedElements] = useState([])
+  /** Primary = last selected (edits target). Secondary = other multi-selected layers. */
   const selectedElement = selectedElements.length ? selectedElements[selectedElements.length - 1] : null
+  const secondaryElements = selectedElements.length > 1
+    ? selectedElements.slice(0, -1)
+    : []
   const setSelectedElement = (id) => {
     setSelectedElements(id == null ? [] : [id])
   }
+  /** Where new extracted elements / overlays land in the stack. */
+  const [layerInsertAt, setLayerInsertAt] = useState('front')
   const [baseImageSelected, setBaseImageSelected] = useState(false)
   const [imageLocked, setImageLocked] = useState(false)
   const [selectMode, setSelectMode] = useState(false)
@@ -62,6 +96,7 @@ export function StudioProvider({ children }) {
   const selectionStart = useRef(null)
   const textDrag = useRef(null)
   const transformDrag = useRef(null)
+  const anchorDrag = useRef(null)
   const [extractTolerance, setExtractTolerance] = useState(42)
   const [apiAvailable, setApiAvailable] = useState(false)
   const [apiInfo, setApiInfo] = useState(null)
@@ -85,6 +120,20 @@ export function StudioProvider({ children }) {
   const update = (key, value) => setSettings((s) => ({
     ...s,
     [key]: typeof value === 'number' ? nice(value, Number.isInteger(value) ? 0 : 1) : value,
+  }))
+
+  /** Amount drives loop strength and timeline zoom/pan intensity for the active preset. */
+  const setAmplitude = (amount) => setSettings((s) => ({
+    ...s,
+    amplitude: amount,
+    ...transformsFromAmount(s.preset, amount),
+  }))
+
+  /** Speed drives loop phase rate; for one-shot presets it finishes earlier then holds. */
+  const setSpeed = (speed) => setSettings((s) => ({
+    ...s,
+    speed,
+    cycles: speed,
   }))
   const applyQuality = (quality) => setSettings((current) => ({
     ...current, quality,
@@ -134,17 +183,25 @@ export function StudioProvider({ children }) {
     const W = target.width, H = target.height
     if (settings.transparent) ctx.clearRect(0, 0, W, H)
     else { ctx.fillStyle = settings.background; ctx.fillRect(0, 0, W, H) }
-    let timeline = settings.pingPong ? 1 - Math.abs(1 - rawT * 2) : rawT
+    const motion = settings.motion || 'None'
+    const motionSpeed = Math.max(0.1, settings.speed ?? settings.cycles ?? 1)
+    const isLoop = motion !== 'None'
+    let timeline = rawT
+    if (settings.pingPong) {
+      const phase = (rawT * (isLoop ? 1 : motionSpeed)) % 2
+      timeline = phase <= 1 ? phase : 2 - phase
+    } else if (!isLoop) {
+      // One-shot (zoom / fade): higher speed finishes earlier, then holds end pose.
+      timeline = Math.min(1, rawT * motionSpeed)
+    }
     const t = ease(timeline, settings.easing)
     let scale = (settings.scaleStart + (settings.scaleEnd - settings.scaleStart) * t) / 100
     let x = settings.xStart + (settings.xEnd - settings.xStart) * t
     let y = settings.yStart + (settings.yEnd - settings.yStart) * t
     let rotation = settings.rotateStart + (settings.rotateEnd - settings.rotateStart) * t
-    // Base-image loop animation (Motion tab). Works with or without extracted elements.
-    const motion = settings.motion || 'None'
-    const motionSpeed = settings.speed ?? settings.cycles ?? 1
+    // Loop animation for the base image (Float, Orbit, Pulse, …).
     const amp = settings.amplitude ?? 0
-    if (motion !== 'None' && (amp !== 0 || motion === 'Spin')) {
+    if (isLoop && (amp !== 0 || motion === 'Spin')) {
       const phase = rawT * Math.PI * 2 * motionSpeed
       if (motion === 'Float') y += -Math.sin(phase) * amp
       if (motion === 'Drift') x += Math.sin(phase) * amp
@@ -155,8 +212,6 @@ export function StudioProvider({ children }) {
       if (motion === 'Orbit') { x += Math.cos(phase) * amp; y += Math.sin(phase) * amp }
     }
     const opacity = (settings.opacityStart + (settings.opacityEnd - settings.opacityStart) * t) / 100
-    ctx.save(); ctx.translate(W / 2 + x / 100 * W, H / 2 + y / 100 * H); ctx.rotate((rotation + imageEdits.rotation) * Math.PI / 180); ctx.scale(imageEdits.flipX ? -1 : 1, imageEdits.flipY ? -1 : 1)
-    ctx.filter = `brightness(${imageEdits.brightness}%) contrast(${imageEdits.contrast}%) saturate(${imageEdits.saturation}%) blur(${imageEdits.blur}px) hue-rotate(${imageEdits.hue}deg) grayscale(${imageEdits.grayscale}%) sepia(${imageEdits.sepia}%)`
     const iw = image.naturalWidth, ih = image.naturalHeight
     const contain = Math.min(W / iw, H / ih), cover = Math.max(W / iw, H / ih)
     const fitMode = settings.fit
@@ -166,10 +221,27 @@ export function StudioProvider({ children }) {
       : fitMode === 'Original size'
         ? exportScale
         : contain
-    const dw = iw * base * scale, dh = ih * base * scale
+    // Unscaled size — scale/rotate pivot around the anchor without shifting the laid-out image.
+    const baseDw = fitMode === 'Stretch' ? W : iw * base
+    const baseDh = fitMode === 'Stretch' ? H : ih * base
+    const cx = W / 2 + x / 100 * W
+    const cy = H / 2 + y / 100 * H
+    const left = cx - baseDw / 2
+    const top = cy - baseDh / 2
+    // Anchor is a point on the canvas; origin is relative to the image top-left.
+    // At scale 1 / rotation 0, changing the anchor never moves the image.
+    const originX = ((settings.anchorX ?? 50) / 100) * W - left
+    const originY = ((settings.anchorY ?? 50) / 100) * H - top
+    const sx = (imageEdits.flipX ? -1 : 1) * scale
+    const sy = (imageEdits.flipY ? -1 : 1) * scale
+    ctx.save()
+    ctx.translate(left + originX, top + originY)
+    ctx.rotate((rotation + imageEdits.rotation) * Math.PI / 180)
+    ctx.scale(sx, sy)
+    ctx.translate(-originX, -originY)
+    ctx.filter = `brightness(${imageEdits.brightness}%) contrast(${imageEdits.contrast}%) saturate(${imageEdits.saturation}%) blur(${imageEdits.blur}px) hue-rotate(${imageEdits.hue}deg) grayscale(${imageEdits.grayscale}%) sepia(${imageEdits.sepia}%)`
     ctx.globalAlpha = opacity
-    if (fitMode === 'Stretch') ctx.drawImage(image, 0, 0, iw, ih, -W * scale / 2, -H * scale / 2, W * scale, H * scale)
-    else ctx.drawImage(image, 0, 0, iw, ih, -dw / 2, -dh / 2, dw, dh)
+    ctx.drawImage(image, 0, 0, iw, ih, 0, 0, baseDw, baseDh)
     ctx.restore()
 
     if (censor.enabled) {
@@ -182,8 +254,22 @@ export function StudioProvider({ children }) {
     }
 
     overlays.filter((overlay) => overlay.visible).forEach((overlay) => {
-      const width = overlay.width / 100 * W, height = width * overlay.image.naturalHeight / overlay.image.naturalWidth
-      ctx.save(); ctx.globalAlpha = overlay.opacity / 100; ctx.translate(overlay.x / 100 * W, overlay.y / 100 * H); ctx.rotate(overlay.rotation * Math.PI / 180); ctx.scale((overlay.flipX ? -1 : 1) * (overlay.scaleX || 100) / 100, (overlay.flipY ? -1 : 1) * (overlay.scaleY || 100) / 100)
+      const width = overlay.width / 100 * W
+      const height = width * overlay.image.naturalHeight / overlay.image.naturalWidth
+      const sx = (overlay.flipX ? -1 : 1) * (overlay.scaleX || 100) / 100
+      const sy = (overlay.flipY ? -1 : 1) * (overlay.scaleY || 100) / 100
+      const cx = overlay.x / 100 * W
+      const cy = overlay.y / 100 * H
+      const left = cx - width / 2
+      const top = cy - height / 2
+      const originX = ((overlay.anchorX ?? 50) / 100) * width
+      const originY = ((overlay.anchorY ?? 50) / 100) * height
+      ctx.save()
+      ctx.globalAlpha = overlay.opacity / 100
+      ctx.translate(left + originX, top + originY)
+      ctx.rotate(overlay.rotation * Math.PI / 180)
+      ctx.scale(sx, sy)
+      ctx.translate(-originX, -originY)
       let overlayImage = overlay.image
       if (overlay.effects && Object.keys(EFFECT_DEFAULTS).some((key) => overlay.effects[key] !== EFFECT_DEFAULTS[key])) {
         const processed = document.createElement('canvas'); processed.width = overlay.image.naturalWidth; processed.height = overlay.image.naturalHeight
@@ -192,7 +278,8 @@ export function StudioProvider({ children }) {
         processedContext.drawImage(overlay.image, 0, 0); processedContext.filter = 'none'; applyPixelEffects(processed, overlay.effects); overlayImage = processed
       }
       const sourceWidth = overlayImage.width || overlay.image.naturalWidth, sourceHeight = overlayImage.height || overlay.image.naturalHeight
-      ctx.drawImage(overlayImage, 0, 0, sourceWidth, sourceHeight, -width / 2, -height / 2, width, height); ctx.restore()
+      ctx.drawImage(overlayImage, 0, 0, sourceWidth, sourceHeight, 0, 0, width, height)
+      ctx.restore()
     })
 
     if (elements.length) {
@@ -223,7 +310,16 @@ export function StudioProvider({ children }) {
           if (parallax.direction === 'Orbit') { tx += Math.cos(parallaxPhase) * distanceX; ty += Math.sin(parallaxPhase) * distanceY }
         }
         const x = el.x * W, y = el.y * H, w = el.w * W, h = el.h * H
-        ctx.save(); ctx.globalAlpha = el.opacity / 100; ctx.translate(x + w / 2 + tx, y + h / 2 + ty); ctx.rotate(elementRotation + el.rotation * Math.PI / 180); ctx.scale(elementScale * el.scaleX / 100 * (el.flipX ? -1 : 1), elementScale * el.scaleY / 100 * (el.flipY ? -1 : 1))
+        const originX = ((el.anchorX ?? 50) / 100) * w
+        const originY = ((el.anchorY ?? 50) / 100) * h
+        const sx = elementScale * el.scaleX / 100 * (el.flipX ? -1 : 1)
+        const sy = elementScale * el.scaleY / 100 * (el.flipY ? -1 : 1)
+        ctx.save()
+        ctx.globalAlpha = el.opacity / 100
+        ctx.translate(x + originX + tx, y + originY + ty)
+        ctx.rotate(elementRotation + el.rotation * Math.PI / 180)
+        ctx.scale(sx, sy)
+        ctx.translate(-originX, -originY)
         let elementBitmap = el.bitmap
         if (el.effects && Object.keys(EFFECT_DEFAULTS).some((key) => el.effects[key] !== EFFECT_DEFAULTS[key])) {
           elementBitmap = document.createElement('canvas'); elementBitmap.width = el.bitmap.width; elementBitmap.height = el.bitmap.height
@@ -239,7 +335,8 @@ export function StudioProvider({ children }) {
             if (el.effects.frame === 'Fuzzy') { elementContext.setLineDash([line, line * .7]); elementContext.strokeRect(line / 2, line / 2, elementBitmap.width - line, elementBitmap.height - line) }
           }
         }
-        ctx.drawImage(elementBitmap, 0, 0, elementBitmap.width, elementBitmap.height, -w / 2, -h / 2, w, h); ctx.restore()
+        ctx.drawImage(elementBitmap, 0, 0, elementBitmap.width, elementBitmap.height, 0, 0, w, h)
+        ctx.restore()
       })
     }
 
@@ -397,7 +494,12 @@ export function StudioProvider({ children }) {
     setToast(`Canvas restored to original ${source.width} × ${source.height} px`)
   }
 
-  const applyPreset = (name) => setSettings((s) => ({ ...s, preset: name, ...PRESETS[name] }))
+  const applyPreset = (name) => setSettings((s) => ({
+    ...s,
+    preset: name,
+    ...PRESETS[name],
+    ...transformsFromAmount(name, PRESETS[name]?.amplitude ?? s.amplitude),
+  }))
   const reset = () => { setSettings(INITIAL); setElements([]); setSelectedElements([]); setTextLayers([]); setSelectedText(null); setMaskEditing(false); setOverlays([]); setSelectedOverlay(null); setGifEffects({ ...EFFECT_DEFAULTS }); setImageEdits({ rotation: 0, flipX: false, flipY: false, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 }); setCensor({ enabled: false, x: 25, y: 25, w: 30, h: 20, pixelSize: 14 }); setParallax({ enabled: false, direction: 'Horizontal', strength: 6, speed: 1 }); setProgress(0); setPlaying(false); setToast('Settings reset') }
 
   const pointerPosition = (event) => {
@@ -463,7 +565,7 @@ export function StudioProvider({ children }) {
   }
   const finishSelection = (event) => {
     if (maskEditing) { paintElementMask(event); maskPainting.current = false; return }
-    if (censorSelecting && selectionStart.current) { const point = pointerPosition(event), start = selectionStart.current; const rect = { x: Math.min(start.x, point.x), y: Math.min(start.y, point.y), w: Math.abs(point.x - start.x), h: Math.abs(point.y - start.y) }; setCensor((current) => ({ ...current, enabled: true, x: rect.x * 100, y: rect.y * 100, w: rect.w * 100, h: rect.h * 100 })); selectionStart.current = null; setSelection(null); setCensorSelecting(false); setToast('Censor region added'); return }
+    if (censorSelecting && selectionStart.current) { const point = pointerPosition(event), start = selectionStart.current; const rect = { x: Math.min(start.x, point.x), y: Math.min(start.y, point.y), w: Math.abs(point.x - start.x), h: Math.abs(point.y - start.y) }; setCensor((current) => ({ ...current, enabled: true, x: rect.x * 100, y: rect.y * 100, w: rect.w * 100, h: rect.h * 100 })); selectionStart.current = null; setSelection(null); setToast('Censor region added'); return }
     if (selectMode && selectionTool === 'Freehand Lasso' && selectionStart.current) {
       const point = pointerPosition(event), points = [...selectionPoints, point], rect = selectionBounds(points)
       selectionStart.current = null; setSelection(null); setSelectionPoints([]); setSelectMode(false)
@@ -533,10 +635,11 @@ export function StudioProvider({ children }) {
     }
     cleanup.getContext('2d').putImageData(filled, 0, 0)
     const id = Date.now()
-    const element = { id, name: `Element ${elements.length + 1}`, ...rect, bitmap, sourceBitmap, maskCanvas, cleanup, effects: { ...EFFECT_DEFAULTS }, rotation: 0, scaleX: 100, scaleY: 100, flipX: false, flipY: false, opacity: 100, motion: 'Float', amplitude: 5, speed: 1, depth: Math.min(100, 30 + elements.length * 20), visible: true, locked: false }
-    setElements((current) => [...current, element]); setSelectedElements([id]); goToWorkspace('motion')
+    const element = { id, name: `Element ${elements.length + 1}`, ...rect, bitmap, sourceBitmap, maskCanvas, cleanup, effects: { ...EFFECT_DEFAULTS }, rotation: 0, scaleX: 100, scaleY: 100, flipX: false, flipY: false, opacity: 100, motion: 'Float', amplitude: 5, speed: 1, depth: Math.min(100, 30 + elements.length * 20), visible: true, locked: false, anchorX: 50, anchorY: 50 }
+    setElements((current) => insertInStack(current, element, layerInsertAt, selectedElement))
+    setSelectedElements([id]); goToWorkspace('motion')
     setSettings((current) => ({ ...current, preset: 'Still', ...PRESETS.Still }))
-    setToast('Element extracted — choose its motion')
+    setToast(layerInsertAt === 'front' ? 'Element extracted in front — choose its motion' : 'Element extracted in back — choose its motion')
   }
 
   const extractElement = async (rect) => {
@@ -566,11 +669,12 @@ export function StudioProvider({ children }) {
       const maskCanvas = document.createElement('canvas'); maskCanvas.width = bitmap.width; maskCanvas.height = bitmap.height; const maskCtx = maskCanvas.getContext('2d'); maskCtx.fillStyle = '#fff'; maskCtx.fillRect(0, 0, bitmap.width, bitmap.height)
       const id = Date.now()
       const smartRect = { x: result.rect.x / sourceCanvas.width, y: result.rect.y / sourceCanvas.height, w: result.rect.width / sourceCanvas.width, h: result.rect.height / sourceCanvas.height }
-      const element = { id, name: `Element ${elements.length + 1}`, ...smartRect, bitmap, sourceBitmap, maskCanvas, cleanup: null, effects: { ...EFFECT_DEFAULTS }, rotation: 0, scaleX: 100, scaleY: 100, flipX: false, flipY: false, opacity: 100, motion: 'Float', amplitude: 5, speed: 1, depth: Math.min(100, 30 + elements.length * 20), visible: true, smart: true, locked: false }
-      setElements((current) => [...current, element]); setSelectedElements([id]); goToWorkspace('motion')
+      const element = { id, name: `Element ${elements.length + 1}`, ...smartRect, bitmap, sourceBitmap, maskCanvas, cleanup: null, effects: { ...EFFECT_DEFAULTS }, rotation: 0, scaleX: 100, scaleY: 100, flipX: false, flipY: false, opacity: 100, motion: 'Float', amplitude: 5, speed: 1, depth: Math.min(100, 30 + elements.length * 20), visible: true, smart: true, locked: false, anchorX: 50, anchorY: 50 }
+      setElements((current) => insertInStack(current, element, layerInsertAt, selectedElement))
+      setSelectedElements([id]); goToWorkspace('motion')
       setSettings((current) => ({ ...current, preset: 'Still', fit: 'Contain', ...PRESETS.Still }))
       setSource((current) => ({ ...current, width: sourceCanvas.width, height: sourceCanvas.height, url: result.background }))
-      setToast(`${result.engine.startsWith('rembg') ? 'AI' : 'GrabCut'} object ready · background content-filled`)
+      setToast(`${result.engine.startsWith('rembg') ? 'AI' : 'GrabCut'} object ready · ${layerInsertAt === 'front' ? 'in front' : 'in back'}`)
     } catch (error) {
       console.warn(error); extractElementLocal(rect)
       setToast(`${error.message}. Used edge selection instead.`)
@@ -599,6 +703,7 @@ export function StudioProvider({ children }) {
   const clearLayerSelection = () => {
     setSelectedElements([])
     setBaseImageSelected(false)
+    setSelectedOverlay(null)
   }
   const selectLayer = (id, event) => {
     const el = elements.find((item) => item.id === id)
@@ -608,6 +713,7 @@ export function StudioProvider({ children }) {
     setSelectedText(null)
     setPlaying(false)
     setSelectMode(false)
+    setEffectTarget('Selected element')
     const additive = Boolean(event?.metaKey || event?.ctrlKey)
     const range = Boolean(event?.shiftKey)
     setSelectedElements((prev) => {
@@ -619,15 +725,26 @@ export function StudioProvider({ children }) {
         if (a >= 0 && b >= 0) {
           const lo = Math.min(a, b)
           const hi = Math.max(a, b)
-          return ids.slice(lo, hi + 1)
+          // Keep click target as primary (last).
+          return [...ids.slice(lo, hi + 1).filter((item) => item !== id), id]
         }
       }
       if (additive) {
         if (prev.includes(id)) return prev.filter((item) => item !== id)
         return [...prev, id]
       }
+      // Re-click a secondary layer → promote it to primary without clearing the group.
+      if (prev.includes(id) && prev.length > 1) {
+        return [...prev.filter((item) => item !== id), id]
+      }
       return [id]
     })
+  }
+  const moveElement = (id, direction) => {
+    setElements((current) => moveInStack(current, id, direction))
+  }
+  const moveOverlay = (id, direction) => {
+    setOverlays((current) => moveInStack(current, id, direction))
   }
   const toggleElementLock = (id) => {
     setElements((current) => current.map((el) => el.id === id ? { ...el, locked: !el.locked } : el))
@@ -689,6 +806,7 @@ export function StudioProvider({ children }) {
     setSelectedOverlay(null)
     setSelectedText(null)
     setPlaying(false)
+    setEffectTarget('Entire GIF')
     goToWorkspace('motion')
   }
   const selectOverlay = (id) => {
@@ -702,6 +820,7 @@ export function StudioProvider({ children }) {
     setSelectMode(false)
     setMaskEditing(false)
     setEffectTarget('Selected overlay')
+    goToWorkspace('motion')
   }
   const toggleOverlayVisible = (id) => {
     setOverlays((current) => current.map((overlay) => (
@@ -712,6 +831,26 @@ export function StudioProvider({ children }) {
     setOverlays((current) => current.filter((overlay) => overlay.id !== id))
     setSelectedOverlay((current) => current === id ? null : current)
     setToast('Overlay removed')
+  }
+  /** Stage hit-box for an overlay (fractions of canvas), matching draw layout. */
+  const overlayBounds = (overlay) => {
+    if (!overlay?.image || !settings.width || !settings.height) {
+      return { x: 0.2, y: 0.2, w: 0.3, h: 0.3, rotation: 0 }
+    }
+    const aspect = overlay.image.naturalHeight / Math.max(1, overlay.image.naturalWidth)
+    const w = (overlay.width / 100) * ((overlay.scaleX || 100) / 100)
+    const h = (overlay.width / 100) * aspect * (settings.width / settings.height) * ((overlay.scaleY || 100) / 100)
+    return {
+      x: overlay.x / 100 - w / 2,
+      y: overlay.y / 100 - h / 2,
+      w: Math.max(0.02, w),
+      h: Math.max(0.02, h),
+      rotation: overlay.rotation || 0,
+    }
+  }
+  const selectStageOverlay = (id, event) => {
+    event?.stopPropagation?.()
+    selectOverlay(id)
   }
   const selectStageElement = (id, event) => {
     const el = elements.find((item) => item.id === id)
@@ -730,31 +869,49 @@ export function StudioProvider({ children }) {
     }
     const iw = source.width
     const ih = source.height
-    const timeline = settings.pingPong ? 1 - Math.abs(1 - progress * 2) : progress
+    const motion = settings.motion || 'None'
+    const motionSpeed = Math.max(0.1, settings.speed ?? settings.cycles ?? 1)
+    const isLoop = motion !== 'None'
+    let timeline = progress
+    if (settings.pingPong) {
+      const phase = (progress * (isLoop ? 1 : motionSpeed)) % 2
+      timeline = phase <= 1 ? phase : 2 - phase
+    } else if (!isLoop) {
+      timeline = Math.min(1, progress * motionSpeed)
+    }
     const t = ease(timeline, settings.easing)
     const scale = (settings.scaleStart + (settings.scaleEnd - settings.scaleStart) * t) / 100
     const ox = (settings.xStart + (settings.xEnd - settings.xStart) * t) / 100
     const oy = (settings.yStart + (settings.yEnd - settings.yStart) * t) / 100
     const rotation = settings.rotateStart + (settings.rotateEnd - settings.rotateStart) * t + imageEdits.rotation
+    const ax = (settings.anchorX ?? 50) / 100
+    const ay = (settings.anchorY ?? 50) / 100
     const fit = settings.fit
-    let dw
-    let dh
+    let udw
+    let udh
     if (fit === 'Stretch') {
-      dw = scale
-      dh = scale
+      udw = 1
+      udh = 1
     } else if (fit === 'Original size') {
-      dw = (iw / settings.width) * scale
-      dh = (ih / settings.height) * scale
+      udw = iw / settings.width
+      udh = ih / settings.height
     } else {
       const contain = Math.min(settings.width / iw, settings.height / ih)
       const cover = Math.max(settings.width / iw, settings.height / ih)
       const base = fit === 'Cover' ? cover : contain
-      dw = (iw * base * scale) / settings.width
-      dh = (ih * base * scale) / settings.height
+      udw = (iw * base) / settings.width
+      udh = (ih * base) / settings.height
     }
+    const cx = 0.5 + ox
+    const cy = 0.5 + oy
+    const left = cx - udw / 2
+    const top = cy - udh / 2
+    // Same image-local pivot as draw(): at scale 1 the box stays put when the anchor moves.
+    const dw = udw * scale
+    const dh = udh * scale
     return {
-      x: 0.5 - dw / 2 + ox,
-      y: 0.5 - dh / 2 + oy,
+      x: ax + (left - ax) * scale,
+      y: ay + (top - ay) * scale,
       w: Math.max(0.02, dw),
       h: Math.max(0.02, dh),
       rotation,
@@ -853,6 +1010,35 @@ export function StudioProvider({ children }) {
           h: nice(h, 4),
         }
       }))
+      return
+    }
+
+    if (drag.kind === 'overlay') {
+      const id = drag.id
+      setOverlays((current) => current.map((overlay) => {
+        if (overlay.id !== id) return overlay
+        const o = drag.origin
+        if (drag.mode === 'move') {
+          return {
+            ...overlay,
+            x: nice(o.x + dx * 100, 1),
+            y: nice(o.y + dy * 100, 1),
+          }
+        }
+        if (drag.mode === 'rotate') {
+          const cx = (o.box.x + o.box.w / 2) * drag.boundsW
+          const cy = (o.box.y + o.box.h / 2) * drag.boundsH
+          const rect = stageRef.current.getBoundingClientRect()
+          const angle = Math.atan2(event.clientY - rect.top - cy, event.clientX - rect.left - cx) * 180 / Math.PI
+          return { ...overlay, rotation: nice(o.rotation + (angle - o.startAngle), 1) }
+        }
+        if (drag.mode.startsWith('resize')) {
+          const factor = 1 + (dx + dy) * (drag.mode.includes('w') || drag.mode.includes('n') ? -1 : 1)
+          const next = clampNice(o.width * factor, 1, 300, 1)
+          return { ...overlay, width: next }
+        }
+        return overlay
+      }))
     }
   }
 
@@ -922,11 +1108,7 @@ export function StudioProvider({ children }) {
   const toggleTextLock = (id) => {
     setTextLayers((current) => current.map((layer) => layer.id === id ? { ...layer, locked: !layer.locked } : layer))
   }
-  const moveText = (id, direction) => setTextLayers((current) => {
-    const index = current.findIndex((layer) => layer.id === id), next = index + direction
-    if (index < 0 || next < 0 || next >= current.length) return current
-    const copy = [...current]; [copy[index], copy[next]] = [copy[next], copy[index]]; return copy
-  })
+  const moveText = (id, direction) => setTextLayers((current) => moveInStack(current, id, direction))
   const uploadFont = async (file) => {
     if (!file) return
     try {
@@ -950,11 +1132,13 @@ export function StudioProvider({ children }) {
   const addOverlay = async (file) => {
     if (!file) return
     const url = URL.createObjectURL(file), overlayImage = await imageFromUrl(url), id = Date.now()
-    setOverlays((current) => [...current, {
+    const overlay = {
       id, name: file.name, image: overlayImage, url,
       x: 50, y: 50, width: 30, scaleX: 100, scaleY: 100, rotation: 0, opacity: 100,
       flipX: false, flipY: false, effects: { ...EFFECT_DEFAULTS }, visible: true,
-    }])
+      anchorX: 50, anchorY: 50,
+    }
+    setOverlays((current) => insertInStack(current, overlay, layerInsertAt, selectedOverlay))
     setSelectedOverlay(id)
     setSelectedElements([])
     setBaseImageSelected(false)
@@ -962,7 +1146,7 @@ export function StudioProvider({ children }) {
     setEffectTarget('Selected overlay')
     setPlaying(false)
     goToWorkspace('motion')
-    setToast('Image overlay added')
+    setToast(layerInsertAt === 'front' ? 'Image overlay added in front' : 'Image overlay added in back')
   }
   const updateOverlay = (key, value) => setOverlays((current) => current.map((overlay) => {
     if (overlay.id !== selectedOverlay) return overlay
@@ -1006,6 +1190,79 @@ export function StudioProvider({ children }) {
     setTextLayers((current) => current.map((layer) => layer.id === drag.id ? { ...layer, x, y } : layer))
   }
   const endTextDrag = (event) => { event.stopPropagation(); textDrag.current = null }
+
+  const beginAnchorDrag = (event) => {
+    if (!stageRef.current) return
+    event.stopPropagation()
+    event.preventDefault()
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    const kind = baseImageSelected
+      ? 'image'
+      : selectedOverlay
+        ? 'overlay'
+        : selectedElements.length === 1
+          ? 'element'
+          : null
+    if (!kind) return
+    anchorDrag.current = {
+      kind,
+      id: kind === 'element' ? selectedElements[0] : kind === 'overlay' ? selectedOverlay : null,
+    }
+  }
+  const moveAnchorDrag = (event) => {
+    const drag = anchorDrag.current
+    if (!drag || !stageRef.current) return
+    event.stopPropagation()
+    const bounds = stageRef.current.getBoundingClientRect()
+    const px = clampNice(((event.clientX - bounds.left) / bounds.width) * 100, 0, 100, 1)
+    const py = clampNice(((event.clientY - bounds.top) / bounds.height) * 100, 0, 100, 1)
+
+    if (drag.kind === 'image') {
+      setSettings((current) => ({ ...current, anchorX: px, anchorY: py }))
+      return
+    }
+    if (drag.kind === 'element') {
+      setElements((current) => current.map((el) => {
+        if (el.id !== drag.id || el.locked) return el
+        const ax = clampNice((px / 100 - el.x) / Math.max(0.001, el.w) * 100, 0, 100, 1)
+        const ay = clampNice((py / 100 - el.y) / Math.max(0.001, el.h) * 100, 0, 100, 1)
+        return { ...el, anchorX: ax, anchorY: ay }
+      }))
+      return
+    }
+    if (drag.kind === 'overlay') {
+      setOverlays((current) => current.map((overlay) => {
+        if (overlay.id !== drag.id) return overlay
+        const box = overlayBounds(overlay)
+        const ax = clampNice((px / 100 - box.x) / Math.max(0.001, box.w) * 100, 0, 100, 1)
+        const ay = clampNice((py / 100 - box.y) / Math.max(0.001, box.h) * 100, 0, 100, 1)
+        return { ...overlay, anchorX: ax, anchorY: ay }
+      }))
+    }
+  }
+  const endAnchorDrag = (event) => {
+    if (!anchorDrag.current) return
+    event.stopPropagation()
+    anchorDrag.current = null
+  }
+  const resetMotionAnchor = () => {
+    if (baseImageSelected) {
+      setSettings((current) => ({ ...current, anchorX: 50, anchorY: 50 }))
+      return
+    }
+    if (selectedOverlay) {
+      setOverlays((current) => current.map((overlay) => (
+        overlay.id === selectedOverlay ? { ...overlay, anchorX: 50, anchorY: 50 } : overlay
+      )))
+      return
+    }
+    if (selectedElements.length === 1) {
+      const id = selectedElements[0]
+      setElements((current) => current.map((el) => (
+        el.id === id ? { ...el, anchorX: 50, anchorY: 50 } : el
+      )))
+    }
+  }
 
   const exportGif = async () => {
     if (!image || exporting) return
@@ -1103,7 +1360,8 @@ export function StudioProvider({ children }) {
     dropActive, setDropActive, mobilePanel, setMobilePanel, toast, setToast, activeTab, goToWorkspace, zoom, setZoom, canvasZoom,
     lockAspect, setLockAspect, setCanvasWidth, setCanvasHeight, useSourceSize, sourceAspect,
     elements, setElements, selectedElement, setSelectedElement, selectedElements, setSelectedElements,
-    selectLayer, clearLayerSelection, updateElementById,
+    secondaryElements, layerInsertAt, setLayerInsertAt,
+    selectLayer, clearLayerSelection, updateElementById, moveElement, moveOverlay,
     baseImageSelected, setBaseImageSelected,
     imageLocked, setImageLocked, imageTransformBox,
     selectMode, setSelectMode, selectionTool, setSelectionTool,
@@ -1115,13 +1373,14 @@ export function StudioProvider({ children }) {
     // derived
     frames, frameDelays, actualDuration, actualFps, memory, timedFrames, timingFps, activeEffects, stageStyle,
     // actions
-    update, applyQuality, applyPreset, reset, loadFile, draw, cancelSelection, completePathSelection,
+    update, setAmplitude, setSpeed, applyQuality, applyPreset, reset, loadFile, draw, cancelSelection, completePathSelection,
     startSelection, moveSelection, finishSelection, smoothSelectionPath, updateElement, removeElement,
     toggleElementLock, toggleElementVisible, toggleImageLock, toggleFlip, rotateSelection, selectionFlip, toggleTextLock, selectBaseImage, selectStageElement,
     beginTransform, moveTransform, endTransform,
     resetElementMask, invertElementMask, featherElementMask, addTextLayer, updateText, removeText, moveText,
     uploadFont, updateEffect,
-    addOverlay, updateOverlay, selectOverlay, toggleOverlayVisible, removeOverlay, saveCurrentPng, compressExistingGif, beginTextDrag, dragTextLayer, endTextDrag,
+    addOverlay, updateOverlay, selectOverlay, selectStageOverlay, overlayBounds, toggleOverlayVisible, removeOverlay, saveCurrentPng, compressExistingGif, beginTextDrag, dragTextLayer, endTextDrag,
+    beginAnchorDrag, moveAnchorDrag, endAnchorDrag, resetMotionAnchor,
     exportGif, textBounds,
   }
 

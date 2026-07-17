@@ -1,5 +1,3 @@
-import { Link2, Link2Off, RotateCcw } from 'lucide-react'
-import { Button } from './button'
 import { Field } from './field'
 import { SelectField } from './select-field'
 import { fmtBytes, MAX_CANVAS } from '../../lib/format'
@@ -15,15 +13,12 @@ export function CanvasSizeControls({
   width,
   height,
   fit,
-  lockAspect,
   sourceWidth,
   sourceHeight,
   memoryBytes,
   onWidthChange,
   onHeightChange,
   onFitChange,
-  onLockAspectChange,
-  onUseSourceSize,
   max = MAX_CANVAS,
   showFit = true,
   className,
@@ -41,24 +36,6 @@ export function CanvasSizeControls({
       <div className="grid grid-cols-2 gap-3">
         <Field label="Canvas width" value={width} onChange={onWidthChange} min={1} max={max} suffix="px" />
         <Field label="Canvas height" value={height} onChange={onHeightChange} min={1} max={max} suffix="px" />
-      </div>
-
-      <div className="mt-3 flex flex-wrap gap-2">
-        <Button
-          type="button"
-          disabled={!sourceWidth}
-          onClick={onUseSourceSize}
-        >
-          <RotateCcw className="h-3.5 w-3.5" /> Use original size
-        </Button>
-        <button
-          type="button"
-          onClick={() => onLockAspectChange?.(!lockAspect)}
-          className={cn('gs-chip focus-ring', lockAspect && 'is-active')}
-        >
-          {lockAspect ? <Link2 className="h-3.5 w-3.5" /> : <Link2Off className="h-3.5 w-3.5" />}
-          Lock aspect
-        </button>
       </div>
 
       {showFit && (

@@ -1,4 +1,4 @@
-import { AlignCenter, AlignLeft, AlignRight, ArrowDown, ArrowUp, Plus, Trash2, Type, Upload } from 'lucide-react'
+import { AlignCenter, AlignLeft, AlignRight, ArrowDown, ArrowUp, ChevronsDown, ChevronsUp, Plus, Trash2, Type, Upload } from 'lucide-react'
 import { Button, ColorField, Field, FormGrid, Hint, LayerRow, Section, SelectField, Switch, Textarea, ToggleGroup } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
 
@@ -69,7 +69,12 @@ export default function TextPage() {
             </Section>
 
             <Section title="Arrange">
-              <FormGrid gap={2}><Button onClick={() => moveText(layer.id, 1)}><ArrowUp className="h-3.5 w-3.5" />Bring forward</Button><Button onClick={() => moveText(layer.id, -1)}><ArrowDown className="h-3.5 w-3.5" />Send backward</Button></FormGrid>
+              <FormGrid gap={2}>
+                <Button onClick={() => moveText(layer.id, 'front')}><ChevronsUp className="h-3.5 w-3.5" />To front</Button>
+                <Button onClick={() => moveText(layer.id, 1)}><ArrowUp className="h-3.5 w-3.5" />Bring forward</Button>
+                <Button onClick={() => moveText(layer.id, -1)}><ArrowDown className="h-3.5 w-3.5" />Send backward</Button>
+                <Button onClick={() => moveText(layer.id, 'back')}><ChevronsDown className="h-3.5 w-3.5" />To back</Button>
+              </FormGrid>
               <div className="mt-3"><Switch label="Show text layer" checked={layer.visible} onChange={(v) => updateText('visible', v)} /></div>
               <Button variant="danger" full className="mt-4" onClick={() => removeText(layer.id)}><Trash2 className="h-3.5 w-3.5" />Delete text layer</Button>
             </Section>

@@ -23,18 +23,20 @@ export function StudioLayout() {
     baseImageSelected, selectedElements, clearLayerSelection, setSelectedText,
     selectedOverlay, setSelectedOverlay,
     maskEditing, setMaskEditing, selectMode, setSelectMode, cancelSelection,
+    censorSelecting, setCensorSelecting,
     activeTab, setPlaying,
   } = useStudio()
 
   const isFocus = FOCUS_TABS.has(activeTab)
   const isOutput = activeTab === 'output'
-  const inspectorOpen = !isFocus && (baseImageSelected || selectedElements.length > 0 || Boolean(selectedOverlay) || maskEditing || selectMode)
+  const inspectorOpen = !isFocus && (baseImageSelected || selectedElements.length > 0 || Boolean(selectedOverlay) || maskEditing || selectMode || censorSelecting)
 
   const closeInspector = () => {
     clearLayerSelection()
     setSelectedOverlay(null)
     setSelectedText(null)
     setMaskEditing(false)
+    setCensorSelecting(false)
     if (selectMode) {
       cancelSelection()
       setSelectMode(false)
@@ -47,6 +49,7 @@ export function StudioLayout() {
     clearLayerSelection()
     setSelectedText(null)
     setMaskEditing(false)
+    setCensorSelecting(false)
     cancelSelection()
     setSelectMode(false)
     setMobilePanel(false)

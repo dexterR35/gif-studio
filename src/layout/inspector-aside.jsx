@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Lock, Move, Unlock } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronsDown, ChevronsUp, Lock, Move, Unlock } from 'lucide-react'
 import {
   Button,
   CanvasSizeControls,
@@ -28,7 +28,7 @@ function BaseTransformPanel() {
   const {
     settings, setSettings, update, imageLocked, toggleImageLock,
     baseImageSelected, selectBaseImage, setBaseImageSelected,
-    source, lockAspect, setLockAspect, setCanvasWidth, setCanvasHeight, useSourceSize, memory,
+    source, setCanvasWidth, setCanvasHeight, memory,
   } = useStudio()
   const [positionAxis, setPositionAxis] = useState('X')
   const axis = POSITION_AXES[positionAxis]
@@ -68,22 +68,19 @@ function BaseTransformPanel() {
           width={settings.width}
           height={settings.height}
           fit={settings.fit}
-          lockAspect={lockAspect}
           sourceWidth={source.width}
           sourceHeight={source.height}
           memoryBytes={memory}
           onWidthChange={setCanvasWidth}
           onHeightChange={setCanvasHeight}
           onFitChange={(v) => update('fit', v)}
-          onLockAspectChange={setLockAspect}
-          onUseSourceSize={useSourceSize}
         />
       </Section>
 
       <Section title="Transform" open>
         <div className={imageLocked ? 'pointer-events-none opacity-40' : ''}>
-          <Slider className="border-t border-white/[.05] py-2" label="Scale" suffix="%" min={5} max={300} value={settings.scaleStart} onChange={(v) => setBoth('scaleStart', 'scaleEnd', v)} />
-          <div className="border-t border-white/[.05] py-2">
+          <Slider className="gs-row" label="Scale" suffix="%" min={5} max={300} value={settings.scaleStart} onChange={(v) => setBoth('scaleStart', 'scaleEnd', v)} />
+          <div className="gs-row">
             <SelectField label="Position" value={positionAxis} onChange={setPositionAxis}>
               <option value="X">X</option>
               <option value="Y">Y</option>
@@ -91,7 +88,7 @@ function BaseTransformPanel() {
             </SelectField>
             <Slider className="mt-2" label={axis.label} suffix={axis.suffix} min={axis.min} max={axis.max} value={settings[axis.startKey]} onChange={(v) => setBoth(axis.startKey, axis.endKey, v)} />
           </div>
-          <Slider className="border-t border-white/[.05] py-2" label="Opacity" suffix="%" min={0} max={100} value={settings.opacityStart} onChange={(v) => setBoth('opacityStart', 'opacityEnd', v)} />
+          <Slider className="gs-row" label="Opacity" suffix="%" min={0} max={100} value={settings.opacityStart} onChange={(v) => setBoth('opacityStart', 'opacityEnd', v)} />
         </div>
       </Section>
     </>
@@ -136,6 +133,30 @@ function MaskPaintPanel() {
   )
 }
 
+function CensorPanel() {
+  const { censor, setCensor } = useStudio()
+
+  return (
+    <Section title="Censor / pixelate" info="Drag on the canvas to set the region." open>
+      <Switch
+        label="Show censor"
+        checked={censor.enabled}
+        onChange={(v) => setCensor((s) => ({ ...s, enabled: v }))}
+      />
+      <Slider
+        className="mt-2 gs-row"
+        label="Pixel block size"
+        suffix="px"
+        min={2}
+        max={100}
+        value={censor.pixelSize}
+        onChange={(v) => setCensor((s) => ({ ...s, pixelSize: v }))}
+      />
+      <Hint className="mt-3">Drag a box on the stage to place or move the pixelate region.</Hint>
+    </Section>
+  )
+}
+
 function SelectionOptionsPanel() {
   const {
     selectionTool, extractTolerance, setExtractTolerance,
@@ -164,7 +185,10 @@ function SelectionOptionsPanel() {
 }
 
 function ElementTransformPanel({ el }) {
-  const { updateElement } = useStudio()
+  const { updateElement, moveElement, elements } = useStudio()
+  const index = elements.findIndex((item) => item.id === el.id)
+  const canForward = index >= 0 && index < elements.length - 1
+  const canBackward = index > 0
 
   return (
     <>
@@ -190,6 +214,23 @@ function ElementTransformPanel({ el }) {
         </div>
       </Section>
 
+      <Section title="Arrange" info="Stack order within extracted layers. Front draws on top." open>
+        <FormGrid gap={2}>
+          <Button disabled={!canForward} onClick={() => moveElement(el.id, 'front')}>
+            <ChevronsUp className="h-3.5 w-3.5" />To front
+          </Button>
+          <Button disabled={!canForward} onClick={() => moveElement(el.id, 1)}>
+            <ArrowUp className="h-3.5 w-3.5" />Forward
+          </Button>
+          <Button disabled={!canBackward} onClick={() => moveElement(el.id, -1)}>
+            <ArrowDown className="h-3.5 w-3.5" />Backward
+          </Button>
+          <Button disabled={!canBackward} onClick={() => moveElement(el.id, 'back')}>
+            <ChevronsDown className="h-3.5 w-3.5" />To back
+          </Button>
+        </FormGrid>
+      </Section>
+
       <Section title="Motion" open>
         <div className={el.locked ? 'pointer-events-none opacity-40' : ''}>
           <SelectField label="Animation" value={el.motion} onChange={(v) => updateElement('motion', v)}>
@@ -197,9 +238,9 @@ function ElementTransformPanel({ el }) {
               <option key={x}>{x}</option>
             ))}
           </SelectField>
-          <Slider className="mt-3 border-t border-white/[.05] py-2" label="Amount" suffix="%" min={0} max={40} value={el.amplitude} onChange={(v) => updateElement('amplitude', v)} />
-          <Slider className="border-t border-white/[.05] py-2" label="Speed" suffix="×" min={0.1} max={8} step={0.1} value={el.speed} onChange={(v) => updateElement('speed', v)} />
-          <Slider className="border-t border-white/[.05] py-2" label="Parallax depth" suffix="%" min={0} max={100} value={el.depth ?? 50} onChange={(v) => updateElement('depth', v)} />
+          <Slider className="mt-3 gs-row" label="Amount" suffix="%" min={0} max={40} value={el.amplitude} onChange={(v) => updateElement('amplitude', v)} />
+          <Slider className="gs-row" label="Speed" suffix="×" min={0.1} max={8} step={0.1} value={el.speed} onChange={(v) => updateElement('speed', v)} />
+          <Slider className="gs-row" label="Parallax depth" suffix="%" min={0} max={100} value={el.depth ?? 50} onChange={(v) => updateElement('depth', v)} />
           <div className="mt-1 flex justify-between text-[9px] font-semibold uppercase tracking-wider text-zinc-700">
             <span>Far</span>
             <span>Near</span>
@@ -232,8 +273,8 @@ function ParallaxPanel({ layers }) {
               <option key={x}>{x}</option>
             ))}
           </SelectField>
-          <Slider className="mt-2 border-t border-white/[.05] py-2" label="Strength" suffix="%" min={0} max={40} value={parallax.strength} onChange={(v) => setParallax((current) => ({ ...current, strength: v }))} />
-          <Slider className="border-t border-white/[.05] py-2" label="Speed" suffix="×" min={0.1} max={8} step={0.1} value={parallax.speed} onChange={(v) => setParallax((current) => ({ ...current, speed: v }))} />
+          <Slider className="mt-2 gs-row" label="Strength" suffix="%" min={0} max={40} value={parallax.strength} onChange={(v) => setParallax((current) => ({ ...current, strength: v }))} />
+          <Slider className="gs-row" label="Speed" suffix="×" min={0.1} max={8} step={0.1} value={parallax.speed} onChange={(v) => setParallax((current) => ({ ...current, speed: v }))} />
         </div>
         <Hint className="mt-3">Set depth per layer below.</Hint>
       </Section>
@@ -242,7 +283,7 @@ function ParallaxPanel({ layers }) {
         {layers.map((el) => (
           <Slider
             key={el.id}
-            className="border-t border-white/[.05] py-2"
+            className="gs-row"
             label={el.name}
             suffix="%"
             min={0}
@@ -257,7 +298,10 @@ function ParallaxPanel({ layers }) {
 }
 
 function OverlayTransformPanel({ overlay }) {
-  const { updateOverlay, removeOverlay } = useStudio()
+  const { updateOverlay, removeOverlay, moveOverlay, overlays } = useStudio()
+  const index = overlays.findIndex((item) => item.id === overlay.id)
+  const canForward = index >= 0 && index < overlays.length - 1
+  const canBackward = index > 0
 
   return (
     <>
@@ -280,6 +324,23 @@ function OverlayTransformPanel({ overlay }) {
           <Switch label="Flip H" checked={overlay.flipX} onChange={(v) => updateOverlay('flipX', v)} />
           <Switch label="Flip V" checked={overlay.flipY} onChange={(v) => updateOverlay('flipY', v)} />
         </div>
+      </Section>
+
+      <Section title="Arrange" info="Stack order within image overlays. Front draws on top." open>
+        <FormGrid gap={2}>
+          <Button disabled={!canForward} onClick={() => moveOverlay(overlay.id, 'front')}>
+            <ChevronsUp className="h-3.5 w-3.5" />To front
+          </Button>
+          <Button disabled={!canForward} onClick={() => moveOverlay(overlay.id, 1)}>
+            <ArrowUp className="h-3.5 w-3.5" />Forward
+          </Button>
+          <Button disabled={!canBackward} onClick={() => moveOverlay(overlay.id, -1)}>
+            <ArrowDown className="h-3.5 w-3.5" />Backward
+          </Button>
+          <Button disabled={!canBackward} onClick={() => moveOverlay(overlay.id, 'back')}>
+            <ChevronsDown className="h-3.5 w-3.5" />To back
+          </Button>
+        </FormGrid>
       </Section>
 
       <Section title="Layer" open>
@@ -317,6 +378,8 @@ export function InspectorAside() {
     selectMode,
     setSelectMode,
     cancelSelection,
+    censorSelecting,
+    setCensorSelecting,
   } = useStudio()
 
   const selectedLayers = elements.filter((el) => selectedElements.includes(el.id))
@@ -324,10 +387,11 @@ export function InspectorAside() {
   const single = selectedLayers.length === 1 ? selectedLayers[0] : null
   const overlay = overlays.find((item) => item.id === selectedOverlay) || null
 
-  const open = baseImageSelected || selectedLayers.length > 0 || Boolean(overlay) || maskEditing || selectMode
+  const open = baseImageSelected || selectedLayers.length > 0 || Boolean(overlay) || maskEditing || selectMode || censorSelecting
 
   let title = 'Properties'
-  if (maskEditing) title = 'Mask'
+  if (censorSelecting) title = 'Censor'
+  else if (maskEditing) title = 'Mask'
   else if (selectMode) title = 'Selection'
   else if (multi) title = `${selectedLayers.length} layers`
   else if (single) title = single.name || 'Layer'
@@ -339,6 +403,7 @@ export function InspectorAside() {
     setSelectedOverlay(null)
     setSelectedText(null)
     setMaskEditing(false)
+    setCensorSelecting(false)
     if (selectMode) {
       cancelSelection()
       setSelectMode(false)
@@ -346,7 +411,8 @@ export function InspectorAside() {
   }
 
   let body = null
-  if (maskEditing) body = <MaskPaintPanel />
+  if (censorSelecting) body = <CensorPanel />
+  else if (maskEditing) body = <MaskPaintPanel />
   else if (selectMode) body = <SelectionOptionsPanel />
   else if (multi) body = <ParallaxPanel layers={selectedLayers} />
   else if (single) body = <ElementTransformPanel el={single} />

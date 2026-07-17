@@ -1,17 +1,53 @@
-import { Cpu, ImagePlus } from 'lucide-react'
+import { Cpu, Crosshair, ImagePlus } from 'lucide-react'
 import { Button, Field, FormGrid, Section, SelectField, Slider } from '../components/ui'
-import { BASE_MOTIONS, PRESETS } from '../lib/presets'
+import { PRESETS } from '../lib/presets'
 import { useStudio } from '../context/studio-provider'
-import { cn } from '../lib/cn'
 
 export default function MotionPage() {
-  const { settings, update, applyPreset, overlayFileRef, addOverlay } = useStudio()
+  const {
+    settings, update, applyPreset, setAmplitude, setSpeed, overlayFileRef, addOverlay, resetMotionAnchor,
+    baseImageSelected, selectedElements, elements, selectedOverlay, overlays,
+    updateElement, updateOverlay,
+  } = useStudio()
 
-  const animationActive = (settings.motion || 'None') !== 'None'
+  const selectedEl = selectedElements.length === 1
+    ? elements.find((el) => el.id === selectedElements[0])
+    : null
+  const selectedOv = overlays.find((ov) => ov.id === selectedOverlay) || null
+
+  const anchorTarget = baseImageSelected
+    ? 'image'
+    : selectedOv
+      ? 'overlay'
+      : selectedEl
+        ? 'element'
+        : null
+
+  const anchorX = anchorTarget === 'image'
+    ? (settings.anchorX ?? 50)
+    : anchorTarget === 'overlay'
+      ? (selectedOv.anchorX ?? 50)
+      : anchorTarget === 'element'
+        ? (selectedEl.anchorX ?? 50)
+        : 50
+  const anchorY = anchorTarget === 'image'
+    ? (settings.anchorY ?? 50)
+    : anchorTarget === 'overlay'
+      ? (selectedOv.anchorY ?? 50)
+      : anchorTarget === 'element'
+        ? (selectedEl.anchorY ?? 50)
+        : 50
+  const anchorCentered = anchorX === 50 && anchorY === 50
+
+  const setAnchor = (key, value) => {
+    if (anchorTarget === 'image') update(key, value)
+    else if (anchorTarget === 'overlay') updateOverlay(key, value)
+    else if (anchorTarget === 'element') updateElement(key, value)
+  }
 
   return (
     <>
-      <Section title="Motion" info="Presets stay fully editable. Tune every value below.">
+      <Section title="Motion" info="Pick an animation, then tune duration, easing, and strength below.">
         <div className="gs-chip-row">
           <SelectField
             className="min-w-[7.5rem] flex-1"
@@ -31,44 +67,76 @@ export default function MotionPage() {
             ))}
           </SelectField>
         </div>
-        <FormGrid className="mt-2">
-          <Field label="Duration" value={settings.duration} onChange={(v) => update('duration', v)} min={.1} max={20} step={.1} suffix="s" />
-          <Field label="Frame rate" value={settings.fps} onChange={(v) => update('fps', v)} min={1} max={60} suffix="fps" />
-        </FormGrid>
+
+        <Slider
+          className="mt-2 gs-row"
+          label="Duration"
+          suffix="s"
+          min={0.1}
+          max={20}
+          step={0.1}
+          value={settings.duration}
+          onChange={(v) => update('duration', v)}
+        />
+        <Slider
+          className="gs-row"
+          label="Frame rate"
+          suffix="fps"
+          min={1}
+          max={60}
+          value={settings.fps}
+          onChange={(v) => update('fps', v)}
+        />
+
+        <Slider
+          className="mt-2 gs-row"
+          label="Amount"
+          suffix="%"
+          min={0}
+          max={40}
+          value={settings.amplitude}
+          onChange={setAmplitude}
+        />
+        <Slider
+          className="gs-row"
+          label="Speed"
+          suffix="×"
+          min={0.1}
+          max={8}
+          step={0.1}
+          value={settings.speed ?? 1}
+          onChange={setSpeed}
+        />
       </Section>
 
-      <Section title="Animation" info="Loop animation for the base image itself.">
-        <SelectField
-          label=""
-          value={settings.motion || 'None'}
-          onChange={(v) => update('motion', v)}
+      {anchorTarget && (
+        <Section
+          title="Anchor point"
+          info={
+            anchorTarget === 'image'
+              ? 'Shown when the base image is selected. Drag the crosshair on the preview.'
+              : 'Shown when this layer is selected. Drag the crosshair on the preview.'
+          }
         >
-          {BASE_MOTIONS.map((m) => <option key={m}>{m}</option>)}
-        </SelectField>
-        <div className={cn('mt-2', !animationActive && 'pointer-events-none opacity-40')}>
-          <Slider
-            className="border-t border-white/[.05] py-2"
-            label="Amount"
-            suffix="%"
-            min={0}
-            max={40}
-            value={settings.amplitude}
-            onChange={(v) => update('amplitude', v)}
-          />
-          <Slider
-            className="border-t border-white/[.05] py-2"
-            label="Speed"
-            suffix="×"
-            min={0.1}
-            max={8}
-            step={0.1}
-            value={settings.speed ?? 1}
-            onChange={(v) => update('speed', v)}
-          />
-        </div>
-      </Section>
+          <FormGrid>
+            <Field label="X" value={anchorX} onChange={(v) => setAnchor('anchorX', v)} min={0} max={100} step={0.1} suffix="%" />
+            <Field label="Y" value={anchorY} onChange={(v) => setAnchor('anchorY', v)} min={0} max={100} step={0.1} suffix="%" />
+          </FormGrid>
+          <Button
+            variant="soft"
+            size="lg"
+            full
+            className="mt-2"
+            disabled={anchorCentered}
+            onClick={resetMotionAnchor}
+          >
+            <Crosshair className="h-4 w-4" />
+            Reset to center
+          </Button>
+        </Section>
+      )}
 
-      <Section title="Image overlays" info="Added as layers — select one in the layers bar to edit.">
+      <Section title="Image overlays" info="Added as layers — click on the canvas or layers list to select.">
         <Button variant="soft" size="lg" full onClick={() => overlayFileRef.current?.click()}>
           <ImagePlus className="h-4 w-4" />
           Add image

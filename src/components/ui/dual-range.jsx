@@ -16,7 +16,7 @@ export function DualRange({
   className,
 }) {
   return (
-    <div className={cn('border-t border-white/[.05] py-2', className)}>
+    <div className={cn('gs-row', className)}>
       <div className="mb-1.5 flex items-center justify-between gap-2">
         <span className="gs-label mb-0 flex items-center gap-1.5">
           {label}

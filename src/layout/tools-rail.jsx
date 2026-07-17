@@ -3,6 +3,7 @@ import {
   Brush,
   FlipHorizontal2,
   FlipVertical2,
+  Grid3x3,
   Hexagon,
   Lasso,
   LoaderCircle,
@@ -16,6 +17,7 @@ import { cn } from '../lib/cn'
 
 const MOVE_TOOL = 'Move'
 const MASK_TOOL = 'Mask'
+const CENSOR_TOOL = 'Censor'
 
 const SELECTION_TOOLS = [
   {
@@ -54,10 +56,16 @@ export function ToolsRail() {
     setPlaying, setMobilePanel, maskEditing, setMaskEditing, segmenting,
     selectedElement, setToast, setBaseImageSelected,
     toggleFlip, rotateSelection, selectionFlip,
-    baseImageSelected,
+    baseImageSelected, censorSelecting, setCensorSelecting,
   } = useStudio()
 
-  const activeId = maskEditing ? MASK_TOOL : selectMode ? selectionTool : MOVE_TOOL
+  const activeId = censorSelecting
+    ? CENSOR_TOOL
+    : maskEditing
+      ? MASK_TOOL
+      : selectMode
+        ? selectionTool
+        : MOVE_TOOL
   const hasTarget = Boolean(selectedElement || baseImageSelected)
   const flipHint = selectedElement
     ? 'Flip selected layer'
@@ -67,6 +75,7 @@ export function ToolsRail() {
     cancelSelection()
     setSelectMode(false)
     setMaskEditing(false)
+    setCensorSelecting(false)
   }
 
   const activateSelection = (toolId) => {
@@ -76,6 +85,7 @@ export function ToolsRail() {
     setSelectionTool(toolId)
     setSelectMode(true)
     setMaskEditing(false)
+    setCensorSelecting(false)
     setPlaying(false)
     setMobilePanel(false)
     setBaseImageSelected(false)
@@ -89,9 +99,21 @@ export function ToolsRail() {
     cancelSelection()
     setSelectMode(false)
     setMaskEditing(true)
+    setCensorSelecting(false)
     setPlaying(false)
     setMobilePanel(false)
     setBaseImageSelected(false)
+  }
+
+  const activateCensor = () => {
+    cancelSelection()
+    setSelection(null)
+    setSelectionPoints([])
+    setSelectMode(false)
+    setMaskEditing(false)
+    setCensorSelecting(true)
+    setPlaying(false)
+    setMobilePanel(false)
   }
 
   return (
@@ -159,6 +181,14 @@ export function ToolsRail() {
         active={activeId === MASK_TOOL}
         disabled={segmenting}
         onClick={activateMask}
+      />
+      <ToolButton
+        label="Censor / pixelate"
+        hint="Draw a pixelate region — options open in the properties panel"
+        icon={Grid3x3}
+        active={activeId === CENSOR_TOOL}
+        disabled={segmenting}
+        onClick={activateCensor}
       />
 
       {segmenting && (

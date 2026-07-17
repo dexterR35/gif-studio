@@ -1,7 +1,8 @@
-import { ImagePlus, Info, Pause, Play } from 'lucide-react'
+import { Crosshair, ImagePlus, Info, Pause, Play } from 'lucide-react'
 import { Button, CanvasViewport, SelectionPath, StageHint, Switch, TransformBox, ZoomControls } from '../components/ui'
-import { fmtBytes } from '../lib/format'
+import { fmtBytes, MAX_CANVAS } from '../lib/format'
 import { useStudio } from '../context/studio-provider'
+import { cn } from '../lib/cn'
 
 export function PreviewStage() {
   const {
@@ -11,15 +12,77 @@ export function PreviewStage() {
     textLayers, textBounds, beginTextDrag, dragTextLayer,
     endTextDrag, selectedText, setSelectionPoints, cancelSelection, censorSelecting,
     setPlaying, progress, setProgress, actualDuration, frames, draw, frameDelays, actualFps,
-    settings, update, memory, canvasZoom,
+    settings, setSettings, update, source, memory, canvasZoom, imageEdits,
     baseImageSelected, imageLocked, imageTransformBox, selectBaseImage, selectStageElement,
     toggleImageLock, toggleElementLock, beginTransform, moveTransform, endTransform,
     clearLayerSelection, selectedElements, setSelectedText,
+    beginAnchorDrag, moveAnchorDrag, endAnchorDrag,
+    overlays, selectedOverlay, selectStageOverlay, overlayBounds,
   } = useStudio()
 
   const interacting = selectMode || maskEditing || censorSelecting
   const selectedEl = elements.find((el) => el.id === selectedElement)
+  const selectedOv = overlays.find((ov) => ov.id === selectedOverlay)
   const multiSelect = selectedElements.length >= 2
+  const showOffCanvasGhost = baseImageSelected && Boolean(image) && !playing && !selectMode && !maskEditing
+
+  // Anchor only when a single layer is selected (base image, element, or overlay).
+  const showMotionAnchor = !playing && !selectMode && !maskEditing && !censorSelecting && (
+    baseImageSelected
+    || (Boolean(selectedOv) && !multiSelect)
+    || (Boolean(selectedEl) && !multiSelect && selectedElements.length === 1)
+  )
+
+  let anchorLeft = 50
+  let anchorTop = 50
+  if (baseImageSelected) {
+    anchorLeft = settings.anchorX ?? 50
+    anchorTop = settings.anchorY ?? 50
+  } else if (selectedEl && selectedElements.length === 1) {
+    anchorLeft = (selectedEl.x + ((selectedEl.anchorX ?? 50) / 100) * selectedEl.w) * 100
+    anchorTop = (selectedEl.y + ((selectedEl.anchorY ?? 50) / 100) * selectedEl.h) * 100
+  } else if (selectedOv) {
+    const box = overlayBounds(selectedOv)
+    anchorLeft = (box.x + ((selectedOv.anchorX ?? 50) / 100) * box.w) * 100
+    anchorTop = (box.y + ((selectedOv.anchorY ?? 50) / 100) * box.h) * 100
+  }
+
+  const atOriginalView = (
+    canvasZoom.zoom === 100
+    && canvasZoom.pan.x === 0
+    && canvasZoom.pan.y === 0
+    && settings.fit === 'Original size'
+    && (!source.width || (settings.width === source.width && settings.height === source.height))
+    && settings.scaleStart === 100 && settings.scaleEnd === 100
+    && settings.xStart === 0 && settings.xEnd === 0
+    && settings.yStart === 0 && settings.yEnd === 0
+  )
+
+  const centerCanvasAndImage = () => {
+    canvasZoom.reset()
+    setSettings((current) => {
+      const next = {
+        ...current,
+        fit: 'Original size',
+        scaleStart: 100,
+        scaleEnd: 100,
+        xStart: 0,
+        xEnd: 0,
+        yStart: 0,
+        yEnd: 0,
+      }
+      if (
+        source.width > 0
+        && source.height > 0
+        && source.width <= MAX_CANVAS
+        && source.height <= MAX_CANVAS
+      ) {
+        next.width = source.width
+        next.height = source.height
+      }
+      return next
+    })
+  }
 
   const clearSelection = () => {
     clearLayerSelection()
@@ -51,6 +114,18 @@ export function PreviewStage() {
             onChange={(v) => update('pingPong', v)}
             className="justify-start gap-2 text-[10px] font-bold uppercase tracking-[.15em] text-zinc-600"
           />
+          <button
+            type="button"
+            title="Center canvas & image · 100% zoom · original size"
+            onClick={centerCanvasAndImage}
+            className={cn(
+              'gs-chip focus-ring gap-1.5 text-[10px] font-bold uppercase tracking-[.12em]',
+              !atOriginalView && 'is-active',
+            )}
+          >
+            <Crosshair className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Center</span>
+          </button>
           <ZoomControls
             zoom={canvasZoom.zoom}
             onZoomChange={canvasZoom.setZoom}
@@ -78,22 +153,46 @@ export function PreviewStage() {
           ref={stageRef}
           style={stageStyle}
           onPointerDown={onStagePointerDown}
-          onPointerMove={(e) => { moveTransform(e); moveSelection(e) }}
-          onPointerUp={(e) => { endTransform(e); finishSelection(e) }}
+          onPointerMove={(e) => { moveAnchorDrag(e); moveTransform(e); moveSelection(e) }}
+          onPointerUp={(e) => { endAnchorDrag(e); endTransform(e); finishSelection(e) }}
           onDoubleClick={() => {
             if (selectMode && (selectionTool === 'Polygonal Lasso' || selectionTool === 'Pen Path')) completePathSelection()
           }}
-          className={`card-shadow relative h-full w-full overflow-hidden rounded-[4px] ring-1 ring-white/10 ${interacting ? 'cursor-crosshair ring-2 ring-acid' : ''} ${canvasZoom.spaceDown ? 'cursor-grab' : ''}`}
+          className={cn(
+            'card-shadow relative h-full w-full rounded-[4px] ring-1 ring-white/10',
+            showOffCanvasGhost ? 'overflow-visible' : 'overflow-hidden',
+            interacting && 'cursor-crosshair ring-2 ring-acid',
+            canvasZoom.spaceDown && 'cursor-grab',
+          )}
         >
-          <canvas ref={canvasRef} className="block h-full w-full" />
+          {/* Off-canvas ghost: 50% opacity outside the artboard while transforming */}
+          {showOffCanvasGhost && (
+            <img
+              src={image.src}
+              alt=""
+              draggable={false}
+              className="pointer-events-none absolute z-0 max-w-none select-none"
+              style={{
+                left: `${imageTransformBox.x * 100}%`,
+                top: `${imageTransformBox.y * 100}%`,
+                width: `${imageTransformBox.w * 100}%`,
+                height: `${imageTransformBox.h * 100}%`,
+                opacity: 0.5,
+                objectFit: 'fill',
+                transform: `rotate(${imageTransformBox.rotation}deg) scale(${imageEdits.flipX ? -1 : 1}, ${imageEdits.flipY ? -1 : 1})`,
+                transformOrigin: 'center center',
+              }}
+            />
+          )}
+          <canvas ref={canvasRef} className="relative z-[1] block h-full w-full" />
           {!image && (
-            <div className="absolute inset-0 grid place-items-center bg-zinc-900">
+            <div className="absolute inset-0 z-10 grid place-items-center bg-zinc-900">
               <ImagePlus className="h-8 w-8 text-zinc-700" />
             </div>
           )}
           {selection && selectionTool === 'Rectangle' && (
             <div
-              className="pointer-events-none absolute border-2 border-acid bg-acid/10 shadow-[0_0_0_9999px_rgba(0,0,0,.38)]"
+              className="pointer-events-none absolute z-10 border-2 border-acid bg-acid/10 shadow-[0_0_0_9999px_rgba(0,0,0,.38)]"
               style={{ left: `${selection.x * 100}%`, top: `${selection.y * 100}%`, width: `${selection.w * 100}%`, height: `${selection.h * 100}%` }}
             />
           )}
@@ -101,23 +200,87 @@ export function PreviewStage() {
             <SelectionPath points={selectionPoints} tool={selectionTool} smoothPath={smoothSelectionPath} />
           )}
 
-          {!selectMode && !maskEditing && !playing && elements.map((el) => (
-            <button
-              key={el.id}
-              type="button"
-              onPointerDown={(e) => {
-                e.stopPropagation()
-                selectStageElement(el.id, e)
-              }}
-              title={el.locked ? `${el.name} (locked)` : el.name}
-              className={`absolute border transition ${selectedElements.includes(el.id) ? 'border-acid shadow-[0_0_0_1px_#d8ff3e]' : el.locked ? 'border-amber-400/50 border-dashed' : 'border-white/30 hover:border-acid/70'} ${el.visible ? '' : 'opacity-30'} ${el.locked ? 'cursor-not-allowed' : 'cursor-move'}`}
-              style={{ left: `${el.x * 100}%`, top: `${el.y * 100}%`, width: `${el.w * 100}%`, height: `${el.h * 100}%`, transform: `rotate(${el.rotation}deg)` }}
-            >
-              <span className="absolute -left-px -top-5 rounded-t bg-black/70 px-1.5 py-0.5 text-[8px] font-bold text-zinc-300">
-                {el.locked ? 'Locked · ' : ''}{el.name}
-              </span>
-            </button>
-          ))}
+          {/* Overlays — click to select (under elements in stacking) */}
+          {!selectMode && !maskEditing && !playing && overlays.filter((ov) => ov.visible).map((overlay, stackIndex) => {
+            const box = overlayBounds(overlay)
+            const selected = selectedOverlay === overlay.id
+            return (
+              <button
+                key={overlay.id}
+                type="button"
+                onPointerDown={(e) => {
+                  e.stopPropagation()
+                  selectStageOverlay(overlay.id, e)
+                }}
+                title={overlay.name}
+                className={cn(
+                  'absolute border transition',
+                  selected
+                    ? 'border-acid shadow-[0_0_0_1px_#d8ff3e] cursor-move'
+                    : 'border-transparent hover:border-white/40 cursor-pointer',
+                )}
+                style={{
+                  left: `${box.x * 100}%`,
+                  top: `${box.y * 100}%`,
+                  width: `${box.w * 100}%`,
+                  height: `${box.h * 100}%`,
+                  transform: `rotate(${box.rotation}deg)`,
+                  zIndex: 9 + stackIndex,
+                }}
+              >
+                {selected && (
+                  <span className="absolute -left-px -top-5 rounded-t bg-black/70 px-1.5 py-0.5 text-[8px] font-bold text-zinc-300">
+                    {overlay.name}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+
+          {!selectMode && !maskEditing && !playing && elements.map((el, stackIndex) => {
+            const selected = selectedElements.includes(el.id)
+            const multi = selectedElements.length >= 2
+            const isPrimary = selected && el.id === selectedElement
+            return (
+              <button
+                key={el.id}
+                type="button"
+                onPointerDown={(e) => {
+                  e.stopPropagation()
+                  selectStageElement(el.id, e)
+                }}
+                title={el.locked ? `${el.name} (locked)` : el.name}
+                className={cn(
+                  'absolute border transition',
+                  selected
+                    ? isPrimary || !multi
+                      ? 'border-acid shadow-[0_0_0_1px_#d8ff3e]'
+                      : 'border-acid/50 shadow-[0_0_0_1px_rgba(216,255,62,.35)]'
+                    : el.locked
+                      ? 'border-amber-400/50 border-dashed'
+                      : 'border-transparent hover:border-white/40',
+                  !el.visible && 'opacity-30',
+                  el.locked ? 'cursor-not-allowed' : selected ? 'cursor-move' : 'cursor-pointer',
+                )}
+                style={{
+                  left: `${el.x * 100}%`,
+                  top: `${el.y * 100}%`,
+                  width: `${el.w * 100}%`,
+                  height: `${el.h * 100}%`,
+                  transform: `rotate(${el.rotation}deg)`,
+                  zIndex: 20 + stackIndex,
+                }}
+              >
+                {selected && (
+                  <span className="absolute -left-px -top-5 rounded-t bg-black/70 px-1.5 py-0.5 text-[8px] font-bold text-zinc-300">
+                    {el.locked ? 'Locked · ' : ''}
+                    {multi ? (isPrimary ? 'Primary · ' : 'Secondary · ') : ''}
+                    {el.name}
+                  </span>
+                )}
+              </button>
+            )
+          })}
 
           {!selectMode && !maskEditing && !playing && textLayers.filter((layer) => layer.visible).map((layer) => {
             const box = textBounds(layer)
@@ -129,7 +292,7 @@ export function PreviewStage() {
                 onPointerMove={dragTextLayer}
                 onPointerUp={endTextDrag}
                 title={layer.locked ? `${layer.name} (locked)` : 'Drag to position text'}
-                className={`absolute border border-dashed transition ${selectedText === layer.id ? 'border-acid bg-acid/[.04]' : layer.locked ? 'cursor-not-allowed border-amber-400/50' : 'cursor-move border-white/30 hover:border-acid/70'}`}
+                className={`absolute z-10 border border-dashed transition ${selectedText === layer.id ? 'border-acid bg-acid/[.04]' : layer.locked ? 'cursor-not-allowed border-amber-400/50' : 'cursor-move border-white/30 hover:border-acid/70'}`}
                 style={{ left: `${box.left}%`, top: `${box.top}%`, width: `${box.width}%`, height: `${box.height}%`, transform: `rotate(${layer.rotation}deg)` }}
               >
                 <span className="absolute -left-px -top-5 rounded-t bg-black/70 px-1.5 py-0.5 text-[8px] font-bold text-zinc-300">
@@ -220,6 +383,42 @@ export function PreviewStage() {
             />
           )}
 
+          {!selectMode && !maskEditing && !playing && selectedOv && (
+            <TransformBox
+              x={overlayBounds(selectedOv).x}
+              y={overlayBounds(selectedOv).y}
+              w={overlayBounds(selectedOv).w}
+              h={overlayBounds(selectedOv).h}
+              rotation={overlayBounds(selectedOv).rotation}
+              label={selectedOv.name}
+              onPointerDownMove={(event) => beginTransform(event, {
+                kind: 'overlay',
+                id: selectedOv.id,
+                mode: 'move',
+                origin: { x: selectedOv.x, y: selectedOv.y },
+              })}
+              onPointerDownHandle={(event, handle) => beginTransform(event, {
+                kind: 'overlay',
+                id: selectedOv.id,
+                mode: `resize-${handle}`,
+                origin: { width: selectedOv.width },
+              })}
+              onPointerDownRotate={(event) => {
+                const box = overlayBounds(selectedOv)
+                const bounds = stageRef.current.getBoundingClientRect()
+                const cx = (box.x + box.w / 2) * bounds.width
+                const cy = (box.y + box.h / 2) * bounds.height
+                const startAngle = Math.atan2(event.clientY - bounds.top - cy, event.clientX - bounds.left - cx) * 180 / Math.PI
+                beginTransform(event, {
+                  kind: 'overlay',
+                  id: selectedOv.id,
+                  mode: 'rotate',
+                  origin: { box, rotation: selectedOv.rotation, startAngle },
+                })
+              }}
+            />
+          )}
+
           {selectMode && !selection && selectionPoints.length === 0 && (
             <StageHint>
               {selectionTool === 'Rectangle'
@@ -240,6 +439,25 @@ export function PreviewStage() {
             </div>
           )}
           {censorSelecting && !selection && <StageHint>Drag over the area to censor</StageHint>}
+
+          {showMotionAnchor && (
+            <button
+              type="button"
+              title="Anchor point — drag to set pivot"
+              aria-label="Anchor point"
+              className="gs-motion-anchor"
+              style={{ left: `${anchorLeft}%`, top: `${anchorTop}%` }}
+              onPointerDown={beginAnchorDrag}
+              onPointerMove={moveAnchorDrag}
+              onPointerUp={endAnchorDrag}
+              onPointerCancel={endAnchorDrag}
+            >
+              <span className="gs-motion-anchor__ring" />
+              <span className="gs-motion-anchor__x" />
+              <span className="gs-motion-anchor__y" />
+              <span className="gs-motion-anchor__dot" />
+            </button>
+          )}
         </div>
       </CanvasViewport>
 
