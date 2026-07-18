@@ -47,6 +47,7 @@ export function JointAnimPanel() {
     if (!selected) return
     setPoseRig((current) => ({
       ...current,
+      keysVersion: (current.keysVersion || 0) + 1,
       jointKeys: {
         ...current.jointKeys,
         [selected]: { ...(current.jointKeys?.[selected] || emptyJointKey()), ...patch },
@@ -89,7 +90,7 @@ export function JointAnimPanel() {
     <>
       <Section
         title="Joint animation"
-        info="Pick a joint, set start and end offsets. Motion spans the full clip length (playhead below). Example: move a wrist from rest to a wave pose."
+        info="Pick a joint or drag it on the preview. Start/end keys span the clip. Mesh warp bakes into the GIF; the skeleton dots are preview-only (toggle in the preview bar)."
         open
       >
         <SelectField

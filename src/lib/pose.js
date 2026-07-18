@@ -49,6 +49,8 @@ export const POSE_KEY_JOINTS = [
 
 export const POSE_RIG_DEFAULT = {
   joints: [],
+  /** Frozen bind pose for mesh warp (never overwritten by drag). */
+  restJoints: [],
   visible: true,
   driveMotion: true,
   score: 0,
@@ -62,6 +64,8 @@ export const POSE_RIG_DEFAULT = {
    * { [jointName]: { startDx, startDy, endDx, endDy } }
    */
   jointKeys: {},
+  /** Bumps when keys change so warp caches invalidate. */
+  keysVersion: 0,
 }
 
 /** Ease in-out for production-feeling joint motion. */

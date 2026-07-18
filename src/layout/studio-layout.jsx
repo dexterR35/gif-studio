@@ -21,7 +21,7 @@ const FOCUS_TITLES = {
 export function StudioLayout() {
   const {
     mobilePanel, setMobilePanel, exporting, frames, progress, toast,
-    baseImageSelected, selectedElements, clearLayerSelection, selectedText, setSelectedText,
+    artboardSelected, baseImageSelected, selectedElements, clearLayerSelection, selectedText, setSelectedText,
     selectedOverlay, setSelectedOverlay,
     maskEditing, setMaskEditing, selectMode, setSelectMode, cancelSelection,
     censorSelecting, setCensorSelecting,
@@ -31,9 +31,15 @@ export function StudioLayout() {
   const isFocus = FOCUS_TABS.has(activeTab)
   const isOutput = activeTab === 'output'
   const hasLayers = LAYER_WORKSPACES.has(activeTab)
+  const effectsTab = activeTab === 'edit'
   const showTools = activeTab === 'ai' || activeTab === 'motion'
   const jointsOpen = Boolean(poseRig?.panelOpen && poseRig?.joints?.length)
-  const inspectorOpen = hasLayers && (Boolean(selectedText) || baseImageSelected || selectedElements.length > 0 || Boolean(selectedOverlay) || maskEditing || selectMode || censorSelecting || jointsOpen)
+  // Effects tab: processing settings stay pinned on the right; Background / Transform on other tabs.
+  const inspectorOpen = hasLayers && (
+    effectsTab
+    || maskEditing || selectMode || censorSelecting || jointsOpen || artboardSelected
+    || (!effectsTab && (Boolean(selectedText) || baseImageSelected || selectedElements.length > 0 || Boolean(selectedOverlay)))
+  )
 
   const closeInspector = () => {
     clearLayerSelection()

@@ -96,7 +96,7 @@ export function AiToolsPanel() {
 
       <Section
         title="Body & joints"
-        info="One MediaPipe pose pass: marks joints and optionally cuts out the body as a layer. Then animate joints in the settings sidebar (start → end over the clip)."
+        info="Keep “Cut out body as layer” on. Detect body → drag joints: the photo mesh warps (image processing), not a 3D character. Pixi only shows the already-warped preview on play."
         open
       >
         <Switch
@@ -106,12 +106,17 @@ export function AiToolsPanel() {
           className="mb-2"
         />
         <Switch
-          label="Show skeleton"
+          label="Show joints in preview"
           checked={poseRig.visible}
           onChange={(v) => setPoseRig((current) => ({ ...current, visible: v }))}
           className="mb-2"
           disabled={!poseRig.joints?.length}
         />
+        {jointCount > 0 && (
+          <p className="mb-2 text-[10px] text-zinc-500">
+            Joints are overlay-only — hidden in GIF / PNG export.
+          </p>
+        )}
         <Button
           variant="accent"
           size="sm"

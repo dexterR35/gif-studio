@@ -23,6 +23,7 @@ import {
   Textarea,
   ToggleGroup,
 } from '../components/ui'
+import { EffectsPanel } from '../components/studio/effects-panel'
 import { JointAnimPanel } from '../components/studio/joint-anim-panel'
 import { useStudio } from '../context/studio-provider'
 import { FIT_MODES, LAYER_MOTION_OPTIONS } from '../lib/catalogs'
@@ -450,9 +451,11 @@ function TextPropertiesPanel({ layer }) {
   )
 }
 
-/** Properties inspector (2nd bar) — transform, text, mask paint, selection, parallax. */
+/** Properties inspector (2nd bar) — settings for the active selection / workspace.
+ *  Effects processing lives here; Background / Transform stay for Motion / AI / Text. */
 export function InspectorAside() {
   const {
+    activeTab,
     artboardSelected,
     setArtboardSelected,
     baseImageSelected,
@@ -475,6 +478,7 @@ export function InspectorAside() {
     poseRig, setPoseRig,
   } = useStudio()
 
+  const effectsTab = activeTab === 'edit'
   const selectedLayers = elements.filter((el) => selectedElements.includes(el.id))
   const multi = selectedLayers.length >= 2
   const single = selectedLayers.length === 1 ? selectedLayers[0] : null
@@ -482,7 +486,13 @@ export function InspectorAside() {
   const textLayer = textLayers.find((item) => item.id === selectedText) || null
   const jointsOpen = Boolean(poseRig.panelOpen && poseRig.joints?.length)
 
-  const open = Boolean(textLayer) || artboardSelected || baseImageSelected || selectedLayers.length > 0 || Boolean(overlay) || maskEditing || selectMode || censorSelecting || jointsOpen
+  const showGeometry = !effectsTab
+  const open = Boolean(
+    effectsTab
+    || maskEditing || selectMode || censorSelecting || jointsOpen || artboardSelected
+    || (!effectsTab && textLayer)
+    || (showGeometry && (baseImageSelected || selectedLayers.length > 0 || Boolean(overlay))),
+  )
 
   let title = 'Properties'
   if (censorSelecting) title = 'Censor'
@@ -490,6 +500,7 @@ export function InspectorAside() {
   else if (selectMode) title = 'Selection'
   else if (jointsOpen) title = 'Joint animation'
   else if (artboardSelected) title = 'Artboard'
+  else if (effectsTab) title = 'Effects'
   else if (textLayer) title = textLayer.name || 'Text'
   else if (multi) title = `${selectedLayers.length} layers`
   else if (single) title = single.name || 'Layer'
@@ -497,6 +508,9 @@ export function InspectorAside() {
   else if (baseImageSelected) title = 'Background'
 
   const close = () => {
+    if (effectsTab && !maskEditing && !selectMode && !censorSelecting && !jointsOpen && !artboardSelected) {
+      return
+    }
     clearLayerSelection()
     setArtboardSelected(false)
     setSelectedOverlay(null)
@@ -516,14 +530,23 @@ export function InspectorAside() {
   else if (selectMode) body = <SelectionOptionsPanel />
   else if (jointsOpen) body = <JointAnimPanel />
   else if (artboardSelected) body = <ArtboardPanel />
+  else if (effectsTab) body = <EffectsPanel />
   else if (textLayer) body = <TextPropertiesPanel layer={textLayer} />
-  else if (multi) body = <ParallaxPanel layers={selectedLayers} />
-  else if (single) body = <ElementTransformPanel el={single} />
-  else if (overlay) body = <OverlayTransformPanel overlay={overlay} />
-  else if (baseImageSelected) body = <BaseTransformPanel />
+  else if (showGeometry && multi) body = <ParallaxPanel layers={selectedLayers} />
+  else if (showGeometry && single) body = <ElementTransformPanel el={single} />
+  else if (showGeometry && overlay) body = <OverlayTransformPanel overlay={overlay} />
+  else if (showGeometry && baseImageSelected) body = <BaseTransformPanel />
+
+  const effectsPinned = effectsTab
+    && !censorSelecting && !maskEditing && !selectMode && !jointsOpen && !artboardSelected
 
   return (
-    <SecondaryAside open={open} title={title} onClose={close} width={jointsOpen || textLayer ? 260 : 228}>
+    <SecondaryAside
+      open={open}
+      title={title}
+      onClose={effectsPinned ? undefined : close}
+      width={effectsPinned || jointsOpen || textLayer ? 260 : 228}
+    >
       {body}
     </SecondaryAside>
   )

@@ -15,7 +15,9 @@ import { loadOpenCV, isOpenCVReady } from '../engine/opencv-filters'
 import { playTimeline, stopTimeline } from '../engine/gsap-playback'
 import {
   POSE_RIG_DEFAULT, POSE_KEY_JOINTS, drawPoseSkeleton, samplePoseSway, applyJointKeys,
+  emptyJointKey,
 } from '../lib/pose'
+import { warpElementByJoints, poseHasWarp } from '../lib/pose-warp'
 
 const StudioContext = createContext(null)
 
@@ -164,6 +166,8 @@ export function StudioProvider({ children }) {
   const [selectionPoints, setSelectionPoints] = useState([])
   const selectionStart = useRef(null)
   const anchorDrag = useRef(null)
+  const jointDrag = useRef(null)
+  const poseWarpCacheRef = useRef(new Map())
   const [extractTolerance, setExtractTolerance] = useState(42)
   const [apiAvailable, setApiAvailable] = useState(false)
   const [apiInfo, setApiInfo] = useState(null)
@@ -192,6 +196,8 @@ export function StudioProvider({ children }) {
   const [gpuPreview, setGpuPreview] = useState(false)
   const drawRef = useRef(null)
   const [poseRig, setPoseRig] = useState({ ...POSE_RIG_DEFAULT })
+  const poseRigRef = useRef(poseRig)
+  poseRigRef.current = poseRig
 
   /** Replace source; revoke previous owned blob URL (never revoke in image-load effect). */
   const replaceSource = (next) => {
@@ -430,6 +436,10 @@ export function StudioProvider({ children }) {
     if (!target || !image) return
     const ctx = target.getContext('2d', { willReadFrequently: true })
     const W = target.width, H = target.height
+    // Prefer live ref so joint drags warp immediately (setState is async).
+    const poseRig = poseRigRef.current
+    // Skeleton / joint dots are preview chrome only — never bake into export / PNG / GIF frames.
+    const previewCanvas = target === canvasRef.current
     if (settings.transparent) ctx.clearRect(0, 0, W, H)
     else { ctx.fillStyle = settings.background; ctx.fillRect(0, 0, W, H) }
     const motion = settings.motion || 'None'
@@ -584,12 +594,17 @@ export function StudioProvider({ children }) {
           tx = Math.cos(phase) * amplitudeX
           ty = Math.sin(phase) * amplitudeY
         }
-        if (el.motion === 'Pose sway' && (el.poseJoints?.length || poseRig.joints?.length)) {
-          const baseJoints = el.poseJoints?.length ? el.poseJoints : poseRig.joints
+        if (el.motion === 'Pose sway' && (el.poseJoints?.length || poseRig.restJoints?.length || poseRig.joints?.length)) {
+          const baseJoints = el.poseJoints?.length
+            ? el.poseJoints
+            : (poseRig.restJoints?.length ? poseRig.restJoints : poseRig.joints)
           const joints = applyJointKeys(baseJoints, poseRig.jointKeys, rawT)
+          // Soft whole-body sway; limb mesh warp handles arm/hand separately.
+          const hasWarp = poseHasWarp(baseJoints, joints)
+          const swayAmp = hasWarp ? Math.min(el.amplitude, 3) : el.amplitude
           const sway = samplePoseSway(joints, {
             phase,
-            amplitude: el.amplitude,
+            amplitude: swayAmp,
             boxX: el.x * W,
             boxY: el.y * H,
             boxW: el.w * W,
@@ -601,14 +616,6 @@ export function StudioProvider({ children }) {
           ty += sway.ty
           elementRotation += sway.rotationRad
           elementScale *= sway.scale
-          // Pull the layer a bit toward keyed limb motion (e.g. hand wave).
-          const focus = poseRig.selectedJoint
-            && joints.find((j) => j.name === poseRig.selectedJoint)
-          const rest = focus && baseJoints.find((j) => j.name === poseRig.selectedJoint)
-          if (focus && rest) {
-            tx += (focus.x - rest.x) * W
-            ty += (focus.y - rest.y) * H
-          }
           if (poseRig.driveMotion !== false) {
             anchorXPct = sway.anchorX
             anchorYPct = sway.anchorY
@@ -648,6 +655,41 @@ export function StudioProvider({ children }) {
             if (el.effects.frame === 'Rounded corners') { elementContext.globalCompositeOperation = 'destination-in'; elementContext.beginPath(); elementContext.roundRect(0, 0, elementBitmap.width, elementBitmap.height, el.effects.rounded); elementContext.fill(); elementContext.globalCompositeOperation = 'source-over'; elementContext.stroke() }
             if (el.effects.frame === 'Camera') { elementContext.fillRect(0, 0, elementBitmap.width, line); elementContext.fillRect(0, 0, line, elementBitmap.height); elementContext.fillRect(elementBitmap.width - line, 0, line, elementBitmap.height); elementContext.fillRect(0, elementBitmap.height - line * 2.5, elementBitmap.width, line * 2.5) }
             if (el.effects.frame === 'Fuzzy') { elementContext.setLineDash([line, line * .7]); elementContext.strokeRect(line / 2, line / 2, elementBitmap.width - line, elementBitmap.height - line) }
+          }
+        }
+        // Skeleton mesh warp — only on Body / pose cutouts (not every layer).
+        const isPoseBody = Boolean(
+          el.poseJoints?.length
+          || el.name === 'Body'
+          || /pose|mediapipe|sam2|human|rembg/i.test(el.engine || ''),
+        )
+        const restForWarp = isPoseBody
+          ? (el.poseJoints?.length
+            ? el.poseJoints
+            : (poseRig.restJoints?.length ? poseRig.restJoints : poseRig.joints))
+          : null
+        if (restForWarp?.length && poseRig.jointKeys && Object.keys(poseRig.jointKeys).length) {
+          const posedForWarp = applyJointKeys(restForWarp, poseRig.jointKeys, rawT)
+          if (poseHasWarp(restForWarp, posedForWarp)) {
+            const bucket = Math.round(rawT * 48)
+            const cacheKey = `${el.id}:${poseRig.keysVersion || 0}:${bucket}:${elementBitmap.width}x${elementBitmap.height}`
+            const cache = poseWarpCacheRef.current
+            let warped = cache.get(cacheKey)
+            if (!warped) {
+              warped = warpElementByJoints(elementBitmap, {
+                restJoints: restForWarp,
+                posedJoints: posedForWarp,
+                canvasW: W,
+                canvasH: H,
+                boxX: x,
+                boxY: y,
+                boxW: w,
+                boxH: h,
+              })
+              if (cache.size > 64) cache.clear()
+              cache.set(cacheKey, warped)
+            }
+            elementBitmap = warped
           }
         }
         ctx.drawImage(elementBitmap, 0, 0, elementBitmap.width, elementBitmap.height, 0, 0, w, h)
@@ -724,9 +766,10 @@ export function StudioProvider({ children }) {
       ctx.restore()
     })
 
-    // Body joints overlay — keyed offsets animate across clip progress.
-    if (poseRig.visible && poseRig.joints?.length) {
-      const animJoints = applyJointKeys(poseRig.joints, poseRig.jointKeys, rawT)
+    // Body joints overlay — preview only (toggle). Excluded from export / save PNG.
+    const restSkeleton = poseRig.restJoints?.length ? poseRig.restJoints : poseRig.joints
+    if (previewCanvas && poseRig.visible && restSkeleton?.length) {
+      const animJoints = applyJointKeys(restSkeleton, poseRig.jointKeys, rawT)
       drawPoseSkeleton(ctx, animJoints, {
         width: W,
         height: H,
@@ -1463,22 +1506,26 @@ export function StudioProvider({ children }) {
         || null
 
       if (joints && result.joints?.length) {
+        poseWarpCacheRef.current.clear()
         setPoseRig((current) => ({
           ...current,
           joints: result.joints,
+          restJoints: result.joints,
           visible: true,
           driveMotion,
           score: result.score,
           engine: result.engine,
           panelOpen: openPanel,
           selectedJoint: openPanel ? (current.selectedJoint || firstKey) : current.selectedJoint,
-          jointKeys: current.jointKeys || {},
+          jointKeys: {},
+          keysVersion: (current.keysVersion || 0) + 1,
         }))
         setBaseImageSelected(false)
         setArtboardSelected(false)
         setSelectedElements([])
         setSelectedOverlay(null)
         setSelectedText(null)
+        if (openPanel) setGpuPreview(true)
       }
 
       let elementId = null
@@ -1512,12 +1559,27 @@ export function StudioProvider({ children }) {
             anchorY: sway.anchorY,
           }
         }))
+      } else if (result.joints?.length) {
+        // Bind joints to an existing Body cutout if detect ran without a new mask.
+        setElements((current) => {
+          const body = current.find((el) => el.name === 'Body' || /pose|mediapipe|sam2|human/i.test(el.engine || ''))
+          if (!body) return current
+          return current.map((el) => (
+            el.id === body.id
+              ? { ...el, poseJoints: result.joints, motion: el.motion === 'None' ? 'Pose sway' : el.motion }
+              : el
+          ))
+        })
       }
 
-      if (segment && elementId != null && !openPanel) {
-        setToast(`Body layer · ${marked.length} joints attached`)
+      if (segment && elementId != null) {
+        setToast('Body mesh ready · drag joints — the arm follows (image warp)')
       } else if (openPanel && marked.length) {
-        setToast(`${marked.length} joints · set start/end keys in settings`)
+        setToast(
+          segment
+            ? `${marked.length} joints · drag on preview to warp the Body layer`
+            : `${marked.length} joints · enable “Cut out body as layer” so the photo warps`,
+        )
       } else {
         setToast(marked.length ? `Pose · ${marked.length} joints` : 'No body / joints found')
       }
@@ -2135,6 +2197,66 @@ export function StudioProvider({ children }) {
     event.stopPropagation()
     anchorDrag.current = null
   }
+
+  /** Drag a pose joint in the preview — writes start/end keys from the playhead. */
+  const beginJointDrag = (event, jointName) => {
+    if (!stageRef.current || !jointName) return
+    event.stopPropagation()
+    event.preventDefault()
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    const rest = (poseRig.restJoints?.length ? poseRig.restJoints : poseRig.joints)
+      .find((j) => j.name === jointName)
+    if (!rest) return
+    setPlaying(false)
+    setPoseRig((current) => ({
+      ...current,
+      panelOpen: true,
+      selectedJoint: jointName,
+      visible: true,
+    }))
+    jointDrag.current = {
+      name: jointName,
+      restX: rest.x,
+      restY: rest.y,
+      atStart: progress < 0.5,
+    }
+  }
+
+  const moveJointDrag = (event) => {
+    const drag = jointDrag.current
+    if (!drag || !stageRef.current) return
+    event.stopPropagation()
+    const bounds = stageRef.current.getBoundingClientRect()
+    const nx = clamp((event.clientX - bounds.left) / bounds.width, 0, 1)
+    const ny = clamp((event.clientY - bounds.top) / bounds.height, 0, 1)
+    const dx = clampNice(nx - drag.restX, -0.35, 0.35, 4)
+    const dy = clampNice(ny - drag.restY, -0.35, 0.35, 4)
+    poseWarpCacheRef.current.clear()
+    const nextRig = (() => {
+      const current = poseRigRef.current
+      const prev = current.jointKeys?.[drag.name] || emptyJointKey()
+      const nextKey = drag.atStart
+        ? { ...prev, startDx: dx, startDy: dy }
+        : { ...prev, endDx: dx, endDy: dy }
+      return {
+        ...current,
+        jointKeys: { ...current.jointKeys, [drag.name]: nextKey },
+        keysVersion: (current.keysVersion || 0) + 1,
+        selectedJoint: drag.name,
+      }
+    })()
+    poseRigRef.current = nextRig
+    setPoseRig(nextRig)
+    drawRef.current?.(progress)
+  }
+
+  const endJointDrag = (event) => {
+    if (!jointDrag.current) return
+    event?.stopPropagation?.()
+    jointDrag.current = null
+    draw(progress)
+  }
+
   const resetMotionAnchor = () => {
     if (baseImageSelected) {
       setSettings((current) => ({ ...current, anchorX: 50, anchorY: 50 }))
@@ -2318,6 +2440,7 @@ export function StudioProvider({ children }) {
     uploadFont, updateEffect,
     addOverlay, updateOverlay, updateOverlayById, selectOverlay, selectStageOverlay, overlayBounds, toggleOverlayVisible, removeOverlay, saveCurrentPng, compressExistingGif,
     beginAnchorDrag, moveAnchorDrag, endAnchorDrag, resetMotionAnchor,
+    beginJointDrag, moveJointDrag, endJointDrag,
     addMotionEffect, updateMotionEffect, removeMotionEffect, moveMotionEffectTrack,
     addElementFromMask, runSam2Segment, runHumanSegment, runPoseDetect, runTextDetect,
     applyInterpolatedFrames, runRifeInterpolate,

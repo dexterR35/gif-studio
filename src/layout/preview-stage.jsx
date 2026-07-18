@@ -1,10 +1,10 @@
-import { Crosshair, ImagePlus, Pause, Play } from 'lucide-react'
+import { Bone, Crosshair, Eye, EyeOff, ImagePlus, Pause, Play } from 'lucide-react'
 import { useMemo } from 'react'
 import { Button, CanvasViewport, StageHint, Switch, ZoomControls } from '../components/ui'
 import { EffectTimeline } from '../components/studio/effect-timeline'
 import { StudioKonvaStage } from '../engine/konva-editor'
 import { fmtBytes, MAX_CANVAS, nice, clampNice } from '../lib/format'
-import { applyJointKeys } from '../lib/pose'
+import { applyJointKeys, POSE_KEY_JOINTS } from '../lib/pose'
 import { useStudio } from '../context/studio-provider'
 import { cn } from '../lib/cn'
 
@@ -19,14 +19,18 @@ export function PreviewStage() {
     baseImageSelected, imageLocked, imageTransformBox, selectBaseImage, selectStageElement,
     clearLayerSelection, selectedElements, setSelectedText,
     beginAnchorDrag, moveAnchorDrag, endAnchorDrag,
+    beginJointDrag, moveJointDrag, endJointDrag,
     overlays, selectedOverlay, selectStageOverlay, overlayBounds,
     activeTab, updateElementById, updateOverlayById, updateTextById, goToWorkspace,
-    gpuPreview, poseRig,
+    gpuPreview, poseRig, setPoseRig,
   } = useStudio()
 
   const canSelectLayers = activeTab === 'ai' || activeTab === 'motion' || activeTab === 'edit' || activeTab === 'text'
   const interacting = selectMode || maskEditing || censorSelecting
-  const showKonva = Boolean(image) && !playing
+  const hasPoseJoints = Boolean(poseRig.restJoints?.length || poseRig.joints?.length)
+  // Mesh warp runs on the 2D canvas whenever pose data exists (overlay toggle is separate).
+  const poseMeshActive = hasPoseJoints
+  const showKonva = Boolean(image) && !playing && !poseMeshActive
   const showPixi = Boolean(image) && playing && gpuPreview
   const selectedEl = elements.find((el) => el.id === selectedElement)
 
@@ -171,6 +175,19 @@ export function PreviewStage() {
     || (Boolean(selectedEl) && selectedElements.length === 1)
   )
 
+  const posedJoints = useMemo(() => {
+    const rest = poseRig.restJoints?.length ? poseRig.restJoints : (poseRig.joints || [])
+    return applyJointKeys(rest, poseRig.jointKeys, progress)
+      .filter((j) => POSE_KEY_JOINTS.includes(j.name) && (j.score ?? 1) >= 0.25)
+  }, [poseRig.restJoints, poseRig.joints, poseRig.jointKeys, progress])
+  const showPoseJoints = Boolean(
+    poseRig.visible
+    && posedJoints.length
+    && !playing
+    && !interacting
+    && (activeTab === 'ai' || activeTab === 'motion' || poseRig.panelOpen),
+  )
+
   return (
     <section data-canvas-stage className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-stage">
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-white/[.06] px-4 md:px-5">
@@ -179,6 +196,23 @@ export function PreviewStage() {
           {showKonva ? 'Konva editor' : 'Live preview'}
         </div>
         <div className="flex items-center gap-3">
+          {hasPoseJoints && (
+            <button
+              type="button"
+              title={poseRig.visible
+                ? 'Hide body joints (preview only — never exported)'
+                : 'Show body joints (preview only — never exported)'}
+              onClick={() => setPoseRig((current) => ({ ...current, visible: !current.visible }))}
+              className={cn(
+                'gs-chip focus-ring gap-1.5 text-[10px] font-bold uppercase tracking-[.12em]',
+                poseRig.visible && 'is-active',
+              )}
+            >
+              {poseRig.visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+              <Bone className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">{poseRig.visible ? 'Joints' : 'Joints off'}</span>
+            </button>
+          )}
           <Switch
             label="Ping-pong"
             checked={settings.pingPong}
@@ -277,8 +311,12 @@ export function PreviewStage() {
                 interactive={!interacting && canSelectLayers}
                 selection={interacting ? selection : null}
                 selectionPoints={interacting ? selectionPoints : []}
-                poseJoints={applyJointKeys(poseRig.joints || [], poseRig.jointKeys, progress)}
-                showPose={Boolean(poseRig.visible && poseRig.joints?.length)}
+                poseJoints={applyJointKeys(
+                  poseRig.restJoints?.length ? poseRig.restJoints : (poseRig.joints || []),
+                  poseRig.jointKeys,
+                  progress,
+                )}
+                showPose={Boolean(poseRig.visible && hasPoseJoints)}
                 overlayBounds={overlayBounds}
                 textBounds={textBounds}
                 onSelect={handleKonvaSelect}
@@ -340,6 +378,28 @@ export function PreviewStage() {
               <span className="gs-motion-anchor__dot" />
             </button>
           )}
+
+          {/* Draggable pose joints — preview chrome only (never exported) */}
+          {showPoseJoints && posedJoints.map((j) => {
+            const selected = poseRig.selectedJoint === j.name
+            return (
+              <button
+                key={j.name}
+                type="button"
+                title={`Drag ${j.name.replace(/_/g, ' ')} — ${progress < 0.5 ? 'start' : 'end'} key`}
+                aria-label={`Joint ${j.name}`}
+                className={cn(
+                  'absolute z-30 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 touch-none rounded-full border border-black/50 bg-acid shadow',
+                  selected && 'h-4 w-4 bg-white ring-2 ring-acid',
+                )}
+                style={{ left: `${j.x * 100}%`, top: `${j.y * 100}%` }}
+                onPointerDown={(e) => beginJointDrag(e, j.name)}
+                onPointerMove={moveJointDrag}
+                onPointerUp={endJointDrag}
+                onPointerCancel={endJointDrag}
+              />
+            )
+          })}
         </div>
       </CanvasViewport>
 
