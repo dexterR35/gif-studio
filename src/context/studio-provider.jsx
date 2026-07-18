@@ -4,11 +4,18 @@ import { GIFEncoder, applyPalette, quantize } from 'gifenc'
 import { PRESETS, INITIAL, TEXT_DEFAULT, SYSTEM_FONTS, EFFECT_DEFAULTS, transformsFromAmount, MAX_TEXT_LAYERS, clampTextInOut } from '../lib/presets'
 import { clamp, clampNice, fmtBytes, ease, MAX_CANVAS, MAX_UPLOAD_DIMENSION, nice, uploadImageError } from '../lib/format'
 import { applyPixelEffects, applyDistortion, ditherToPalette, presetFilter } from '../lib/effects'
-import { sampleDistortions, sampleZoomScale, clampMotionEffects, createMotionEffect, MAX_MOTION_EFFECTS, isBaseMotionClip } from '../lib/motion-effects'
+import { sampleDistortions, sampleZoomScale, clampMotionEffects, createMotionEffect, MAX_MOTION_EFFECTS, isBaseMotionClip, parseLayerTrackId } from '../lib/motion-effects'
 import { gifWorkspacePath, workspaceFromPath } from '../lib/routes'
 import { useCanvasZoom } from '../hooks/use-canvas-zoom'
 
 const StudioContext = createContext(null)
+
+/** Focus workspaces use the right panel, not the mobile inspector sheet. */
+const FOCUS_WORKSPACES = new Set(['edit', 'timeline', 'output'])
+
+const revokeBlobUrl = (url) => {
+  if (typeof url === 'string' && url.startsWith('blob:')) URL.revokeObjectURL(url)
+}
 
 /** Array index 0 = back, last = front. direction: -1 back, +1 front, 'back', 'front'. */
 function moveInStack(list, id, direction) {
@@ -72,11 +79,18 @@ export function StudioProvider({ children }) {
   const overlayFileRef = useRef(null)
   const compressGifRef = useRef(null)
   const rafRef = useRef(null)
+  const progressRef = useRef(0)
   const [settings, setSettings] = useState(INITIAL)
   const [image, setImage] = useState(null)
   const [source, setSource] = useState({ name: 'sample_source.png', width: 480, height: 300, url: '/sample_source.png' })
   const [playing, setPlaying] = useState(false)
-  const [progress, setProgress] = useState(0)
+  const [progress, setProgressState] = useState(0)
+  /** Keep a sync ref so paused rAF / idle redraw never reads a stale closure. */
+  const setProgress = (value) => {
+    const next = typeof value === 'function' ? value(progressRef.current) : value
+    progressRef.current = next
+    setProgressState(next)
+  }
   const [exporting, setExporting] = useState(false)
   const [dropActive, setDropActive] = useState(false)
   const [mobilePanel, setMobilePanel] = useState(false)
@@ -84,7 +98,10 @@ export function StudioProvider({ children }) {
   const navigate = useNavigate()
   const location = useLocation()
   const activeTab = workspaceFromPath(location.pathname)
-  const goToWorkspace = (id) => { navigate(gifWorkspacePath(id)); setMobilePanel(true) }
+  const goToWorkspace = (id) => {
+    navigate(gifWorkspacePath(id))
+    if (!FOCUS_WORKSPACES.has(id)) setMobilePanel(true)
+  }
   const canvasZoom = useCanvasZoom({ minZoom: 10, maxZoom: 800, defaultZoom: 100, padding: 40 })
   const { zoom, setZoom } = canvasZoom
   const [lockAspect, setLockAspect] = useState(true)
@@ -145,23 +162,32 @@ export function StudioProvider({ children }) {
     }
   }
 
+  const clearTimelineLayerSelection = (kind, id) => {
+    setSelectedMotionEffect((current) => {
+      const parsed = parseLayerTrackId(current)
+      if (parsed && parsed.kind === kind && parsed.id === id) return null
+      return current
+    })
+  }
+
   const addMotionEffect = (type) => {
-    const current = settings.motionEffects || []
-    if (current.length >= MAX_MOTION_EFFECTS) {
-      setToast(`Max ${MAX_MOTION_EFFECTS} timeline effects`)
-      return null
-    }
-    const used = new Set(current.map((clip) => clip.track ?? 0))
-    let track = 0
-    while (used.has(track) && track < MAX_MOTION_EFFECTS) track += 1
-    const clip = createMotionEffect(type, settings.duration, track)
+    let addedId = null
     setSettings((s) => {
       const list = s.motionEffects || []
       if (list.length >= MAX_MOTION_EFFECTS) return s
+      const used = new Set(list.map((clip) => clip.track ?? 0))
+      let track = 0
+      while (used.has(track) && track < MAX_MOTION_EFFECTS) track += 1
+      const clip = createMotionEffect(type, s.duration, track)
+      addedId = clip.id
       return { ...s, motionEffects: [...list, clip] }
     })
-    setSelectedMotionEffect(clip.id)
-    return clip.id
+    if (addedId == null) {
+      setToast(`Max ${MAX_MOTION_EFFECTS} timeline effects`)
+      return null
+    }
+    setSelectedMotionEffect(addedId)
+    return addedId
   }
 
   const updateMotionEffect = (id, patch) => {
@@ -221,8 +247,7 @@ export function StudioProvider({ children }) {
     ...(quality === 'Balanced' ? { palette: 128, dither: true, lossy: 30, compressionMethod: 'Lossy LZW' } : {}),
     ...(quality === 'High quality' ? { palette: 256, dither: true, lossy: 0, compressionMethod: 'Lossless' } : {}),
   }))
-  const timedFrames = Math.max(2, Math.round(settings.duration * settings.fps))
-  const frames = timedFrames
+  const frames = Math.max(2, Math.round(settings.duration * settings.fps))
   const timingFps = settings.fps
   const frameDelays = useMemo(() => Array.from({ length: frames }, (_, index) => {
     const start = Math.round(index * 1000 / timingFps / 10) * 10
@@ -429,7 +454,8 @@ export function StudioProvider({ children }) {
       if (timeSec < clipIn || timeSec > clipOut) return
       const clipSpan = Math.max(0.05, clipOut - clipIn)
       const localT = Math.min(1, Math.max(0, (timeSec - clipIn) / clipSpan))
-      const phase = localT * Math.PI * 2 * layer.speed
+      // Loop phase follows global time (like elements); in/out only gates visibility + entrance/exit.
+      const phase = rawT * Math.PI * 2 * layer.speed
       const amountX = layer.amplitude / 100 * W, amountY = layer.amplitude / 100 * H
       let tx = 0, ty = 0, motionRotation = 0, motionScale = 1, motionOpacity = 1
       if (layer.motion === 'Float') ty = -Math.sin(phase) * amountY
@@ -532,12 +558,23 @@ export function StudioProvider({ children }) {
     const ratio = Math.min(maxW / settings.width, maxH / settings.height, 1)
     canvas.width = Math.max(1, Math.round(settings.width * ratio))
     canvas.height = Math.max(1, Math.round(settings.height * ratio))
-    let started = performance.now() - progress * actualDuration * 1000
+
+    const frameFromProgress = (p) => {
+      const frameIndex = Math.min(frames - 1, Math.floor(p * frames))
+      return frameIndex / frames
+    }
+
+    // Idle: draw once from the live progress ref (scrubbers update ref + call draw).
+    if (!playing) {
+      draw(frameFromProgress(progressRef.current))
+      return undefined
+    }
+
+    let started = performance.now() - progressRef.current * actualDuration * 1000
     const tick = (now) => {
-      const timeline = playing ? ((now - started) / (actualDuration * 1000)) % 1 : progress
-      const frameIndex = Math.min(frames - 1, Math.floor(timeline * frames))
-      const t = frameIndex / frames
-      if (playing) setProgress(t)
+      const timeline = ((now - started) / (actualDuration * 1000)) % 1
+      const t = frameFromProgress(timeline)
+      setProgress(t)
       draw(t)
       rafRef.current = requestAnimationFrame(tick)
     }
@@ -557,7 +594,25 @@ export function StudioProvider({ children }) {
         setToast(`Image dimensions must be at most ${MAX_UPLOAD_DIMENSION}×${MAX_UPLOAD_DIMENSION} px (got ${probe.naturalWidth}×${probe.naturalHeight}).`)
         return
       }
-      setElements([]); setSelectedElements([]); setBaseImageSelected(false); setImageLocked(false); setTextLayers([]); setSelectedText(null); setOverlays([]); setSelectedOverlay(null); setGifEffects({ ...EFFECT_DEFAULTS }); setImageEdits({ rotation: 0, flipX: false, flipY: false, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 }); setCensor((current) => ({ ...current, enabled: false })); setParallax((current) => ({ ...current, enabled: false }))
+      setElements([])
+      setSelectedElements([])
+      setBaseImageSelected(false)
+      setImageLocked(false)
+      setTextLayers([])
+      setSelectedText(null)
+      setOverlays((current) => {
+        current.forEach((overlay) => revokeBlobUrl(overlay.url))
+        return []
+      })
+      setSelectedOverlay(null)
+      setSelectedMotionEffect(null)
+      setSettings((current) => ({ ...current, motionEffects: [] }))
+      setGifEffects({ ...EFFECT_DEFAULTS })
+      setImageEdits({ rotation: 0, flipX: false, flipY: false, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 })
+      setCensor((current) => ({ ...current, enabled: false }))
+      setParallax((current) => ({ ...current, enabled: false }))
+      setProgress(0)
+      setPlaying(false)
       // Canvas size is applied when the image loads (original size, capped at MAX_CANVAS).
       setSource({ name: file.name, width: probe.naturalWidth, height: probe.naturalHeight, url })
       setToast(`Image loaded at ${probe.naturalWidth} × ${probe.naturalHeight} px`)
@@ -602,7 +657,27 @@ export function StudioProvider({ children }) {
     ...PRESETS[name],
     ...transformsFromAmount(name, PRESETS[name]?.amplitude ?? s.amplitude),
   }))
-  const reset = () => { setSettings(INITIAL); setElements([]); setSelectedElements([]); setTextLayers([]); setSelectedText(null); setMaskEditing(false); setOverlays([]); setSelectedOverlay(null); setGifEffects({ ...EFFECT_DEFAULTS }); setImageEdits({ rotation: 0, flipX: false, flipY: false, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 }); setCensor({ enabled: false, x: 25, y: 25, w: 30, h: 20, pixelSize: 14 }); setParallax({ enabled: false, direction: 'Horizontal', strength: 6, speed: 1 }); setProgress(0); setPlaying(false); setToast('Settings reset') }
+  const reset = () => {
+    setSettings(INITIAL)
+    setElements([])
+    setSelectedElements([])
+    setTextLayers([])
+    setSelectedText(null)
+    setMaskEditing(false)
+    setOverlays((current) => {
+      current.forEach((overlay) => revokeBlobUrl(overlay.url))
+      return []
+    })
+    setSelectedOverlay(null)
+    setSelectedMotionEffect(null)
+    setGifEffects({ ...EFFECT_DEFAULTS })
+    setImageEdits({ rotation: 0, flipX: false, flipY: false, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 })
+    setCensor({ enabled: false, x: 25, y: 25, w: 30, h: 20, pixelSize: 14 })
+    setParallax({ enabled: false, direction: 'Horizontal', strength: 6, speed: 1 })
+    setProgress(0)
+    setPlaying(false)
+    setToast('Settings reset')
+  }
 
   const pointerPosition = (event) => {
     const bounds = stageRef.current.getBoundingClientRect()
@@ -800,6 +875,7 @@ export function StudioProvider({ children }) {
     if (target?.locked) { setToast('Unlock the element before removing it'); return }
     setElements((current) => current.filter((el) => el.id !== id))
     setSelectedElements((current) => current.filter((item) => item !== id))
+    clearTimelineLayerSelection('element', id)
     setToast('Element removed')
   }
   const clearLayerSelection = () => {
@@ -940,8 +1016,13 @@ export function StudioProvider({ children }) {
     )))
   }
   const removeOverlay = (id) => {
-    setOverlays((current) => current.filter((overlay) => overlay.id !== id))
-    setSelectedOverlay((current) => current === id ? null : current)
+    setOverlays((current) => {
+      const target = current.find((overlay) => overlay.id === id)
+      if (target) revokeBlobUrl(target.url)
+      return current.filter((overlay) => overlay.id !== id)
+    })
+    setSelectedOverlay((current) => (current === id ? null : current))
+    clearTimelineLayerSelection('overlay', id)
     setToast('Overlay removed')
   }
   /** Stage hit-box for an overlay (fractions of canvas), matching draw layout. */
@@ -992,10 +1073,26 @@ export function StudioProvider({ children }) {
       timeline = Math.min(1, progress * motionSpeed)
     }
     const t = ease(timeline, settings.easing)
-    const scale = (settings.scaleStart + (settings.scaleEnd - settings.scaleStart) * t) / 100
-    const ox = (settings.xStart + (settings.xEnd - settings.xStart) * t) / 100
-    const oy = (settings.yStart + (settings.yEnd - settings.yStart) * t) / 100
-    const rotation = settings.rotateStart + (settings.rotateEnd - settings.rotateStart) * t + imageEdits.rotation
+    const timeSec = progress * (settings.duration || 1)
+    const zoomFx = sampleZoomScale(settings.motionEffects || [], timeSec)
+    let scale = (settings.scaleStart + (settings.scaleEnd - settings.scaleStart) * t) / 100 * zoomFx
+    let ox = (settings.xStart + (settings.xEnd - settings.xStart) * t) / 100
+    let oy = (settings.yStart + (settings.yEnd - settings.yStart) * t) / 100
+    let rotation = settings.rotateStart + (settings.rotateEnd - settings.rotateStart) * t + imageEdits.rotation
+    const amp = settings.amplitude ?? 0
+    if (isLoop && (amp !== 0 || motion === 'Spin')) {
+      const phase = progress * Math.PI * 2 * motionSpeed
+      if (motion === 'Float') oy += -Math.sin(phase) * amp / 100
+      if (motion === 'Drift') ox += Math.sin(phase) * amp / 100
+      if (motion === 'Bounce') oy += -Math.abs(Math.sin(phase)) * amp / 100
+      if (motion === 'Pulse') scale *= 1 + Math.sin(phase) * amp / 100
+      if (motion === 'Spin') rotation += (phase * 180) / Math.PI
+      if (motion === 'Wobble') rotation += Math.sin(phase) * amp
+      if (motion === 'Orbit') {
+        ox += Math.cos(phase) * amp / 100
+        oy += Math.sin(phase) * amp / 100
+      }
+    }
     const ax = (settings.anchorX ?? 50) / 100
     const ay = (settings.anchorY ?? 50) / 100
     const fit = settings.fit
@@ -1201,25 +1298,27 @@ export function StudioProvider({ children }) {
   }
 
   const addTextLayer = (opts = {}) => {
-    if (textLayers.length >= MAX_TEXT_LAYERS) {
+    let addedId = null
+    const duration = Math.max(0.1, settings.duration || 1)
+    setTextLayers((current) => {
+      if (current.length >= MAX_TEXT_LAYERS) return current
+      const id = Date.now()
+      const layer = clampTextInOut(
+        { id, name: `Text ${current.length + 1}`, ...TEXT_DEFAULT, in: 0, out: duration },
+        duration,
+      )
+      addedId = id
+      return [...current, layer]
+    })
+    if (addedId == null) {
       setToast(`Max ${MAX_TEXT_LAYERS} text layers`)
       return null
     }
-    const duration = Math.max(0.1, settings.duration || 1)
-    const id = Date.now()
-    const layer = clampTextInOut(
-      { id, name: `Text ${textLayers.length + 1}`, ...TEXT_DEFAULT, in: 0, out: duration },
-      duration,
-    )
-    setTextLayers((current) => {
-      if (current.length >= MAX_TEXT_LAYERS) return current
-      return [...current, layer]
-    })
-    setSelectedText(id)
+    setSelectedText(addedId)
     setPlaying(false)
     if (!opts.stay) goToWorkspace('text')
     setToast('Text layer added')
-    return id
+    return addedId
   }
   const updateText = (key, value) => setTextLayers((current) => current.map((layer) => {
     if (layer.id !== selectedText) return layer
@@ -1237,7 +1336,8 @@ export function StudioProvider({ children }) {
     const layer = textLayers.find((item) => item.id === id)
     if (layer?.locked) { setToast('Unlock the text layer before removing it'); return }
     setTextLayers((current) => current.filter((item) => item.id !== id))
-    setSelectedText(null)
+    setSelectedText((current) => (current === id ? null : current))
+    clearTimelineLayerSelection('text', id)
     setToast('Text layer removed')
   }
   const toggleTextLock = (id) => {
@@ -1473,7 +1573,12 @@ export function StudioProvider({ children }) {
       setLastExport({ bytes: blob.size, originalBytes: blob.size, optimized: false, encoder: 'Browser' })
       setToast(`GIF exported with browser encoder · ${fmtBytes(blob.size)}`)
     } catch (error) { console.error(error); setToast('Export failed — try a smaller canvas') }
-    finally { setExporting(false); setPlaying(false) }
+    finally {
+      setExporting(false)
+      setPlaying(false)
+      const frameIndex = Math.min(frames - 1, Math.floor(progressRef.current * frames))
+      draw(frameIndex / frames)
+    }
   }
 
   useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(''), 3000); return () => clearTimeout(id) }, [toast])
@@ -1508,7 +1613,7 @@ export function StudioProvider({ children }) {
     overlays, setOverlays, selectedOverlay, setSelectedOverlay, effectTarget, setEffectTarget, gifEffects, setGifEffects,
     selectedMotionEffect, setSelectedMotionEffect,
     // derived
-    frames, frameDelays, actualDuration, actualFps, memory, timedFrames, timingFps, activeEffects, stageStyle,
+    frames, frameDelays, actualDuration, actualFps, memory, timingFps, activeEffects, stageStyle,
     // actions
     update, setAmplitude, setSpeed, applyQuality, applyPreset, reset, loadFile, draw, cancelSelection, completePathSelection,
     startSelection, moveSelection, finishSelection, smoothSelectionPath, updateElement, removeElement,

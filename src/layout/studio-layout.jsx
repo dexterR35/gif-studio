@@ -21,7 +21,7 @@ const FOCUS_TITLES = {
 export function StudioLayout() {
   const {
     mobilePanel, setMobilePanel, exporting, frames, progress, toast,
-    baseImageSelected, selectedElements, clearLayerSelection, setSelectedText,
+    baseImageSelected, selectedElements, clearLayerSelection, selectedText, setSelectedText,
     selectedOverlay, setSelectedOverlay,
     maskEditing, setMaskEditing, selectMode, setSelectMode, cancelSelection,
     censorSelecting, setCensorSelecting,
@@ -31,7 +31,7 @@ export function StudioLayout() {
   const isFocus = FOCUS_TABS.has(activeTab)
   const isOutput = activeTab === 'output'
   const canSelectLayers = activeTab === 'motion'
-  const inspectorOpen = !isFocus && (baseImageSelected || selectedElements.length > 0 || Boolean(selectedOverlay) || maskEditing || selectMode || censorSelecting)
+  const inspectorOpen = !isFocus && (Boolean(selectedText) || baseImageSelected || selectedElements.length > 0 || Boolean(selectedOverlay) || maskEditing || selectMode || censorSelecting)
 
   const closeInspector = () => {
     clearLayerSelection()

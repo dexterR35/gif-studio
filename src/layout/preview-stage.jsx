@@ -113,7 +113,7 @@ export function PreviewStage() {
         </div>
         <div className="flex items-center gap-3">
           <Switch
-            label="Loop"
+            label="Ping-pong"
             checked={settings.pingPong}
             onChange={(v) => update('pingPong', v)}
             className="justify-start gap-2 text-[10px] font-bold uppercase tracking-[.15em] text-zinc-600"
@@ -220,7 +220,7 @@ export function PreviewStage() {
                 className={cn(
                   'absolute border transition',
                   selected
-                    ? 'border-acid shadow-[0_0_0_1px_#d8ff3e] cursor-move'
+                    ? 'border-acid shadow-[0_0_0_1px_rgb(var(--primary_accent-rgb))] cursor-move'
                     : 'border-transparent hover:border-white/40 cursor-pointer',
                 )}
                 style={{
@@ -258,8 +258,8 @@ export function PreviewStage() {
                   'absolute border transition',
                   selected
                     ? isPrimary || !multi
-                      ? 'border-acid shadow-[0_0_0_1px_#d8ff3e]'
-                      : 'border-acid/50 shadow-[0_0_0_1px_rgba(216,255,62,.35)]'
+                      ? 'border-acid shadow-[0_0_0_1px_rgb(var(--primary_accent-rgb))]'
+                      : 'border-acid/50 shadow-[0_0_0_1px_rgb(var(--primary_accent-rgb)/.35)]'
                     : el.locked
                       ? 'border-amber-400/50 border-dashed'
                       : 'border-transparent hover:border-white/40',
@@ -464,10 +464,6 @@ export function PreviewStage() {
           )}
         </div>
       </CanvasViewport>
-
-      <div className="pointer-events-none absolute bottom-[12rem] left-4 z-10 hidden items-center gap-2 rounded-lg border border-white/[.07] bg-black/40 px-2.5 py-1.5 text-[10px] text-zinc-500 backdrop-blur sm:flex">
-        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />Processed locally
-      </div>
 
       <div className="max-h-[38vh] shrink-0 overflow-y-auto border-t border-white/[.07] bg-panel px-4 pb-4 pt-3 scrollbar md:px-6">
         <div className="mb-3 flex items-center gap-3">

@@ -4,8 +4,14 @@
 
 :root {
   color-scheme: dark;
-  --color-acid: #d8ff3e;
-  --color-acid-hover: #e2ff6a;
+  /* Brand accent — change these two together (hex + matching RGB channels). */
+  --primary_accent: #d8ff3e;
+  --primary_accent-rgb: 216 255 62;
+  --primary_accent-hover: color-mix(in srgb, var(--primary_accent) 72%, white);
+  --primary_accent-muted: rgb(var(--primary_accent-rgb) / 0.06);
+  /* Aliases used by components / color-mix */
+  --color-acid: var(--primary_accent);
+  --color-acid-hover: var(--primary_accent-hover);
   --color-ink: #0a0a0a;
   --color-panel: #141414;
   --color-stage: #0f0f0f;
@@ -219,7 +225,7 @@ input[type='number']::-webkit-inner-spin-button { opacity: .35; }
   .gs-motion-anchor:active { @apply cursor-grabbing; }
   .gs-motion-anchor__ring {
     @apply pointer-events-none absolute left-1/2 top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full;
-    box-shadow: 0 0 0 1px rgb(0 0 0 / 55%), inset 0 0 0 1px rgb(216 255 62 / 50%);
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 55%), inset 0 0 0 1px rgb(var(--primary_accent-rgb) / 50%);
     background: rgb(0 0 0 / 30%);
   }
   .gs-motion-anchor__x,

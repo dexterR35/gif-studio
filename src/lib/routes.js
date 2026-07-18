@@ -4,7 +4,6 @@ export const ROUTES = {
   gif: {
     root: '/gif',
     motion: '/gif/motion',
-    elements: '/gif/elements',
     text: '/gif/text',
     edit: '/gif/edit',
     timeline: '/gif/timeline',

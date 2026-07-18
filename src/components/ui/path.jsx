@@ -18,16 +18,16 @@ export function SelectionPath({
       {tool === 'Pen Path' && points.length >= 3 && smoothPath ? (
         <path
           d={smoothPath(points)}
-          fill="rgba(216,255,62,.12)"
-          stroke="#d8ff3e"
+          fill="rgb(var(--primary_accent-rgb) / 0.12)"
+          stroke="var(--primary_accent)"
           strokeWidth=".45"
           strokeDasharray="1.2 1"
         />
       ) : (
         <polygon
           points={points.map((point) => `${point.x * 100},${point.y * 100}`).join(' ')}
-          fill="rgba(216,255,62,.12)"
-          stroke="#d8ff3e"
+          fill="rgb(var(--primary_accent-rgb) / 0.12)"
+          stroke="var(--primary_accent)"
           strokeWidth=".45"
           strokeDasharray="1.2 1"
         />
@@ -40,7 +40,7 @@ export function SelectionPath({
             cy={point.y * 100}
             r=".8"
             fill="#111113"
-            stroke="#d8ff3e"
+            stroke="var(--primary_accent)"
             strokeWidth=".35"
           />
         ))}

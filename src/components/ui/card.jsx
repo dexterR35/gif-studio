@@ -1,6 +1,6 @@
 import { cn } from '../../lib/cn'
 import {
-  ArrowDown, ArrowUp, ChevronsDown, ChevronsUp, Eye, EyeOff, GripVertical, Lock, Trash2, Unlock,
+  Eye, EyeOff, GripVertical, Lock, Trash2, Unlock,
 } from 'lucide-react'
 
 export function Card({ children, selected = false, interactive = false, className, as: Tag = 'div', ...props }) {
@@ -35,14 +35,6 @@ export function LayerRow({
   onToggleLock,
   onToggleVisible,
   onRemove,
-  onMoveFront,
-  onMoveUp,
-  onMoveDown,
-  onMoveBack,
-  canMoveFront = false,
-  canMoveUp = false,
-  canMoveDown = false,
-  canMoveBack = false,
   /** Pointer drag handle — same idea as timeline clip drag. */
   onDragStart,
   onDragMove,
@@ -51,7 +43,6 @@ export function LayerRow({
   dropTarget = false,
   className,
 }) {
-  const showArrange = onMoveFront || onMoveUp || onMoveDown || onMoveBack
   const canDrag = Boolean(onDragStart)
 
   return (
@@ -69,7 +60,7 @@ export function LayerRow({
         {canDrag && (
           <button
             type="button"
-            title="Drag to reorder (z-index)"
+            title="Drag to reorder"
             aria-label="Drag to reorder"
             className="grid h-6 w-5 shrink-0 cursor-grab place-items-center rounded text-zinc-600 touch-none hover:text-zinc-300 active:cursor-grabbing"
             onPointerDown={(event) => {
@@ -146,44 +137,6 @@ export function LayerRow({
           </button>
         )}
       </div>
-      {showArrange && (
-        <div className="flex items-center justify-end gap-0.5 pl-6">
-          <ArrangeButton title="Bring to front" disabled={!canMoveFront} onClick={onMoveFront}>
-            <ChevronsUp className="h-3 w-3" />
-          </ArrangeButton>
-          <ArrangeButton title="Bring forward" disabled={!canMoveUp} onClick={onMoveUp}>
-            <ArrowUp className="h-3 w-3" />
-          </ArrangeButton>
-          <ArrangeButton title="Send backward" disabled={!canMoveDown} onClick={onMoveDown}>
-            <ArrowDown className="h-3 w-3" />
-          </ArrangeButton>
-          <ArrangeButton title="Send to back" disabled={!canMoveBack} onClick={onMoveBack}>
-            <ChevronsDown className="h-3 w-3" />
-          </ArrangeButton>
-        </div>
-      )}
     </Card>
-  )
-}
-
-function ArrangeButton({ title, disabled, onClick, children }) {
-  return (
-    <button
-      type="button"
-      title={title}
-      disabled={disabled || !onClick}
-      onClick={(e) => {
-        e.stopPropagation()
-        if (!disabled) onClick?.()
-      }}
-      className={cn(
-        'grid h-5 w-5 place-items-center rounded transition',
-        disabled || !onClick
-          ? 'cursor-not-allowed text-zinc-700'
-          : 'text-zinc-500 hover:bg-white/[.06] hover:text-zinc-200',
-      )}
-    >
-      {children}
-    </button>
   )
 }

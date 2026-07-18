@@ -9,9 +9,9 @@ export default {
       },
       colors: {
         acid: {
-          DEFAULT: '#d8ff3e',
-          hover: '#e2ff6a',
-          muted: 'rgba(216,255,62,0.06)',
+          DEFAULT: 'rgb(var(--primary_accent-rgb) / <alpha-value>)',
+          hover: 'var(--primary_accent-hover)',
+          muted: 'var(--primary_accent-muted)',
         },
         ink: '#0a0a0a',
         panel: '#141414',
@@ -25,7 +25,7 @@ export default {
       },
       boxShadow: {
         card: '0 24px 80px rgba(0,0,0,.32)',
-        tab: '0 4px 18px rgba(216,255,62,.12)',
+        tab: '0 4px 18px rgb(var(--primary_accent-rgb) / 0.12)',
       },
     },
   },

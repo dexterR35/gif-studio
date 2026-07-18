@@ -1,8 +1,21 @@
 import { useState } from 'react'
-import { ArrowDown, ArrowUp, ChevronsDown, ChevronsUp, Lock, Move, Unlock } from 'lucide-react'
+import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  ArrowDown,
+  ArrowUp,
+  ChevronsDown,
+  ChevronsUp,
+  Lock,
+  Move,
+  Unlock,
+  Upload,
+} from 'lucide-react'
 import {
   Button,
   CanvasSizeControls,
+  ColorField,
   Field,
   FormGrid,
   Hint,
@@ -12,6 +25,7 @@ import {
   Slider,
   Switch,
   StatusBadge,
+  Textarea,
   ToggleGroup,
 } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
@@ -362,7 +376,84 @@ function OverlayTransformPanel({ overlay }) {
   )
 }
 
-/** Properties inspector (2nd bar) — transform, mask paint, selection, parallax. */
+function TextPropertiesPanel({ layer }) {
+  const {
+    updateText, fontOptions, fontFileRef, uploadFont,
+  } = useStudio()
+
+  return (
+    <>
+      <Section title="Content & font" open>
+        <Textarea value={layer.text} onChange={(e) => updateText('text', e.target.value)} className="h-20" placeholder="Type your text…" />
+        <div className="mt-3">
+          <SelectField label="Font family" value={layer.font} onChange={(v) => updateText('font', v)}>
+            {fontOptions.map((font) => <option key={font} value={font}>{font}</option>)}
+          </SelectField>
+        </div>
+        <Button full className="mt-2" onClick={() => fontFileRef.current?.click()}>
+          <Upload className="h-3.5 w-3.5" />Upload local font
+        </Button>
+        <input ref={fontFileRef} type="file" accept=".ttf,.otf,.woff,.woff2" className="hidden" onChange={(e) => uploadFont(e.target.files[0])} />
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <Field label="Size" value={layer.size} onChange={(v) => updateText('size', v)} min={4} max={1000} suffix="px" />
+          <SelectField label="Weight" value={layer.weight} onChange={(v) => updateText('weight', Number(v))}>
+            {[100, 200, 300, 400, 500, 600, 700, 800, 900].map((x) => <option key={x} value={x}>{x}</option>)}
+          </SelectField>
+        </div>
+        <div className="mt-3"><Switch label="Italic" checked={layer.italic} onChange={(v) => updateText('italic', v)} /></div>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <SelectField label="Case" value={layer.casing} onChange={(v) => updateText('casing', v)}>
+            {['As typed', 'UPPERCASE', 'lowercase'].map((x) => <option key={x}>{x}</option>)}
+          </SelectField>
+          <SelectField label="Decoration" value={layer.decoration} onChange={(v) => updateText('decoration', v)}>
+            {['None', 'Underline', 'Strikethrough'].map((x) => <option key={x}>{x}</option>)}
+          </SelectField>
+        </div>
+        <ToggleGroup
+          className="mt-3"
+          value={layer.align}
+          onChange={(align) => updateText('align', align)}
+          options={[
+            { value: 'left', icon: AlignLeft },
+            { value: 'center', icon: AlignCenter },
+            { value: 'right', icon: AlignRight },
+          ]}
+        />
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <Field label="Tracking" value={layer.letterSpacing} onChange={(v) => updateText('letterSpacing', v)} min={-20} max={100} suffix="px" />
+          <Field label="Line height" value={layer.lineHeight} onChange={(v) => updateText('lineHeight', v)} min={0.5} max={4} step={0.1} suffix="×" />
+        </div>
+      </Section>
+
+      <Section title="Fill & outline" open>
+        <ColorField label="Text color" value={layer.color} onChange={(v) => updateText('color', v)} />
+        <ColorField className="mt-3" label="Outline color" value={layer.strokeColor} onChange={(v) => updateText('strokeColor', v)} />
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <Field label="Outline" value={layer.strokeWidth} onChange={(v) => updateText('strokeWidth', v)} min={0} max={30} suffix="px" />
+          <Field label="Opacity" value={layer.opacity} onChange={(v) => updateText('opacity', v)} min={0} max={100} suffix="%" />
+        </div>
+        <div className="mt-3">
+          <SelectField label="Blend mode" value={layer.blendMode} onChange={(v) => updateText('blendMode', v)}>
+            {[['source-over', 'Normal'], ['multiply', 'Multiply'], ['screen', 'Screen'], ['overlay', 'Overlay'], ['darken', 'Darken'], ['lighten', 'Lighten'], ['difference', 'Difference']].map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </SelectField>
+        </div>
+      </Section>
+
+      <Section title="Shadow" open>
+        <ColorField label="Shadow color" value={layer.shadowColor} onChange={(v) => updateText('shadowColor', v)} showHex={false} />
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <Field label="Blur" value={layer.shadowBlur} onChange={(v) => updateText('shadowBlur', v)} min={0} max={100} suffix="px" />
+          <Field label="X offset" value={layer.shadowX} onChange={(v) => updateText('shadowX', v)} min={-100} max={100} suffix="px" />
+          <Field label="Y offset" value={layer.shadowY} onChange={(v) => updateText('shadowY', v)} min={-100} max={100} suffix="px" />
+        </div>
+      </Section>
+    </>
+  )
+}
+
+/** Properties inspector (2nd bar) — transform, text, mask paint, selection, parallax. */
 export function InspectorAside() {
   const {
     baseImageSelected,
@@ -372,6 +463,8 @@ export function InspectorAside() {
     selectedOverlay,
     setSelectedOverlay,
     clearLayerSelection,
+    textLayers,
+    selectedText,
     setSelectedText,
     maskEditing,
     setMaskEditing,
@@ -386,13 +479,15 @@ export function InspectorAside() {
   const multi = selectedLayers.length >= 2
   const single = selectedLayers.length === 1 ? selectedLayers[0] : null
   const overlay = overlays.find((item) => item.id === selectedOverlay) || null
+  const textLayer = textLayers.find((item) => item.id === selectedText) || null
 
-  const open = baseImageSelected || selectedLayers.length > 0 || Boolean(overlay) || maskEditing || selectMode || censorSelecting
+  const open = Boolean(textLayer) || baseImageSelected || selectedLayers.length > 0 || Boolean(overlay) || maskEditing || selectMode || censorSelecting
 
   let title = 'Properties'
   if (censorSelecting) title = 'Censor'
   else if (maskEditing) title = 'Mask'
   else if (selectMode) title = 'Selection'
+  else if (textLayer) title = textLayer.name || 'Text'
   else if (multi) title = `${selectedLayers.length} layers`
   else if (single) title = single.name || 'Layer'
   else if (overlay) title = overlay.name || 'Overlay'
@@ -414,13 +509,14 @@ export function InspectorAside() {
   if (censorSelecting) body = <CensorPanel />
   else if (maskEditing) body = <MaskPaintPanel />
   else if (selectMode) body = <SelectionOptionsPanel />
+  else if (textLayer) body = <TextPropertiesPanel layer={textLayer} />
   else if (multi) body = <ParallaxPanel layers={selectedLayers} />
   else if (single) body = <ElementTransformPanel el={single} />
   else if (overlay) body = <OverlayTransformPanel overlay={overlay} />
   else if (baseImageSelected) body = <BaseTransformPanel />
 
   return (
-    <SecondaryAside open={open} title={title} onClose={close}>
+    <SecondaryAside open={open} title={title} onClose={close} width={textLayer ? 260 : 228}>
       {body}
     </SecondaryAside>
   )

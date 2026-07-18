@@ -1,5 +1,7 @@
 /** Photoshop-style liquify + zoom clips keyed to GIF duration (seconds). */
 
+import { PRIMARY_ACCENT } from './colors.js'
+
 export const MAX_MOTION_EFFECTS = 3
 
 /** Stable id for the locked base-motion lane (mirrors Motion dropdown). */
@@ -35,7 +37,7 @@ export const MOTION_EFFECT_COLORS = {
   Push: '#86efac',
   Swirl: '#fcd34d',
   Wave: '#67e8f9',
-  Zoom: '#d8ff3e',
+  Zoom: PRIMARY_ACCENT,
   /** Fallback for named base presets on the M lane */
   Base: '#a1a1aa',
 }
