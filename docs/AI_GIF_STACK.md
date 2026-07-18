@@ -21,11 +21,18 @@ AI never replaces the animator or GIF encoder.
 
 | Rule | Value |
 |------|--------|
-| Formats | PNG, JPG, WEBP (magic + PIL; not frontend) |
+| Formats | PNG, JPG, WEBP only (backend magic+PIL + frontend accept/validate) |
 | Max size | 20 MB · max edge 5000 px |
 | Upscale | Refuse output > 5k or estimated peak > 20 GiB |
 | Device | NVIDIA CUDA if present → else CPU / system RAM |
 | Override | `GIF_STUDIO_TORCH_DEVICE=cpu\|cuda\|mps` |
+| Rate limit | Backend only (`security_limits.py`) — per-IP windows + AI concurrency/cooldowns |
+| Concurrency | `GIF_STUDIO_AI_MAX_CONCURRENT` (default `1`) |
+| Cooldown | `GIF_STUDIO_AI_COOLDOWN_<ROUTE>` seconds (e.g. `UPSCALE`, `DETECT`) |
+| Per-IP | `GIF_STUDIO_RATE_LIMIT_AI=8/minute`, `_HEAVY=3/minute`, `_EXPORT=12/minute`, `_POST=60/minute` |
+| Proxy | Set `GIF_STUDIO_TRUST_PROXY=1` behind nginx so `X-Forwarded-For` is used |
+| Cutout | `/api/segment` `method=ai` (rembg) or `method=grabcut` (OpenCV) — GrabCut is a UI choice, not a silent fallback |
+| Job queue | One heavy job at a time; queue wait; refuse if free RAM below 3 GiB (default); unload model caches after each job + torch empty_cache |
 
 Engines prefer CUDA but are **CPU-ok** unless marked `requires_nvidia` in `/api/health` → `device.engines`. None currently require NVIDIA-only.
 

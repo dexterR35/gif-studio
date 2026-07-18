@@ -34,7 +34,7 @@ export default function ScalePage() {
     enhancedLayer, runUpscaleToEnhanced, updateEnhancedLayer,
     removeEnhancedLayer, downloadEnhancedPng, matchEnhancedSize,
     imageVisible, setImageVisible,
-    exporting, downloadBusy, scaleBusy, setToast,
+    downloadBusy, scaleBusy, studioLocked, setToast,
   } = useStudio()
   const caps = useStudioStore((s) => s.capabilities)
   const [upscaleModel, setUpscaleModel] = useState('realesrgan')
@@ -53,7 +53,7 @@ export default function ScalePage() {
     }
   }, [upscaleOptions])
 
-  const ioLocked = Boolean(exporting || downloadBusy || scaleBusy)
+  const ioLocked = Boolean(studioLocked)
   const device = deviceLabel(caps.device)
   const hasEnhanced = Boolean(enhancedLayer?.image)
   const largerThanCanvas = hasEnhanced

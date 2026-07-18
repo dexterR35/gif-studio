@@ -35,10 +35,11 @@ function pickReady(options, currentId) {
 
 export function AiToolsPanel() {
   const {
-    setToast,
+    notifyError,
     runRifeInterpolate, runPoseDetect,
     runDepthForParallax,
     poseRig, setPoseRig,
+    studioLocked,
   } = useStudio()
   const caps = useStudioStore((s) => s.capabilities)
   const [busy, setBusy] = useState('')
@@ -57,12 +58,14 @@ export function AiToolsPanel() {
 
   useEffect(() => { setDepthModel((id) => pickReady(depthOptions, id)) }, [depthOptions])
 
+  const locked = Boolean(busy || studioLocked)
+
   const run = async (label, fn) => {
     setBusy(label)
     try {
       await fn()
     } catch (err) {
-      setToast(err?.message || `${label} failed`)
+      notifyError(err?.message || `${label} failed`)
     } finally {
       setBusy('')
     }
@@ -87,7 +90,7 @@ export function AiToolsPanel() {
             variant="ghost"
             size="sm"
             full
-            disabled={Boolean(busy)}
+            disabled={locked}
             onClick={() => run('Depth', () => runDepthForParallax({ model: depthModel }))}
           >
             {busy === 'Depth' ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Mountain className="h-3.5 w-3.5" />}
@@ -103,7 +106,7 @@ export function AiToolsPanel() {
             variant="ghost"
             size="sm"
             full
-            disabled={Boolean(busy)}
+            disabled={locked}
             onClick={() => run('RIFE', () => runRifeInterpolate({ factor: 2 }))}
           >
             {busy === 'RIFE' ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <BetweenHorizonalEnd className="h-3.5 w-3.5" />}
@@ -115,19 +118,20 @@ export function AiToolsPanel() {
             checked={cutoutBody}
             onChange={setCutoutBody}
             className="mb-1"
+            disabled={locked}
           />
           <Switch
             label="Show joints in preview"
             checked={poseRig.visible}
             onChange={(v) => setPoseRig((current) => ({ ...current, visible: v }))}
             className="mb-1"
-            disabled={!poseRig.joints?.length}
+            disabled={locked || !poseRig.joints?.length}
           />
           <Button
             variant="accent"
             size="sm"
             full
-            disabled={Boolean(busy)}
+            disabled={locked}
             onClick={() => run('Pose', () => runPoseDetect({
               segment: cutoutBody,
               joints: true,
@@ -144,6 +148,7 @@ export function AiToolsPanel() {
               variant="soft"
               size="sm"
               full
+              disabled={locked}
               onClick={() => setPoseRig((current) => ({
                 ...current,
                 panelOpen: true,

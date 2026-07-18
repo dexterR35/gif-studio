@@ -22,6 +22,11 @@ from starlette.concurrency import run_in_threadpool
 
 from .engine import MAX_UPLOAD_BYTES, validate_uploaded_image
 from .ai_pipeline import default_rembg_model
+from .security_limits import (
+    SecurityRateLimitMiddleware,
+    acquire_ai_slot,
+    rate_limit_status,
+)
 
 app = FastAPI(title="GIF Studio Local API", version="1.0.0")
 
@@ -31,6 +36,8 @@ _cors_origins = [
     for origin in os.environ.get("GIF_STUDIO_CORS_ORIGINS", _CORS_DEFAULT).split(",")
     if origin.strip()
 ]
+# Added before CORS → runs after CORS on the way in (POST bodies already allowed).
+app.add_middleware(SecurityRateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
@@ -40,6 +47,7 @@ app.add_middleware(
     expose_headers=[
         "X-GIF-Encoder", "X-GIF-Optimized", "X-GIF-Original-Bytes", "X-GIF-Bytes",
         "X-GIF-Compression", "X-Upscale-Engine", "X-Interpolate-Engine",
+        "Retry-After", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Window",
     ],
 )
 
@@ -48,6 +56,20 @@ MAX_FRAMES = 240
 AI_MODEL = default_rembg_model()
 _rembg_session = None
 _rembg_model: str | None = None
+
+
+def _clear_rembg_session() -> None:
+    global _rembg_session, _rembg_model
+    _rembg_session = None
+    _rembg_model = None
+
+
+try:
+    from .resource_guard import register_unload_hook
+
+    register_unload_hook(_clear_rembg_session)
+except Exception:  # noqa: BLE001
+    pass
 
 
 def _reject_upload(exc: ValueError) -> HTTPException:
@@ -181,6 +203,7 @@ def health() -> dict[str, object]:
         "storage_local": True,
         "celery": celery_available(),
         "engines": ai_pipeline.active_engines(),
+        "rate_limit": rate_limit_status(),
     }
 
 
@@ -196,6 +219,7 @@ async def segment_element(
     model: Annotated[str, Form()] = AI_MODEL,
 ) -> dict[str, object]:
     payload = await image.read()
+    _require_upload_image(payload, image.filename)
     source = _decode_image(payload)
     image_height, image_width = source.shape[:2]
     x = max(0, min(x, image_width - 2))
@@ -218,65 +242,84 @@ async def segment_element(
     # Keep the rectangle just inside the image because GrabCut treats everything
     # outside it as definite background.
     rect = (x, y, max(1, width - 1), max(1, height - 1))
+    method_key = (method or "auto").strip().lower()
+    use_grabcut_only = method_key in {"grabcut", "opencv", "opencv-grabcut"}
+    use_ai = method_key in {"auto", "ai"}
+    allow_grabcut_fallback = method_key == "auto"
     engine = "opencv-grabcut"
     foreground: np.ndarray | None = None
-    if method in {"auto", "ai"} and importlib.util.find_spec("rembg") is not None:
-        try:
-            foreground = await run_in_threadpool(_ai_mask, payload, model)
-            # Limit the general subject mask to the requested object region.
-            region = np.zeros_like(foreground)
-            region[y : y + height, x : x + width] = foreground[y : y + height, x : x + width]
-            foreground = region
-            engine = f"rembg:{model}"
-        except Exception as exc:
-            if method == "ai":
-                raise HTTPException(422, f"AI segmentation failed: {exc}") from exc
+    async with acquire_ai_slot("smart_segment"):
+        if use_ai and not use_grabcut_only and importlib.util.find_spec("rembg") is not None:
+            try:
+                foreground = await run_in_threadpool(_ai_mask, payload, model)
+                # Limit the general subject mask to the requested object region.
+                region = np.zeros_like(foreground)
+                region[y : y + height, x : x + width] = foreground[y : y + height, x : x + width]
+                foreground = region
+                engine = f"rembg:{model}"
+            except Exception as exc:
+                if method_key == "ai" or not allow_grabcut_fallback:
+                    raise HTTPException(422, f"AI segmentation failed: {exc}") from exc
 
-    if foreground is None or np.count_nonzero(foreground) < width * height * 0.005:
-        try:
-            foreground = await run_in_threadpool(
-                _grabcut_mask, source, rect, max(1, min(iterations, 10))
-            )
-            engine = "opencv-grabcut"
-        except cv2.error as exc:
-            raise HTTPException(422, f"GrabCut could not separate this selection: {exc}") from exc
-
-    foreground = cv2.morphologyEx(
-        foreground, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)
-    )
-    foreground = cv2.GaussianBlur(foreground, (3, 3), 0)
-    selected_mask = foreground[y : y + height, x : x + width]
-    coverage = float(np.count_nonzero(selected_mask > 24)) / float(width * height)
-    if coverage < 0.005:
-        raise HTTPException(
-            422,
-            "No foreground was found. Draw a tighter box with some background around the object.",
+        ai_too_empty = (
+            foreground is None or np.count_nonzero(foreground) < width * height * 0.005
         )
+        if use_grabcut_only or (allow_grabcut_fallback and ai_too_empty):
+            try:
+                foreground = await run_in_threadpool(
+                    _grabcut_mask, source, rect, max(1, min(iterations, 10))
+                )
+                engine = "opencv-grabcut"
+            except cv2.error as exc:
+                raise HTTPException(422, f"GrabCut could not separate this selection: {exc}") from exc
+        elif method_key == "ai" and ai_too_empty:
+            raise HTTPException(
+                422,
+                "AI matte found no foreground in this selection. "
+                "Try another soft-matte model, draw a tighter box, or choose OpenCV GrabCut.",
+            )
+        elif ai_too_empty:
+            raise HTTPException(
+                422,
+                "No foreground was found. Choose a cutout engine or draw a larger selection.",
+            )
 
-    crop = source[y : y + height, x : x + width]
-    cutout = cv2.cvtColor(crop, cv2.COLOR_BGR2BGRA)
-    cutout[:, :, 3] = selected_mask
+        foreground = cv2.morphologyEx(
+            foreground, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)
+        )
+        foreground = cv2.GaussianBlur(foreground, (3, 3), 0)
+        selected_mask = foreground[y : y + height, x : x + width]
+        coverage = float(np.count_nonzero(selected_mask > 24)) / float(width * height)
+        if coverage < 0.005:
+            raise HTTPException(
+                422,
+                "No foreground was found. Draw a tighter box with some background around the object.",
+            )
 
-    # Content-aware fill: remove only the segmented object, preserve every pixel
-    # outside its mask, and reconstruct the revealed background from nearby texture.
-    kernel_size = max(3, min(11, int(round(max(image_width, image_height) * 0.006)) | 1))
-    kernel = np.ones((kernel_size, kernel_size), np.uint8)
-    inpaint_mask = cv2.morphologyEx(foreground, cv2.MORPH_CLOSE, kernel)
-    inpaint_mask = cv2.dilate(inpaint_mask, kernel, iterations=1)
-    radius = max(3, min(15, int(round(max(image_width, image_height) * 0.008))))
-    telea = cv2.inpaint(source, inpaint_mask, radius, cv2.INPAINT_TELEA)
-    navier_stokes = cv2.inpaint(source, inpaint_mask, radius, cv2.INPAINT_NS)
-    reconstructed = cv2.addWeighted(telea, 0.72, navier_stokes, 0.28, 0)
-    background = source.copy()
-    background[inpaint_mask > 0] = reconstructed[inpaint_mask > 0]
-    return {
-        "cutout": _png_data_url(cutout),
-        "background": _png_data_url(background),
-        "coverage": round(coverage, 4),
-        "engine": engine,
-        "fill": "opencv-content-aware",
-        "rect": {"x": x, "y": y, "width": width, "height": height},
-    }
+        crop = source[y : y + height, x : x + width]
+        cutout = cv2.cvtColor(crop, cv2.COLOR_BGR2BGRA)
+        cutout[:, :, 3] = selected_mask
+
+        # Content-aware fill: remove only the segmented object, preserve every pixel
+        # outside its mask, and reconstruct the revealed background from nearby texture.
+        kernel_size = max(3, min(11, int(round(max(image_width, image_height) * 0.006)) | 1))
+        kernel = np.ones((kernel_size, kernel_size), np.uint8)
+        inpaint_mask = cv2.morphologyEx(foreground, cv2.MORPH_CLOSE, kernel)
+        inpaint_mask = cv2.dilate(inpaint_mask, kernel, iterations=1)
+        radius = max(3, min(15, int(round(max(image_width, image_height) * 0.008))))
+        telea = cv2.inpaint(source, inpaint_mask, radius, cv2.INPAINT_TELEA)
+        navier_stokes = cv2.inpaint(source, inpaint_mask, radius, cv2.INPAINT_NS)
+        reconstructed = cv2.addWeighted(telea, 0.72, navier_stokes, 0.28, 0)
+        background = source.copy()
+        background[inpaint_mask > 0] = reconstructed[inpaint_mask > 0]
+        return {
+            "cutout": _png_data_url(cutout),
+            "background": _png_data_url(background),
+            "coverage": round(coverage, 4),
+            "engine": engine,
+            "fill": "opencv-content-aware",
+            "rect": {"x": x, "y": y, "width": width, "height": height},
+        }
 
 
 @app.post("/api/optimize-png")
@@ -368,92 +411,94 @@ async def export_gif(
             raise HTTPException(400, "All GIF frames must have identical dimensions.")
         decoded.append(frame)
 
-    # Build one perceptual palette for the whole animation. A shared palette
-    # prevents color pumping/flicker and preserves the full requested 256 colors.
-    has_transparency = any(
-        frame.ndim == 3 and frame.shape[2] == 4 and np.any(frame[:, :, 3] < 255)
-        for frame in decoded
-    )
-    if not has_transparency:
-        sample_images: list[Image.Image] = []
-        for frame in decoded[:: max(1, len(decoded) // 12)][:12]:
-            sample = Image.fromarray(frame).convert("RGB")
-            sample.thumbnail((240, 240), Image.Resampling.LANCZOS)
-            sample_images.append(sample)
-        sheet_width = sum(sample.width for sample in sample_images)
-        sheet_height = max(sample.height for sample in sample_images)
-        sheet = Image.new("RGB", (sheet_width, sheet_height))
-        cursor = 0
-        for sample in sample_images:
-            sheet.paste(sample, (cursor, 0))
-            cursor += sample.width
-        shared_palette = sheet.quantize(
-            colors=palette,
-            method=Image.Quantize.MEDIANCUT,
-            dither=Image.Dither.NONE,
-        )
-        pillow_dither = Image.Dither.FLOYDSTEINBERG if dither else Image.Dither.NONE
-        decoded = [
-            np.asarray(
-                Image.fromarray(frame)
-                .convert("RGB")
-                .quantize(palette=shared_palette, dither=pillow_dither)
-                .convert("RGB")
-            )
+    # Serialize encode with AI jobs; gate on free RAM; cleanup after.
+    async with acquire_ai_slot("export"):
+        # Build one perceptual palette for the whole animation. A shared palette
+        # prevents color pumping/flicker and preserves the full requested 256 colors.
+        has_transparency = any(
+            frame.ndim == 3 and frame.shape[2] == 4 and np.any(frame[:, :, 3] < 255)
             for frame in decoded
-        ]
+        )
+        if not has_transparency:
+            sample_images: list[Image.Image] = []
+            for frame in decoded[:: max(1, len(decoded) // 12)][:12]:
+                sample = Image.fromarray(frame).convert("RGB")
+                sample.thumbnail((240, 240), Image.Resampling.LANCZOS)
+                sample_images.append(sample)
+            sheet_width = sum(sample.width for sample in sample_images)
+            sheet_height = max(sample.height for sample in sample_images)
+            sheet = Image.new("RGB", (sheet_width, sheet_height))
+            cursor = 0
+            for sample in sample_images:
+                sheet.paste(sample, (cursor, 0))
+                cursor += sample.width
+            shared_palette = sheet.quantize(
+                colors=palette,
+                method=Image.Quantize.MEDIANCUT,
+                dither=Image.Dither.NONE,
+            )
+            pillow_dither = Image.Dither.FLOYDSTEINBERG if dither else Image.Dither.NONE
+            decoded = [
+                np.asarray(
+                    Image.fromarray(frame)
+                    .convert("RGB")
+                    .quantize(palette=shared_palette, dither=pillow_dither)
+                    .convert("RGB")
+                )
+                for frame in decoded
+            ]
 
-    unoptimized = io.BytesIO()
-    iio.imwrite(
-        unoptimized,
-        np.stack(decoded),
-        extension=".gif",
-        plugin="pillow",
-        duration=frame_durations,
-        loop=loop,
-        palettesize=palette,
-        optimize=True,
-        dither=Image.Dither.FLOYDSTEINBERG if dither else Image.Dither.NONE,
-        disposal=disposal,
-    )
-    gif_bytes = unoptimized.getvalue()
-    original_size = len(gif_bytes)
-    optimized = False
+        unoptimized = io.BytesIO()
+        iio.imwrite(
+            unoptimized,
+            np.stack(decoded),
+            extension=".gif",
+            plugin="pillow",
+            duration=frame_durations,
+            loop=loop,
+            palettesize=palette,
+            optimize=True,
+            dither=Image.Dither.FLOYDSTEINBERG if dither else Image.Dither.NONE,
+            disposal=disposal,
+        )
+        gif_bytes = unoptimized.getvalue()
+        original_size = len(gif_bytes)
+        optimized = False
 
-    if optimize and shutil.which("gifsicle"):
-        try:
-            from pygifsicle import optimize as optimize_gif
+        if optimize and shutil.which("gifsicle"):
+            try:
+                from pygifsicle import optimize as optimize_gif
 
-            with tempfile.TemporaryDirectory(prefix="gif-studio-") as directory:
-                source_path = Path(directory) / "source.gif"
-                output_path = Path(directory) / "optimized.gif"
-                source_path.write_bytes(gif_bytes)
-                options = ["--optimize=3"]
-                if compression_method == "Color Reduction":
-                    options.append(f"--colors={palette}")
-                if compression_method == "Lossy LZW" and lossy:
-                    options.append(f"--lossy={lossy}")
-                optimize_gif(str(source_path), str(output_path), options=options)
-                candidate = output_path.read_bytes()
-                if candidate:
-                    gif_bytes = candidate
-                    optimized = True
-        except Exception:
-            # Encoding succeeded, so an unavailable optimizer must never lose the export.
-            optimized = False
+                with tempfile.TemporaryDirectory(prefix="gif-studio-") as directory:
+                    source_path = Path(directory) / "source.gif"
+                    output_path = Path(directory) / "optimized.gif"
+                    source_path.write_bytes(gif_bytes)
+                    options = ["--optimize=3"]
+                    if compression_method == "Color Reduction":
+                        options.append(f"--colors={palette}")
+                    if compression_method == "Lossy LZW" and lossy:
+                        options.append(f"--lossy={lossy}")
+                    optimize_gif(str(source_path), str(output_path), options=options)
+                    candidate = output_path.read_bytes()
+                    if candidate:
+                        gif_bytes = candidate
+                        optimized = True
+            except Exception:
+                # Encoding succeeded, so an unavailable optimizer must never lose the export.
+                optimized = False
 
-    return Response(
-        gif_bytes,
-        media_type="image/gif",
-        headers={
-            "Content-Disposition": 'attachment; filename="gif-studio-export.gif"',
-            "X-GIF-Encoder": "imageio",
-            "X-GIF-Optimized": str(optimized).lower(),
-            "X-GIF-Original-Bytes": str(original_size),
-            "X-GIF-Bytes": str(len(gif_bytes)),
-            "X-GIF-Compression": compression_method,
-        },
-    )
+        return Response(
+            gif_bytes,
+            media_type="image/gif",
+            headers={
+                "Content-Disposition": 'attachment; filename="gif-studio-export.gif"',
+                "X-GIF-Encoder": "imageio",
+                "X-GIF-Optimized": str(optimized).lower(),
+                "X-GIF-Original-Bytes": str(original_size),
+                "X-GIF-Bytes": str(len(gif_bytes)),
+                "X-GIF-Compression": compression_method,
+            },
+        )
 
 
 @app.post("/api/compress-gif")
@@ -520,9 +565,12 @@ async def ai_segment(
     try:
         from .ai_pipeline import segment_sam2
 
-        return await run_in_threadpool(
-            segment_sam2, payload, point, None, mid,
-        )
+        async with acquire_ai_slot("segment"):
+            return await run_in_threadpool(
+                segment_sam2, payload, point, None, mid,
+            )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise _ai_http_error(exc, default_message="AI segment failed") from exc
 
@@ -559,18 +607,21 @@ async def ai_detect(
     try:
         from .ai_pipeline import detect_objects
 
-        return await run_in_threadpool(
-            detect_objects,
-            payload,
-            prompt,
-            confidence,
-            _form_bool(refine_sam2, True),
-            dino_model or None,
-            sam2_model or None,
-            engine or "auto",
-            yolo_model or None,
-            sam3_model or None,
-        )
+        async with acquire_ai_slot("detect"):
+            return await run_in_threadpool(
+                detect_objects,
+                payload,
+                prompt,
+                confidence,
+                _form_bool(refine_sam2, True),
+                dino_model or None,
+                sam2_model or None,
+                engine or "auto",
+                yolo_model or None,
+                sam3_model or None,
+            )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise _ai_http_error(exc, default_message="AI detect failed") from exc
 
@@ -586,7 +637,10 @@ async def ai_matte(
     try:
         from .ai_pipeline import matte_image
 
-        return await run_in_threadpool(matte_image, payload, model or None)
+        async with acquire_ai_slot("matte"):
+            return await run_in_threadpool(matte_image, payload, model or None)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise _ai_http_error(exc, default_message="Matte failed") from exc
 
@@ -602,7 +656,10 @@ async def ai_depth(
     try:
         from .ai_pipeline import depth_image
 
-        return await run_in_threadpool(depth_image, payload, model or None)
+        async with acquire_ai_slot("depth"):
+            return await run_in_threadpool(depth_image, payload, model or None)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise _ai_http_error(exc, default_message="Depth failed") from exc
 
@@ -621,13 +678,16 @@ async def ai_inpaint(
     try:
         from .ai_pipeline import inpaint_image
 
-        return await run_in_threadpool(
-            inpaint_image,
-            payload,
-            mask_bytes,
-            mask_png_base64 or None,
-            model or "auto",
-        )
+        async with acquire_ai_slot("inpaint"):
+            return await run_in_threadpool(
+                inpaint_image,
+                payload,
+                mask_bytes,
+                mask_png_base64 or None,
+                model or "auto",
+            )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise _ai_http_error(exc, default_message="Inpaint failed") from exc
 
@@ -660,8 +720,11 @@ async def ai_upscale(
     try:
         from .ai_pipeline import upscale_image
 
-        out, engine = await run_in_threadpool(upscale_image, payload, scale, model)
+        async with acquire_ai_slot("upscale"):
+            out, engine = await run_in_threadpool(upscale_image, payload, scale, model)
         return Response(out, media_type="image/png", headers={"X-Upscale-Engine": engine})
+    except HTTPException:
+        raise
     except Exception as exc:
         raise _ai_http_error(exc, default_message="Upscale failed") from exc
 
@@ -702,15 +765,18 @@ async def ai_interpolate(
     try:
         from .ai_pipeline import interpolate_frames
 
-        outs, engine = await run_in_threadpool(
-            interpolate_frames, payloads, factor, model or "rife",
-        )
+        async with acquire_ai_slot("interpolate"):
+            outs, engine = await run_in_threadpool(
+                interpolate_frames, payloads, factor, model or "rife",
+            )
         return {
             "engine": engine,
             "frames": [
                 "data:image/png;base64," + base64.b64encode(b).decode("ascii") for b in outs
             ],
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         raise _ai_http_error(exc, default_message="Interpolate failed") from exc
 

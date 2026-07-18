@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useLocation, useNavigate } from 'react-router-dom'
 import { GIFEncoder, applyPalette, quantize } from 'gifenc'
 import { PRESETS, TEXT_DEFAULT, EFFECT_DEFAULTS, transformsFromAmount, MAX_TEXT_LAYERS, clampTextInOut } from '../lib/presets'
-import { createEmptyProject, IMAGE_EDITS_DEFAULT, CENSOR_DEFAULT, PARALLAX_DEFAULT } from '../lib/project-document'
+import { IMAGE_EDITS_DEFAULT, CENSOR_DEFAULT, PARALLAX_DEFAULT } from '../lib/project-document'
 import { QUALITY_PROFILE_MAP, HEALTH_TIMEOUT_MS } from '../lib/catalogs'
 import { clamp, clampNice, fmtBytes, ease, MAX_CANVAS, MAX_UPLOAD_DIMENSION, nice, uploadImageError } from '../lib/format'
 import { applyPixelEffects, applyDistortion, ditherToPalette, presetFilter } from '../lib/effects'
@@ -85,6 +85,10 @@ function insertInStack(list, item, mode, relativeId = null) {
   return mode === 'front' ? [...list, item] : [item, ...list]
 }
 
+/**
+ * Facade over StudioProvider: refs, derived metrics, and imperative actions (draw, export, AI).
+ * Prefer `useStudioStore` selectors for project / selection / tools / ui / session state.
+ */
 export function useStudio() {
   const ctx = useContext(StudioContext)
   if (!ctx) throw new Error('useStudio must be used within StudioProvider')
@@ -107,37 +111,184 @@ export function StudioProvider({ children }) {
   const overlayFileRef = useRef(null)
   const compressGifRef = useRef(null)
   const progressRef = useRef(0)
-  const emptyProject = createEmptyProject()
-  const [settings, setSettings] = useState(emptyProject.settings)
-  const [image, setImage] = useState(null)
-  /** No bundled demo — user must open/drop a source (matches desktop). */
-  const [source, setSource] = useState(null)
-  const [playing, setPlaying] = useState(false)
-  const [progress, setProgressState] = useState(0)
   const progressUiAt = useRef(0)
+  const playingRef = useRef(false)
+  /** Shared finish lock — only one of export / PNG download / upscale at a time. */
+  const ioLockRef = useRef(false)
+  /** Nestable AI busy depth (segment / detect / matte / depth / RIFE / pose). */
+  const busyDepthRef = useRef(0)
+  const enhanceGenRef = useRef(0)
+  const selectionStart = useRef(null)
+  const anchorDrag = useRef(null)
+  const jointDrag = useRef(null)
+  const poseWarpCacheRef = useRef(new Map())
+  const maskPainting = useRef(false)
+  const pixiCanvasRef = useRef(null)
+  const gifFramesRef = useRef(null)
+  const loadGenerationRef = useRef(0)
+  const sourceUrlRef = useRef(null)
+  const drawRef = useRef(null)
+
+  // ── Zustand is source of truth for project + UI + selection + tools + session ──
+  const settings = useStudioStore((s) => s.project.settings)
+  const source = useStudioStore((s) => s.project.source)
+  const elements = useStudioStore((s) => s.project.elements)
+  const overlays = useStudioStore((s) => s.project.overlays)
+  const textLayers = useStudioStore((s) => s.project.textLayers)
+  const enhancedLayer = useStudioStore((s) => s.project.enhancedLayer)
+  const gifEffects = useStudioStore((s) => s.project.gifEffects)
+  const imageEdits = useStudioStore((s) => s.project.imageEdits)
+  const censor = useStudioStore((s) => s.project.censor)
+  const parallax = useStudioStore((s) => s.project.parallax)
+  const fontOptions = useStudioStore((s) => s.project.fontOptions)
+
+  const setSettings = useStudioStore((s) => s.setSettings)
+  const setSource = useStudioStore((s) => s.setSource)
+  const setElements = useStudioStore((s) => s.setElements)
+  const setOverlays = useStudioStore((s) => s.setOverlays)
+  const setTextLayers = useStudioStore((s) => s.setTextLayers)
+  const setEnhancedLayer = useStudioStore((s) => s.setEnhancedLayer)
+  const setGifEffects = useStudioStore((s) => s.setGifEffects)
+  const setImageEdits = useStudioStore((s) => s.setImageEdits)
+  const setCensor = useStudioStore((s) => s.setCensor)
+  const setParallax = useStudioStore((s) => s.setParallax)
+  const setFontOptions = useStudioStore((s) => s.setFontOptions)
+
+  const selectedElements = useStudioStore((s) => s.selection.selectedElements)
+  const selectedText = useStudioStore((s) => s.selection.selectedText)
+  const selectedOverlay = useStudioStore((s) => s.selection.selectedOverlay)
+  const selectedMotionEffect = useStudioStore((s) => s.selection.selectedMotionEffect)
+  const baseImageSelected = useStudioStore((s) => s.selection.baseImageSelected)
+  const enhancedSelected = useStudioStore((s) => s.selection.enhancedSelected)
+  const artboardSelected = useStudioStore((s) => s.selection.artboardSelected)
+  const layerInsertAt = useStudioStore((s) => s.selection.layerInsertAt)
+  const imageLocked = useStudioStore((s) => s.selection.imageLocked)
+  const imageVisible = useStudioStore((s) => s.selection.imageVisible)
+  const canvasLocked = useStudioStore((s) => s.selection.canvasLocked)
+
+  const setSelectedElements = useStudioStore((s) => s.setSelectedElements)
+  const setSelectedElement = useStudioStore((s) => s.setSelectedElement)
+  const setSelectedText = useStudioStore((s) => s.setSelectedText)
+  const setSelectedOverlay = useStudioStore((s) => s.setSelectedOverlay)
+  const setSelectedMotionEffect = useStudioStore((s) => s.setSelectedMotionEffect)
+  const setBaseImageSelected = useStudioStore((s) => s.setBaseImageSelected)
+  const setEnhancedSelected = useStudioStore((s) => s.setEnhancedSelected)
+  const setArtboardSelected = useStudioStore((s) => s.setArtboardSelected)
+  const setLayerInsertAt = useStudioStore((s) => s.setLayerInsertAt)
+  const setImageLocked = useStudioStore((s) => s.setImageLocked)
+  const setImageVisible = useStudioStore((s) => s.setImageVisible)
+  const setCanvasLocked = useStudioStore((s) => s.setCanvasLocked)
+
+  const selectMode = useStudioStore((s) => s.tools.selectMode)
+  const selectionTool = useStudioStore((s) => s.tools.selectionTool)
+  const selection = useStudioStore((s) => s.tools.selection)
+  const selectionPoints = useStudioStore((s) => s.tools.selectionPoints)
+  const extractTolerance = useStudioStore((s) => s.tools.extractTolerance)
+  const maskEditing = useStudioStore((s) => s.tools.maskEditing)
+  const maskBrush = useStudioStore((s) => s.tools.maskBrush)
+  const censorSelecting = useStudioStore((s) => s.tools.censorSelecting)
+  const effectTarget = useStudioStore((s) => s.tools.effectTarget)
+
+  const setSelectMode = useStudioStore((s) => s.setSelectMode)
+  const setSelectionTool = useStudioStore((s) => s.setSelectionTool)
+  const setSelection = useStudioStore((s) => s.setSelection)
+  const setSelectionPoints = useStudioStore((s) => s.setSelectionPoints)
+  const setExtractTolerance = useStudioStore((s) => s.setExtractTolerance)
+  const setMaskEditing = useStudioStore((s) => s.setMaskEditing)
+  const setMaskBrush = useStudioStore((s) => s.setMaskBrush)
+  const setCensorSelecting = useStudioStore((s) => s.setCensorSelecting)
+  const setEffectTarget = useStudioStore((s) => s.setEffectTarget)
+
+  const mobilePanel = useStudioStore((s) => s.ui.mobilePanel)
+  const toast = useStudioStore((s) => s.ui.toast)
+  const dropActive = useStudioStore((s) => s.ui.dropActive)
+  const lockAspect = useStudioStore((s) => s.ui.lockAspect)
+  const gpuPreview = useStudioStore((s) => s.ui.gpuPreview)
+
+  const setMobilePanel = useStudioStore((s) => s.setMobilePanel)
+  const setToast = useStudioStore((s) => s.setToast)
+  const notifySuccess = useStudioStore((s) => s.notifySuccess)
+  const notifyError = useStudioStore((s) => s.notifyError)
+  const notifyInfo = useStudioStore((s) => s.notifyInfo)
+  const notifyWarning = useStudioStore((s) => s.notifyWarning)
+  const clearToast = useStudioStore((s) => s.clearToast)
+  const setDropActive = useStudioStore((s) => s.setDropActive)
+  const setLockAspect = useStudioStore((s) => s.setLockAspect)
+  const setGpuPreview = useStudioStore((s) => s.setGpuPreview)
+
+  const playing = useStudioStore((s) => s.session.playing)
+  const progress = useStudioStore((s) => s.session.progress)
+  const exporting = useStudioStore((s) => s.session.exporting)
+  const downloadBusy = useStudioStore((s) => s.session.downloadBusy)
+  const scaleBusy = useStudioStore((s) => s.session.scaleBusy)
+  const lastExport = useStudioStore((s) => s.session.lastExport)
+  const apiAvailable = useStudioStore((s) => s.session.apiAvailable)
+  const apiInfo = useStudioStore((s) => s.session.apiInfo)
+  const segmenting = useStudioStore((s) => s.session.segmenting)
+  const busyLabel = useStudioStore((s) => s.session.busyLabel)
+
+  const setPlaying = useStudioStore((s) => s.setPlaying)
+  const setExporting = useStudioStore((s) => s.setExporting)
+  const setDownloadBusy = useStudioStore((s) => s.setDownloadBusy)
+  const setScaleBusy = useStudioStore((s) => s.setScaleBusy)
+  const setLastExport = useStudioStore((s) => s.setLastExport)
+  const setApiAvailable = useStudioStore((s) => s.setApiAvailable)
+  const setApiInfo = useStudioStore((s) => s.setApiInfo)
+  const setSegmenting = useStudioStore((s) => s.setSegmenting)
+  const setBusyLabel = useStudioStore((s) => s.setBusyLabel)
+
+  const studioLocked = Boolean(segmenting || scaleBusy || downloadBusy || exporting)
+
+  const assertStudioIdle = (message = 'Wait for the current job to finish') => {
+    if (busyDepthRef.current > 0 || ioLockRef.current || exporting || downloadBusy || scaleBusy || segmenting) {
+      setToast(message)
+      return false
+    }
+    return true
+  }
+
+  /** Nestable lock for AI jobs — keeps studio overlay up through nested extract calls. */
+  const beginBusy = (label) => {
+    busyDepthRef.current += 1
+    setPlaying(false)
+    setSegmenting(true)
+    if (label) setBusyLabel(label)
+  }
+
+  const endBusy = () => {
+    busyDepthRef.current = Math.max(0, busyDepthRef.current - 1)
+    if (busyDepthRef.current === 0) {
+      setSegmenting(false)
+      setBusyLabel('')
+    }
+  }
+
   /** Keep a sync ref so paused rAF / idle redraw never reads a stale closure. */
   const setProgress = (value, { force = false } = {}) => {
     const next = typeof value === 'function' ? value(progressRef.current) : value
     progressRef.current = next
-    // During play, throttle React updates — full tree re-render every GSAP tick freezes the UI.
+    // During play, throttle store updates — full tree re-render every GSAP tick freezes the UI.
     const now = performance.now()
     if (force || !playingRef.current || now - progressUiAt.current > 80) {
       progressUiAt.current = now
-      setProgressState(next)
+      useStudioStore.getState().setProgress(next)
     }
   }
-  const playingRef = useRef(false)
   playingRef.current = playing
 
-  const [exporting, setExporting] = useState(false)
-  /** Shared finish lock — only one of export / PNG download / upscale at a time. */
-  const ioLockRef = useRef(false)
-  const [downloadBusy, setDownloadBusy] = useState(false)
-  const [scaleBusy, setScaleBusy] = useState(false)
-  const enhanceGenRef = useRef(0)
-  const [dropActive, setDropActive] = useState(false)
-  const [mobilePanel, setMobilePanel] = useState(false)
-  const [toast, setToast] = useState('')
+  /** Runtime-only: decoded HTMLImageElement (not serializable). */
+  const [image, setImage] = useState(null)
+  /** Runtime pose preview — high-frequency joint drag syncs via poseRigRef. */
+  const [poseRig, setPoseRig] = useState({ ...POSE_RIG_DEFAULT })
+  const poseRigRef = useRef(poseRig)
+  poseRigRef.current = poseRig
+
+  /** Primary = last selected (edits target). Secondary = other multi-selected layers. */
+  const selectedElement = selectedElements.length ? selectedElements[selectedElements.length - 1] : null
+  const secondaryElements = selectedElements.length > 1
+    ? selectedElements.slice(0, -1)
+    : []
+
   const navigate = useNavigate()
   const location = useLocation()
   const activeTab = workspaceFromPath(location.pathname)
@@ -147,67 +298,6 @@ export function StudioProvider({ children }) {
   }
   const canvasZoom = useCanvasZoom({ minZoom: 10, maxZoom: 800, defaultZoom: 100, padding: 40 })
   const { zoom, setZoom } = canvasZoom
-  const [lockAspect, setLockAspect] = useState(true)
-  const [elements, setElements] = useState([])
-  const [selectedElements, setSelectedElements] = useState([])
-  /** Primary = last selected (edits target). Secondary = other multi-selected layers. */
-  const selectedElement = selectedElements.length ? selectedElements[selectedElements.length - 1] : null
-  const secondaryElements = selectedElements.length > 1
-    ? selectedElements.slice(0, -1)
-    : []
-  const setSelectedElement = (id) => {
-    setSelectedElements(id == null ? [] : [id])
-  }
-  /** Where new extracted elements / overlays land in the stack. */
-  const [layerInsertAt, setLayerInsertAt] = useState('front')
-  const [baseImageSelected, setBaseImageSelected] = useState(false)
-  const [imageLocked, setImageLocked] = useState(false)
-  /** When false, base is hidden so the enhanced underlay can be seen. */
-  const [imageVisible, setImageVisible] = useState(true)
-  /** Upscaled alternate under Background — never replaces source. */
-  const [enhancedLayer, setEnhancedLayer] = useState(null)
-  const [enhancedSelected, setEnhancedSelected] = useState(false)
-  /** Artboard (output canvas) — separate from the base-image background layer. */
-  const [artboardSelected, setArtboardSelected] = useState(false)
-  const [canvasLocked, setCanvasLocked] = useState(false)
-  const [selectMode, setSelectMode] = useState(false)
-  const [selectionTool, setSelectionTool] = useState('Rectangle')
-  const [selection, setSelection] = useState(null)
-  const [selectionPoints, setSelectionPoints] = useState([])
-  const selectionStart = useRef(null)
-  const anchorDrag = useRef(null)
-  const jointDrag = useRef(null)
-  const poseWarpCacheRef = useRef(new Map())
-  const [extractTolerance, setExtractTolerance] = useState(42)
-  const [apiAvailable, setApiAvailable] = useState(false)
-  const [apiInfo, setApiInfo] = useState(null)
-  const [segmenting, setSegmenting] = useState(false)
-  const [textLayers, setTextLayers] = useState([])
-  const [selectedText, setSelectedText] = useState(null)
-  const [fontOptions, setFontOptions] = useState(emptyProject.fontOptions)
-  const [parallax, setParallax] = useState(emptyProject.parallax)
-  const [lastExport, setLastExport] = useState(null)
-  const [maskEditing, setMaskEditing] = useState(false)
-  const [maskBrush, setMaskBrush] = useState({ mode: 'Hide', size: 48, hardness: 70, opacity: 100, feather: 8 })
-  const maskPainting = useRef(false)
-  const [imageEdits, setImageEdits] = useState(emptyProject.imageEdits)
-  const [censor, setCensor] = useState(emptyProject.censor)
-  const [censorSelecting, setCensorSelecting] = useState(false)
-  const [overlays, setOverlays] = useState([])
-  const [selectedOverlay, setSelectedOverlay] = useState(null)
-  const [effectTarget, setEffectTarget] = useState('Entire GIF')
-  const [gifEffects, setGifEffects] = useState(emptyProject.gifEffects)
-  const [selectedMotionEffect, setSelectedMotionEffect] = useState(null)
-  const pixiCanvasRef = useRef(null)
-  const gifFramesRef = useRef(null)
-  const loadGenerationRef = useRef(0)
-  const sourceUrlRef = useRef(null)
-  // Pixi overlay is optional — off by default (was freezing play / motion edits).
-  const [gpuPreview, setGpuPreview] = useState(false)
-  const drawRef = useRef(null)
-  const [poseRig, setPoseRig] = useState({ ...POSE_RIG_DEFAULT })
-  const poseRigRef = useRef(poseRig)
-  poseRigRef.current = poseRig
 
   /** Replace source; revoke previous owned blob URL (never revoke in image-load effect). */
   const replaceSource = (next) => {
@@ -423,35 +513,6 @@ export function StudioProvider({ children }) {
       allowHuggingFace: Boolean(apiInfo?.allow_huggingface),
     })
   }, [apiAvailable, apiInfo])
-
-  /** Keep Zustand project document in sync (no hardcoded demo data). */
-  useEffect(() => {
-    useStudioStore.getState().setSource(source)
-  }, [source])
-  useEffect(() => {
-    useStudioStore.getState().setSettings(settings)
-  }, [settings])
-  useEffect(() => {
-    useStudioStore.getState().setElements(elements)
-  }, [elements])
-  useEffect(() => {
-    useStudioStore.getState().setOverlays(overlays)
-  }, [overlays])
-  useEffect(() => {
-    useStudioStore.getState().setTextLayers(textLayers)
-  }, [textLayers])
-  useEffect(() => {
-    useStudioStore.getState().setGifEffects(gifEffects)
-  }, [gifEffects])
-  useEffect(() => {
-    useStudioStore.getState().setImageEdits(imageEdits)
-  }, [imageEdits])
-  useEffect(() => {
-    useStudioStore.getState().setCensor(censor)
-  }, [censor])
-  useEffect(() => {
-    useStudioStore.getState().setParallax(parallax)
-  }, [parallax])
 
   const draw = useCallback((rawT, target = canvasRef.current, exportScale = 1) => {
     if (!target || !image) return
@@ -952,8 +1013,9 @@ export function StudioProvider({ children }) {
 
   const loadFile = async (file) => {
     if (!file) return
+    if (!assertStudioIdle()) return
     const blocked = uploadImageError(file)
-    if (blocked) { setToast(blocked); return }
+    if (blocked) { notifyError(blocked); return }
 
     const generation = ++loadGenerationRef.current
     const isStale = () => generation !== loadGenerationRef.current
@@ -1170,39 +1232,17 @@ export function StudioProvider({ children }) {
     ...transformsFromAmount(name, PRESETS[name]?.amplitude ?? s.amplitude),
   }))
   const reset = () => {
-    const empty = createEmptyProject()
-    setSettings(empty.settings)
-    setElements([])
-    setSelectedElements([])
-    setBaseImageSelected(false)
-    setArtboardSelected(false)
-    setImageVisible(true)
-    setEnhancedLayer((current) => {
-      if (current?.url) revokeBlobUrl(current.url)
-      return null
-    })
-    setEnhancedSelected(false)
-    setTextLayers([])
-    setSelectedText(null)
-    setMaskEditing(false)
-    setOverlays((current) => {
-      current.forEach((overlay) => revokeBlobUrl(overlay.url))
-      return []
-    })
-    setSelectedOverlay(null)
-    setSelectedMotionEffect(null)
-    setGifEffects(empty.gifEffects)
-    setImageEdits(empty.imageEdits)
-    setCensor(empty.censor)
-    setParallax(empty.parallax)
-    setFontOptions(empty.fontOptions)
-    setProgress(0)
-    setPlaying(false)
+    const current = useStudioStore.getState().project
+    if (current.enhancedLayer?.url) revokeBlobUrl(current.enhancedLayer.url)
+    ;(current.overlays || []).forEach((overlay) => revokeBlobUrl(overlay.url))
     replaceSource(null)
     setImage(null)
     gifFramesRef.current = null
     setPoseRig({ ...POSE_RIG_DEFAULT })
-    useStudioStore.getState().resetProject()
+    progressRef.current = 0
+    busyDepthRef.current = 0
+    ioLockRef.current = false
+    useStudioStore.getState().resetStudio()
     setToast('Project cleared — open an image to start')
   }
 
@@ -1346,11 +1386,57 @@ export function StudioProvider({ children }) {
     return id
   }
 
-  const extractElement = async (rect) => {
+  /** Map UI matte ids → rembg session names used by /api/segment. */
+  const toSegmentModel = (modelId) => {
+    const map = {
+      birefnet: 'birefnet-general',
+      'rmbg-2.0': 'bria-rmbg',
+      rmbg: 'bria-rmbg',
+      'bria-rmbg': 'bria-rmbg',
+      'rembg-isnet': 'isnet-general-use',
+      isnet: 'isnet-general-use',
+      'isnet-general-use': 'isnet-general-use',
+    }
+    return map[String(modelId || '').toLowerCase()] || 'isnet-general-use'
+  }
+
+  /** Resolve cutout dropdown id → /api/segment { model, method }. GrabCut is explicit, not a fallback. */
+  const resolveCutoutRequest = (cutoutId, overrides = {}) => {
+    const id = String(overrides.model ?? cutoutId ?? 'birefnet').toLowerCase()
+    if (id === 'opencv-grabcut' || id === 'grabcut' || id === 'opencv') {
+      return { model: 'isnet-general-use', method: 'grabcut' }
+    }
+    if (overrides.method) {
+      return {
+        model: toSegmentModel(id),
+        method: overrides.method,
+      }
+    }
+    return { model: toSegmentModel(id), method: 'ai' }
+  }
+
+  /**
+   * Smart segment: rembg (method=ai) or OpenCV GrabCut (method=grabcut) from cutout dropdown.
+   * Creates a floating cutout layer. Does **not** rewrite the base image with OpenCV
+   * Telea smear unless ``updateBackground: true`` (optional clean-hole path).
+   * @param {{ x:number, y:number, w:number, h:number }} rect normalized
+   * @param {{ model?: string, method?: string, name?: string, replaceElementId?: string|null, updateBackground?: boolean }} [opts]
+   */
+  const extractElement = async (rect, opts = {}) => {
+    const storeCutout = useStudioStore.getState().tools.cutoutModel || 'birefnet'
+    const { model: segmentModel, method } = resolveCutoutRequest(storeCutout, opts)
+    const {
+      name = null,
+      replaceElementId = null,
+      updateBackground = false,
+    } = opts
     if (!apiAvailable) return extractElementLocal(rect)
     const sourceCanvas = canvasRef.current
     if (!sourceCanvas) return
-    setSegmenting(true); setToast('OpenCV is separating the object…')
+    const nested = busyDepthRef.current > 0
+    if (!nested && !assertStudioIdle()) return null
+    beginBusy('Separating subject…')
+    setToast('Separating subject…')
     try {
       const blob = await new Promise((resolve) => sourceCanvas.toBlob(resolve, 'image/png'))
       const form = new FormData()
@@ -1360,39 +1446,283 @@ export function StudioProvider({ children }) {
       form.append('width', String(Math.round(rect.w * sourceCanvas.width)))
       form.append('height', String(Math.round(rect.h * sourceCanvas.height)))
       form.append('iterations', '5')
-      form.append('method', 'auto')
-      form.append('model', 'isnet-general-use')
+      form.append('method', method)
+      form.append('model', segmentModel)
       const response = await fetch('/api/segment', { method: 'POST', body: form })
-      if (!response.ok) { const detail = await response.json().catch(() => ({})); throw new Error(apiErrorMessage(detail.detail, 'Smart selection failed')) }
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}))
+        const message = apiErrorMessage(detail.detail, 'Smart selection failed')
+        if (response.status === 429 || response.status === 503) {
+          setToast(message)
+          return null
+        }
+        throw new Error(message)
+      }
       const result = await response.json()
       const cutout = new Image()
       await new Promise((resolve, reject) => { cutout.onload = resolve; cutout.onerror = reject; cutout.src = result.cutout })
       const bitmap = document.createElement('canvas'); bitmap.width = cutout.naturalWidth; bitmap.height = cutout.naturalHeight
       bitmap.getContext('2d').drawImage(cutout, 0, 0)
-      const sourceBitmap = document.createElement('canvas'); sourceBitmap.width = bitmap.width; sourceBitmap.height = bitmap.height; sourceBitmap.getContext('2d').drawImage(bitmap, 0, 0)
-      const maskCanvas = document.createElement('canvas'); maskCanvas.width = bitmap.width; maskCanvas.height = bitmap.height; const maskCtx = maskCanvas.getContext('2d'); maskCtx.fillStyle = '#fff'; maskCtx.fillRect(0, 0, bitmap.width, bitmap.height)
-      const id = newStudioId()
+      // Keep an opaque RGB copy for later “Remove BG” rematte (never bake base inpaint into it).
+      const sourceBitmap = document.createElement('canvas')
+      sourceBitmap.width = bitmap.width
+      sourceBitmap.height = bitmap.height
+      {
+        const sctx = sourceBitmap.getContext('2d')
+        const rx = Math.round(result.rect.x)
+        const ry = Math.round(result.rect.y)
+        const rw = Math.round(result.rect.width)
+        const rh = Math.round(result.rect.height)
+        sctx.drawImage(sourceCanvas, rx, ry, rw, rh, 0, 0, bitmap.width, bitmap.height)
+      }
+      const maskCanvas = document.createElement('canvas'); maskCanvas.width = bitmap.width; maskCanvas.height = bitmap.height
+      {
+        const maskCtx = maskCanvas.getContext('2d')
+        const alpha = bitmap.getContext('2d').getImageData(0, 0, bitmap.width, bitmap.height)
+        const maskData = maskCtx.createImageData(bitmap.width, bitmap.height)
+        for (let i = 0; i < alpha.data.length; i += 4) {
+          const a = alpha.data[i + 3]
+          maskData.data[i] = a
+          maskData.data[i + 1] = a
+          maskData.data[i + 2] = a
+          maskData.data[i + 3] = 255
+        }
+        maskCtx.putImageData(maskData, 0, 0)
+      }
       const smartRect = { x: result.rect.x / sourceCanvas.width, y: result.rect.y / sourceCanvas.height, w: result.rect.width / sourceCanvas.width, h: result.rect.height / sourceCanvas.height }
-      const element = { id, name: `Element ${elements.length + 1}`, ...smartRect, bitmap, sourceBitmap, maskCanvas, cleanup: null, effects: { ...EFFECT_DEFAULTS }, rotation: 0, scaleX: 100, scaleY: 100, flipX: false, flipY: false, opacity: 100, motion: 'Float', amplitude: 5, speed: 1, depth: Math.min(100, 30 + elements.length * 20), visible: true, smart: true, locked: false, anchorX: 50, anchorY: 50 }
-      setElements((current) => insertInStack(current, element, layerInsertAt, selectedElement))
-      setSelectedElements([id])
+      const engine = result.engine || segmentModel
+
+      let id = replaceElementId
+      if (replaceElementId) {
+        setElements((current) => current.map((item) => (
+          item.id !== replaceElementId
+            ? item
+            : {
+              ...item,
+              ...smartRect,
+              bitmap,
+              sourceBitmap,
+              maskCanvas,
+              cleanup: null,
+              smart: true,
+              engine,
+              name: name || item.name,
+            }
+        )))
+        setSelectedElements([replaceElementId])
+      } else {
+        id = newStudioId()
+        const element = {
+          id,
+          name: name || `Element ${elements.length + 1}`,
+          ...smartRect,
+          bitmap,
+          sourceBitmap,
+          maskCanvas,
+          cleanup: null,
+          effects: { ...EFFECT_DEFAULTS },
+          rotation: 0,
+          scaleX: 100,
+          scaleY: 100,
+          flipX: false,
+          flipY: false,
+          opacity: 100,
+          motion: 'Float',
+          amplitude: 5,
+          speed: 1,
+          depth: Math.min(100, 30 + elements.length * 20),
+          visible: true,
+          smart: true,
+          locked: false,
+          anchorX: 50,
+          anchorY: 50,
+          engine,
+        }
+        setElements((current) => insertInStack(current, element, layerInsertAt, selectedElement))
+        setSelectedElements([id])
+      }
+
       setEffectTarget('Selected element')
       if (activeTab !== 'ai' && activeTab !== 'edit') goToWorkspace('motion')
       setSettings((current) => ({ ...current, preset: 'Still', fit: 'Contain', ...PRESETS.Still }))
-      replaceSource({
-        ...(source || {}),
-        width: sourceCanvas.width,
-        height: sourceCanvas.height,
-        url: result.background,
-      })
-      setToast(`${result.engine.startsWith('rembg') ? 'AI' : 'GrabCut'} object ready · ${layerInsertAt === 'front' ? 'in front' : 'in back'}`)
+      // Only rewrite the base when explicitly requested. Default leave pixels intact so
+      // moving the cutout never reveals OpenCV Telea/NS “deformed color” smear.
+      if (updateBackground && result.background && !replaceElementId) {
+        replaceSource({
+          ...(source || {}),
+          width: sourceCanvas.width,
+          height: sourceCanvas.height,
+          url: result.background,
+        })
+      }
+      const kind = String(engine).startsWith('rembg') || String(engine).includes('birefnet') || String(engine).includes('rmbg')
+        ? 'AI'
+        : 'GrabCut'
+      setToast(
+        updateBackground
+          ? `${kind} object ready · hole filled on base`
+          : `${kind} cutout layer ready · base image unchanged`,
+      )
       return id
     } catch (error) {
       console.warn(error)
       const id = extractElementLocal(rect)
       setToast(`${error.message}. Used edge selection instead.`)
       return id
-    } finally { setSegmenting(false) }
+    } finally { endBusy() }
+  }
+
+  /**
+   * Remove BG on an existing cutout — mattes that layer only.
+   * Never rewrites the base image (that caused the smear behind moved layers).
+   */
+  const rematteSelectedLayer = async ({ model, method } = {}) => {
+    const el = elements.find((e) => e.id === selectedElement && (e.sourceBitmap || e.bitmap))
+    if (!el) {
+      setToast('Select a cutout layer to remove its background')
+      return
+    }
+    if (!assertStudioIdle()) return
+    const storeCutout = useStudioStore.getState().tools.cutoutModel || 'birefnet'
+    const { model: segmentModel, method: segMethod } = resolveCutoutRequest(storeCutout, { model, method })
+    const src = el.sourceBitmap || el.bitmap
+    const w = src.width
+    const h = src.height
+    if (w < 2 || h < 2) {
+      setToast('Layer is too small to rematte')
+      return
+    }
+
+    // Opaque plate for rembg / GrabCut (transparent holes would confuse the model).
+    const plate = document.createElement('canvas')
+    plate.width = w
+    plate.height = h
+    const pctx = plate.getContext('2d')
+    pctx.fillStyle = '#808080'
+    pctx.fillRect(0, 0, w, h)
+    pctx.drawImage(src, 0, 0)
+
+    beginBusy('Removing background…')
+    setToast('Removing background…')
+    try {
+      let bitmap = document.createElement('canvas')
+      bitmap.width = w
+      bitmap.height = h
+      let maskCanvas = document.createElement('canvas')
+      maskCanvas.width = w
+      maskCanvas.height = h
+      let engine = segmentModel
+
+      if (segMethod === 'grabcut') {
+        const blob = await new Promise((resolve, reject) => {
+          plate.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not encode layer'))), 'image/png')
+        })
+        const form = new FormData()
+        form.append('image', blob, 'layer.png')
+        form.append('x', '0')
+        form.append('y', '0')
+        form.append('width', String(w))
+        form.append('height', String(h))
+        form.append('iterations', '5')
+        form.append('method', 'grabcut')
+        form.append('model', segmentModel)
+        const response = await fetch('/api/segment', { method: 'POST', body: form })
+        if (!response.ok) {
+          const detail = await response.json().catch(() => ({}))
+          throw new Error(apiErrorMessage(detail.detail, 'Remove background failed'))
+        }
+        const result = await response.json()
+        engine = result.engine || 'opencv-grabcut'
+        const cutout = new Image()
+        await new Promise((resolve, reject) => {
+          cutout.onload = resolve
+          cutout.onerror = reject
+          cutout.src = result.cutout
+        })
+        bitmap.getContext('2d').drawImage(cutout, 0, 0, w, h)
+        const alpha = bitmap.getContext('2d').getImageData(0, 0, w, h)
+        const maskData = maskCanvas.getContext('2d').createImageData(w, h)
+        for (let i = 0; i < alpha.data.length; i += 4) {
+          const a = alpha.data[i + 3]
+          maskData.data[i] = a
+          maskData.data[i + 1] = a
+          maskData.data[i + 2] = a
+          maskData.data[i + 3] = 255
+        }
+        maskCanvas.getContext('2d').putImageData(maskData, 0, 0)
+      } else {
+        const { matteWithModel } = await import('../ai/matte')
+        const result = await matteWithModel({
+          imageCanvas: plate,
+          model: String(model || storeCutout),
+        })
+        engine = result.engine || segmentModel
+        if (result.rgba_png_base64) {
+          const img = new Image()
+          await new Promise((resolve, reject) => {
+            img.onload = resolve
+            img.onerror = reject
+            img.src = `data:image/png;base64,${result.rgba_png_base64}`
+          })
+          bitmap.getContext('2d').drawImage(img, 0, 0, w, h)
+        } else if (result.mask_png_base64) {
+          const maskImg = new Image()
+          await new Promise((resolve, reject) => {
+            maskImg.onload = resolve
+            maskImg.onerror = reject
+            maskImg.src = `data:image/png;base64,${result.mask_png_base64}`
+          })
+          maskCanvas.getContext('2d').drawImage(maskImg, 0, 0, w, h)
+          const bctx = bitmap.getContext('2d')
+          bctx.drawImage(src, 0, 0)
+          bctx.globalCompositeOperation = 'destination-in'
+          bctx.drawImage(maskCanvas, 0, 0)
+          bctx.globalCompositeOperation = 'source-over'
+        } else {
+          throw new Error('Matte returned no mask')
+        }
+        // Derive mask from alpha when we only got RGBA.
+        if (result.rgba_png_base64) {
+          const alpha = bitmap.getContext('2d').getImageData(0, 0, w, h)
+          const maskData = maskCanvas.getContext('2d').createImageData(w, h)
+          for (let i = 0; i < alpha.data.length; i += 4) {
+            const a = alpha.data[i + 3]
+            maskData.data[i] = a
+            maskData.data[i + 1] = a
+            maskData.data[i + 2] = a
+            maskData.data[i + 3] = 255
+          }
+          maskCanvas.getContext('2d').putImageData(maskData, 0, 0)
+        }
+      }
+
+      const opaque = document.createElement('canvas')
+      opaque.width = w
+      opaque.height = h
+      opaque.getContext('2d').drawImage(src, 0, 0)
+
+      setElements((current) => current.map((item) => (
+        item.id !== el.id
+          ? item
+          : {
+            ...item,
+            bitmap,
+            sourceBitmap: opaque,
+            maskCanvas,
+            cleanup: null,
+            smart: true,
+            engine,
+          }
+      )))
+      setSelectedElements([el.id])
+      // Trim after paint so bounds match the new alpha (helper defined later in this render).
+      queueMicrotask(() => trimElementTransparentBounds(el.id))
+      setToast('Background removed from layer · base image untouched')
+    } catch (err) {
+      setToast(err?.message || 'Remove background failed')
+    } finally {
+      endBusy()
+    }
   }
 
   /** Build a movable layer from a full-canvas mask (SAM2 / MediaPipe / etc.). */
@@ -1494,7 +1824,8 @@ export function StudioProvider({ children }) {
   const runSam2Segment = async (point = null, { model } = {}) => {
     const canvas = canvasRef.current
     if (!canvas || !image) { setToast('Open an image first'); return }
-    setSegmenting(true)
+    if (!assertStudioIdle()) return
+    beginBusy('Segmenting…')
     try {
       const { segmentWithSam2 } = await import('../ai/sam2')
       const pt = point || { x: canvas.width / 2, y: canvas.height / 2 }
@@ -1542,101 +1873,47 @@ export function StudioProvider({ children }) {
     } catch (err) {
       setToast(err?.message || 'Segment failed')
     } finally {
-      setSegmenting(false)
+      endBusy()
     }
   }
 
-  /** Soft matte → new layer from the full canvas, or rematte a selected cutout in place. */
+  /**
+   * Select Subject / Remove BG.
+   * Remove BG remattes the selected cutout only — never rewrites the base image.
+   * @param {{ model?: string, method?: string, target?: 'canvas'|'selection' }} opts
+   */
   const runMatteCutout = async ({
-    model = 'rembg-isnet',
-    /** 'canvas' = always base image → new layer; 'selection' = selected cutout when present */
+    model,
+    method,
+    /** 'canvas' = Select Subject (near-full frame); 'selection' = Remove BG on selected cutout */
     target = 'canvas',
   } = {}) => {
     const canvas = canvasRef.current
     if (!canvas || !image) { setToast('Open an image first'); return }
-    const el = target === 'selection'
-      ? elements.find((e) => e.id === selectedElement && (e.sourceBitmap || e.bitmap))
-      : null
-    setSegmenting(true)
-    try {
-      const { matteWithModel } = await import('../ai/matte')
+    if (!assertStudioIdle()) return
+    const cutoutId = model || useStudioStore.getState().tools.cutoutModel || 'birefnet'
+    const req = { model: cutoutId, ...(method ? { method } : {}) }
 
-      // Remove BG on the selected cutout — rewrite that layer's mask / bitmap.
-      if (el) {
-        const src = el.sourceBitmap || el.bitmap
-        const result = await matteWithModel({ imageCanvas: src, model })
-        if (!result.mask_png_base64) throw new Error('No matte mask returned')
-        const maskImg = new Image()
-        await new Promise((resolve, reject) => {
-          maskImg.onload = resolve
-          maskImg.onerror = reject
-          maskImg.src = `data:image/png;base64,${result.mask_png_base64}`
-        })
-        const w = src.width
-        const h = src.height
-        const maskCanvas = document.createElement('canvas')
-        maskCanvas.width = w
-        maskCanvas.height = h
-        maskCanvas.getContext('2d').drawImage(maskImg, 0, 0, w, h)
-        const bitmap = document.createElement('canvas')
-        bitmap.width = w
-        bitmap.height = h
-        const bctx = bitmap.getContext('2d')
-        bctx.drawImage(src, 0, 0)
-        bctx.globalCompositeOperation = 'destination-in'
-        bctx.drawImage(maskCanvas, 0, 0)
-        bctx.globalCompositeOperation = 'source-over'
-        useStudioStore.getState().setCapabilities({ matte: true })
-        setElements((current) => current.map((item) => {
-          if (item.id !== el.id) return item
-          return {
-            ...item,
-            bitmap,
-            maskCanvas,
-            engine: result.engine || model,
-            name: item.name || 'Soft matte',
-          }
-        }))
-        selectDetectedCutout(el.id)
-        setToast(`Remove BG · ${result.engine || model} · ${el.name}`)
-        return
-      }
-
-      if (target === 'selection') {
-        setToast('Select a cutout layer to remove its background')
-        return
-      }
-
-      const result = await matteWithModel({ imageCanvas: canvas, model })
-      if (!result.mask_png_base64) throw new Error('No matte mask returned')
-      const maskCanvas = document.createElement('canvas')
-      const img = new Image()
-      await new Promise((resolve, reject) => {
-        img.onload = resolve
-        img.onerror = reject
-        img.src = `data:image/png;base64,${result.mask_png_base64}`
-      })
-      maskCanvas.width = img.naturalWidth
-      maskCanvas.height = img.naturalHeight
-      maskCanvas.getContext('2d').drawImage(img, 0, 0)
-      useStudioStore.getState().setCapabilities({ matte: true })
-      const layerId = addElementFromMask(maskCanvas, {
-        name: 'Soft matte',
-        engine: result.engine || model,
-      })
-      if (layerId) selectDetectedCutout(layerId)
-      setToast(`Matte · ${result.engine || model} · soft contour`)
-    } catch (err) {
-      setToast(err?.message || 'Matte failed')
-    } finally {
-      setSegmenting(false)
+    if (target === 'selection') {
+      return rematteSelectedLayer(req)
     }
+
+    // Select Subject — near-full frame (GrabCut still wants a thin BG rim around the subject).
+    const pad = 0.02
+    return extractElement(
+      { x: pad, y: pad, w: 1 - pad * 2, h: 1 - pad * 2 },
+      {
+        ...req,
+        name: 'Subject',
+      },
+    )
   }
 
   const runDepthForParallax = async ({ model = 'depth-anything-v2-small' } = {}) => {
     const canvas = canvasRef.current
     if (!canvas || !image) { setToast('Open an image first'); return }
-    setSegmenting(true)
+    if (!assertStudioIdle()) return
+    beginBusy('Estimating depth…')
     try {
       const { estimateDepth } = await import('../ai/depth')
       const result = await estimateDepth({ imageCanvas: canvas, model })
@@ -1665,14 +1942,15 @@ export function StudioProvider({ children }) {
     } catch (err) {
       setToast(err?.message || 'Depth failed')
     } finally {
-      setSegmenting(false)
+      endBusy()
     }
   }
 
   const runHumanSegment = async () => {
     const canvas = canvasRef.current
     if (!canvas || !image) { setToast('Open an image first'); return }
-    setSegmenting(true)
+    if (!assertStudioIdle()) return
+    beginBusy('Segmenting person…')
     try {
       const { segmentHuman } = await import('../ai/mediapipe')
       const { maskCanvas, engine } = await segmentHuman(canvas)
@@ -1681,7 +1959,7 @@ export function StudioProvider({ children }) {
     } catch (err) {
       setToast(err?.message || 'MediaPipe segment failed')
     } finally {
-      setSegmenting(false)
+      endBusy()
     }
   }
 
@@ -1697,7 +1975,8 @@ export function StudioProvider({ children }) {
   } = {}) => {
     const canvas = canvasRef.current
     if (!canvas || !image) { setToast('Open an image first'); return }
-    setSegmenting(true)
+    if (!assertStudioIdle()) return
+    beginBusy('Detecting body…')
     try {
       const { detectBodyAndJoints } = await import('../ai/mediapipe')
       const result = await detectBodyAndJoints(canvas, { segment })
@@ -1789,7 +2068,7 @@ export function StudioProvider({ children }) {
     } catch (err) {
       setToast(err?.message || 'Body / pose detect failed')
     } finally {
-      setSegmenting(false)
+      endBusy()
     }
   }
 
@@ -1855,7 +2134,8 @@ export function StudioProvider({ children }) {
     const detectEngine = engine || 'grounding_dino'
     const needsPrompt = detectEngine !== 'yolo' && detectEngine !== 'ultralytics'
     if (needsPrompt && !prompt?.trim()) { setToast('Enter a text prompt'); return }
-    setSegmenting(true)
+    if (!assertStudioIdle()) return
+    beginBusy('Detecting objects…')
     try {
       // Roles: SAM3 text→mask | DINO+SAM2 refine | YOLO (+ SAM2). Never SAM3 on top of DINO.
       const { detectWithGroundingDino } = await import('../ai/grounding-dino')
@@ -1931,7 +2211,7 @@ export function StudioProvider({ children }) {
     } catch (err) {
       setToast(err?.message || 'Text detect failed')
     } finally {
-      setSegmenting(false)
+      endBusy()
     }
   }
 
@@ -1999,7 +2279,8 @@ export function StudioProvider({ children }) {
       setToast('RIFE needs a multi-frame GIF or video — open one with at least 2 frames')
       return
     }
-    setSegmenting(true)
+    if (!assertStudioIdle()) return
+    beginBusy('Interpolating frames…')
     try {
       const { interpolateFrames } = await import('../ai/rife')
       const blobs = []
@@ -2022,7 +2303,7 @@ export function StudioProvider({ children }) {
     } catch (err) {
       setToast(err?.message || 'RIFE interpolate failed')
     } finally {
-      setSegmenting(false)
+      endBusy()
     }
   }
 
@@ -2598,16 +2879,14 @@ export function StudioProvider({ children }) {
       setToast('Open an image first')
       return
     }
-    if (ioLockRef.current || exporting || downloadBusy || scaleBusy) {
-      setToast('Wait for the current export or download to finish')
-      return
-    }
+    if (!assertStudioIdle()) return
     if (String(model).toLowerCase() === 'gfpgan') {
       throw new Error('GFPGAN slot — place weights under models/gfpgan/, or use Real-ESRGAN')
     }
     const gen = ++enhanceGenRef.current
     ioLockRef.current = true
     setScaleBusy(true)
+    setBusyLabel('Upscaling…')
     setToast('Upscaling…')
     try {
       // Always upscale the original source bitmap — not the composited preview canvas.
@@ -2655,6 +2934,7 @@ export function StudioProvider({ children }) {
       if (gen === enhanceGenRef.current) {
         ioLockRef.current = false
         setScaleBusy(false)
+        setBusyLabel('')
       }
     }
   }
@@ -2664,12 +2944,10 @@ export function StudioProvider({ children }) {
       setToast('Upscale an image first')
       return
     }
-    if (ioLockRef.current || exporting || downloadBusy || scaleBusy) {
-      setToast('Wait for the current export or download to finish')
-      return
-    }
+    if (!assertStudioIdle()) return
     ioLockRef.current = true
     setDownloadBusy(true)
+    setBusyLabel('Preparing PNG…')
     setToast('Preparing PNG…')
     let objectUrl = null
     try {
@@ -2693,6 +2971,7 @@ export function StudioProvider({ children }) {
       if (objectUrl) setTimeout(() => revokeBlobUrl(objectUrl), 1500)
       ioLockRef.current = false
       setDownloadBusy(false)
+      setBusyLabel('')
     }
   }
 
@@ -2708,24 +2987,32 @@ export function StudioProvider({ children }) {
   }
   const addOverlay = async (file) => {
     if (!file) return
-    const url = URL.createObjectURL(file), overlayImage = await imageFromUrl(url), id = newStudioId()
-    const overlay = {
-      id, name: file.name, image: overlayImage, url,
-      x: 50, y: 50, width: 30, scaleX: 100, scaleY: 100, rotation: 0, opacity: 100,
-      flipX: false, flipY: false, effects: { ...EFFECT_DEFAULTS }, visible: true,
-      anchorX: 50, anchorY: 50,
+    const blocked = uploadImageError(file)
+    if (blocked) { notifyError(blocked); return }
+    try {
+      const url = URL.createObjectURL(file)
+      const overlayImage = await imageFromUrl(url)
+      const id = newStudioId()
+      const overlay = {
+        id, name: file.name, image: overlayImage, url,
+        x: 50, y: 50, width: 30, scaleX: 100, scaleY: 100, rotation: 0, opacity: 100,
+        flipX: false, flipY: false, effects: { ...EFFECT_DEFAULTS }, visible: true,
+        anchorX: 50, anchorY: 50,
+      }
+      setOverlays((current) => insertInStack(current, overlay, layerInsertAt, selectedOverlay))
+      setSelectedOverlay(id)
+      setSelectedElements([])
+      setBaseImageSelected(false)
+      setArtboardSelected(false)
+      setEnhancedSelected(false)
+      setSelectedText(null)
+      setEffectTarget('Selected overlay')
+      setPlaying(false)
+      if (activeTab !== 'ai' && activeTab !== 'edit') goToWorkspace('motion')
+      notifySuccess(layerInsertAt === 'front' ? 'Image overlay added in front' : 'Image overlay added in back')
+    } catch (err) {
+      notifyError(err?.message || 'Could not add overlay image.')
     }
-    setOverlays((current) => insertInStack(current, overlay, layerInsertAt, selectedOverlay))
-    setSelectedOverlay(id)
-    setSelectedElements([])
-    setBaseImageSelected(false)
-    setArtboardSelected(false)
-    setEnhancedSelected(false)
-    setSelectedText(null)
-    setEffectTarget('Selected overlay')
-    setPlaying(false)
-    if (activeTab !== 'ai' && activeTab !== 'edit') goToWorkspace('motion')
-    setToast(layerInsertAt === 'front' ? 'Image overlay added in front' : 'Image overlay added in back')
   }
   const updateOverlay = (key, value) => setOverlays((current) => current.map((overlay) => {
     if (overlay.id !== selectedOverlay) return overlay
@@ -2897,7 +3184,7 @@ export function StudioProvider({ children }) {
   }
 
   const exportGif = async () => {
-    if (!image || exporting || ioLockRef.current || downloadBusy || scaleBusy) return
+    if (!image || !assertStudioIdle()) return
     if (frames > 240) { setToast('Reduce duration or FPS below 240 frames for browser export'); return }
     ioLockRef.current = true
     setExporting(true); setToast(''); setPlaying(false)
@@ -3017,7 +3304,12 @@ export function StudioProvider({ children }) {
     }
   }
 
-  useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(''), 3000); return () => clearTimeout(id) }, [toast])
+  useEffect(() => {
+    if (!toast?.message) return undefined
+    const ms = toast.type === 'error' ? 5200 : toast.type === 'warning' ? 4200 : 3000
+    const id = setTimeout(() => clearToast(), ms)
+    return () => clearTimeout(id)
+  }, [toast, clearToast])
 
   const stageStyle = { width: '100%', height: '100%' }
   const textBounds = (layer) => {
@@ -3033,8 +3325,10 @@ export function StudioProvider({ children }) {
     canvasRef, pixiCanvasRef, stageRef, fileRef, fontFileRef, overlayFileRef, compressGifRef,
     // state
     settings, setSettings, image, source, playing, setPlaying, progress, setProgress, exporting,
-    downloadBusy, scaleBusy,
-    dropActive, setDropActive, mobilePanel, setMobilePanel, toast, setToast, activeTab, goToWorkspace, zoom, setZoom, canvasZoom,
+    downloadBusy, scaleBusy, busyLabel, studioLocked,
+    dropActive, setDropActive, mobilePanel, setMobilePanel, toast, setToast,
+    notifySuccess, notifyError, notifyInfo, notifyWarning, clearToast,
+    activeTab, goToWorkspace, zoom, setZoom, canvasZoom,
     lockAspect, setLockAspect, setCanvasWidth, setCanvasHeight, useSourceSize, sourceAspect,
     elements, setElements, selectedElement, setSelectedElement, selectedElements, setSelectedElements,
     secondaryElements, layerInsertAt, setLayerInsertAt,

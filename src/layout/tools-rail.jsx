@@ -57,7 +57,7 @@ export function ToolsRail() {
   const {
     selectMode, setSelectMode, selectionTool, setSelectionTool,
     cancelSelection, setSelection, setSelectionPoints,
-    setPlaying, setMobilePanel, maskEditing, setMaskEditing, segmenting,
+    setPlaying, setMobilePanel, maskEditing, setMaskEditing, studioLocked, segmenting,
     selectedElement, setToast, setBaseImageSelected,
     toggleFlip, rotateSelection, selectionFlip,
     baseImageSelected, censorSelecting, setCensorSelecting,
@@ -66,6 +66,7 @@ export function ToolsRail() {
 
   const erasing = maskEditing && maskBrush.mode === 'Hide'
   const revealing = maskEditing && maskBrush.mode !== 'Hide'
+  const locked = Boolean(studioLocked)
 
   const activeId = censorSelecting
     ? CENSOR_TOOL
@@ -150,6 +151,7 @@ export function ToolsRail() {
         hint="Select and transform layers"
         icon={Move}
         active={activeId === MOVE_TOOL}
+        disabled={locked}
         onClick={activateMove}
       />
 
@@ -162,7 +164,7 @@ export function ToolsRail() {
           hint={tool.hint}
           icon={tool.icon}
           active={activeId === tool.id}
-          disabled={segmenting}
+          disabled={locked}
           onClick={() => activateSelection(tool.id)}
         />
       ))}
@@ -173,7 +175,7 @@ export function ToolsRail() {
         label="SAM2 segment"
         hint="AI object cutout (center point) → new layer"
         icon={Sparkles}
-        disabled={segmenting}
+        disabled={locked}
         onClick={() => {
           activateMove()
           setPlaying(false)
@@ -184,7 +186,7 @@ export function ToolsRail() {
         label="Human segment"
         hint="MediaPipe selfie segment → new layer"
         icon={User}
-        disabled={segmenting}
+        disabled={locked}
         onClick={() => {
           activateMove()
           setPlaying(false)
@@ -199,6 +201,7 @@ export function ToolsRail() {
         hint={flipHint}
         icon={FlipHorizontal2}
         active={hasTarget && selectionFlip.flipX}
+        disabled={locked}
         onClick={() => toggleFlip('x')}
       />
       <ToolButton
@@ -206,18 +209,21 @@ export function ToolsRail() {
         hint={flipHint}
         icon={FlipVertical2}
         active={hasTarget && selectionFlip.flipY}
+        disabled={locked}
         onClick={() => toggleFlip('y')}
       />
       <ToolButton
         label="Rotate −90°"
         hint="Rotate selected layer or base image"
         icon={RotateCcw}
+        disabled={locked}
         onClick={() => rotateSelection(-90)}
       />
       <ToolButton
         label="Rotate +90°"
         hint="Rotate selected layer or base image"
         icon={RotateCw}
+        disabled={locked}
         onClick={() => rotateSelection(90)}
       />
 
@@ -228,7 +234,7 @@ export function ToolsRail() {
         hint="Brush-delete wrong cutout pixels (hair/hand). Bounds shrink after each stroke."
         icon={Eraser}
         active={activeId === ERASE_TOOL}
-        disabled={segmenting}
+        disabled={locked}
         onClick={activateErase}
       />
       <ToolButton
@@ -236,7 +242,7 @@ export function ToolsRail() {
         hint="Reveal / restore mask pixels — options open in the properties panel"
         icon={Brush}
         active={activeId === MASK_TOOL}
-        disabled={segmenting}
+        disabled={locked}
         onClick={activateMask}
       />
       <ToolButton
@@ -244,7 +250,7 @@ export function ToolsRail() {
         hint="Draw a pixelate region — options open in the properties panel"
         icon={Grid3x3}
         active={activeId === CENSOR_TOOL}
-        disabled={segmenting}
+        disabled={locked}
         onClick={activateCensor}
       />
 

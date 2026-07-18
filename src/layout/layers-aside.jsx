@@ -2,25 +2,43 @@ import { useEffect, useRef, useState } from 'react'
 import { Frame, ImageIcon, Layers3, Maximize2, Type } from 'lucide-react'
 import { EmptyState, LayerRow } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
+import { useStudioStore } from '../store/studio-store'
 
 /**
  * Third sidebar — Photoshop-style layers (front at top · drag to reorder).
- * Image overlays, extracted layers, and text share this list as the source of truth.
+ * Layer stacks + selection live in Zustand; actions stay on useStudio().
  */
 export function LayersAside() {
+  const elements = useStudioStore((s) => s.project.elements)
+  const overlays = useStudioStore((s) => s.project.overlays)
+  const textLayers = useStudioStore((s) => s.project.textLayers)
+  const enhancedLayer = useStudioStore((s) => s.project.enhancedLayer)
+  const selectedElements = useStudioStore((s) => s.selection.selectedElements)
+  const selectedOverlay = useStudioStore((s) => s.selection.selectedOverlay)
+  const selectedText = useStudioStore((s) => s.selection.selectedText)
+  const baseImageSelected = useStudioStore((s) => s.selection.baseImageSelected)
+  const enhancedSelected = useStudioStore((s) => s.selection.enhancedSelected)
+  const artboardSelected = useStudioStore((s) => s.selection.artboardSelected)
+  const imageLocked = useStudioStore((s) => s.selection.imageLocked)
+  const imageVisible = useStudioStore((s) => s.selection.imageVisible)
+  const canvasLocked = useStudioStore((s) => s.selection.canvasLocked)
+  const setImageVisible = useStudioStore((s) => s.setImageVisible)
+  const setSelectedText = useStudioStore((s) => s.setSelectedText)
+  const setSelectedOverlay = useStudioStore((s) => s.setSelectedOverlay)
+  const setSelectMode = useStudioStore((s) => s.setSelectMode)
+  const setMaskEditing = useStudioStore((s) => s.setMaskEditing)
+  const setPlaying = useStudioStore((s) => s.setPlaying)
+
+  const selectedElement = selectedElements.length ? selectedElements[selectedElements.length - 1] : null
+
   const {
-    elements, selectedElements, selectedElement, selectLayer, selectBaseImage,
-    baseImageSelected, imageLocked, toggleImageLock,
-    imageVisible, setImageVisible,
-    enhancedLayer, enhancedSelected, selectEnhancedLayer,
-    updateEnhancedLayer, removeEnhancedLayer,
-    artboardSelected, selectArtboard, canvasLocked, toggleCanvasLock,
+    selectLayer, selectBaseImage, toggleImageLock,
+    selectEnhancedLayer, updateEnhancedLayer, removeEnhancedLayer,
+    selectArtboard, toggleCanvasLock,
     toggleElementLock, toggleElementVisible, removeElement, reorderElement,
-    overlays, selectedOverlay, selectOverlay, toggleOverlayVisible, removeOverlay, reorderOverlay,
-    textLayers, selectedText, setSelectedText, setPlaying, removeText, reorderText, toggleTextLock, updateText,
-    goToWorkspace,
-    setSelectMode, setMaskEditing,
-    clearLayerSelection, setSelectedOverlay,
+    selectOverlay, toggleOverlayVisible, removeOverlay, reorderOverlay,
+    removeText, reorderText, toggleTextLock, updateText,
+    goToWorkspace, clearLayerSelection,
   } = useStudio()
 
   const dragRef = useRef(null)

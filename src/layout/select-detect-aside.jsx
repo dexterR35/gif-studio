@@ -54,10 +54,7 @@ function pickReady(options, currentId) {
 export function SelectDetectAside() {
   const {
     image,
-    segmenting,
-    exporting,
-    downloadBusy,
-    scaleBusy,
+    studioLocked,
     runSam2Segment,
     runHumanSegment,
     runTextDetect,
@@ -107,7 +104,7 @@ export function SelectDetectAside() {
   useEffect(() => { setDetectEngine((id) => pickReady(detectEngines, id)) }, [detectEngines])
 
   const open = Boolean(image)
-  const locked = Boolean(busy || segmenting || exporting || downloadBusy || scaleBusy)
+  const locked = Boolean(busy || studioLocked)
   const detectNeedsPrompt = detectEngine !== 'yolo'
   const detectUsesSam2 = detectEngine === 'grounding_dino' || detectEngine === 'yolo'
   const detectModelOptions = detectEngine === 'sam3'

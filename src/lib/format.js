@@ -31,20 +31,25 @@ export const MAX_CANVAS = 8192
 /** Source upload limits (matches Python `validate_uploaded_image`). */
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 export const MAX_UPLOAD_DIMENSION = 5000
+
+/** Still-image uploads only — PNG / JPG / WEBP (backend + frontend). */
 export const ALLOWED_UPLOAD_TYPES = new Set([
-  'image/png', 'image/jpeg', 'image/gif',
-  'video/mp4', 'video/webm', 'video/quicktime',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
 ])
 export const ALLOWED_UPLOAD_EXTENSIONS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.mp4', '.webm', '.mov',
+  '.png', '.jpg', '.jpeg', '.webp',
 ])
+export const ALLOWED_UPLOAD_ACCEPT = 'image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp'
+export const UPLOAD_FORMAT_HINT = 'Only PNG, JPG, and WEBP images are allowed.'
 
 export const uploadImageError = (file) => {
   if (!file) return 'An image file is required.'
   const name = (file.name || '').toLowerCase()
   const ext = name.includes('.') ? `.${name.split('.').pop()}` : ''
   const typeOk = ALLOWED_UPLOAD_TYPES.has(file.type) || ALLOWED_UPLOAD_EXTENSIONS.has(ext)
-  if (!typeOk) return 'Only PNG, JPG, GIF, MP4, and WebM are allowed.'
+  if (!typeOk) return UPLOAD_FORMAT_HINT
   if (file.size > MAX_UPLOAD_BYTES) return 'File exceeds the 20 MB upload limit.'
   return null
 }

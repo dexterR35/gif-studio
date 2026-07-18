@@ -2,6 +2,7 @@ import { Outlet } from 'react-router-dom'
 import { FileImage, FolderOpen, ImagePlus, X } from 'lucide-react'
 import { useStudio } from '../context/studio-provider'
 import { cn } from '../lib/cn'
+import { ALLOWED_UPLOAD_ACCEPT } from '../lib/format'
 
 const TAB_TITLES = {
   ai: 'AI',
@@ -13,12 +14,13 @@ const TAB_TITLES = {
 export function ProjectAside() {
   const {
     mobilePanel, setMobilePanel, fileRef, dropActive, setDropActive,
-    loadFile, source, activeTab,
+    loadFile, source, activeTab, studioLocked,
   } = useStudio()
 
   const canReplace = activeTab === 'ai' || activeTab === 'motion'
   const hasSource = Boolean(source?.url)
   const tabTitle = TAB_TITLES[activeTab] || 'Project'
+  const openBlocked = studioLocked
 
   const empty = (
     <>
@@ -30,7 +32,7 @@ export function ProjectAside() {
         <FileImage className="mt-0.5 h-3.5 w-3.5 shrink-0 text-zinc-600" />
         <div className="min-w-0">
           <p className="truncate text-[12px] font-medium text-zinc-400">No image selected</p>
-          <p className="mt-0.5 text-[10px] text-zinc-600">PNG, JPG, or GIF</p>
+          <p className="mt-0.5 text-[10px] text-zinc-600">PNG, JPG, or WEBP</p>
         </div>
       </div>
     </>
@@ -76,12 +78,23 @@ export function ProjectAside() {
         {canReplace ? (
           <button
             type="button"
+            disabled={openBlocked}
             onClick={() => fileRef.current?.click()}
-            onDragOver={(e) => { e.preventDefault(); setDropActive(true) }}
+            onDragOver={(e) => {
+              if (openBlocked) return
+              e.preventDefault()
+              setDropActive(true)
+            }}
             onDragLeave={() => setDropActive(false)}
-            onDrop={(e) => { e.preventDefault(); setDropActive(false); loadFile(e.dataTransfer.files[0]) }}
+            onDrop={(e) => {
+              e.preventDefault()
+              setDropActive(false)
+              if (openBlocked) return
+              loadFile(e.dataTransfer.files[0])
+            }}
             className={cn(
               'focus-ring group w-full rounded-[12px] border border-dashed p-2.5 text-left transition',
+              openBlocked && 'pointer-events-none opacity-40',
               dropActive ? 'border-acid bg-acid/5' : 'border-white/[.12] hover:border-white/25',
             )}
           >
@@ -96,7 +109,8 @@ export function ProjectAside() {
           ref={fileRef}
           className="hidden"
           type="file"
-          accept="image/png,image/jpeg,image/gif,video/mp4,video/webm,.png,.jpg,.jpeg,.gif,.mp4,.webm"
+          accept={ALLOWED_UPLOAD_ACCEPT}
+          disabled={openBlocked}
           onChange={(e) => loadFile(e.target.files[0])}
         />
       </div>

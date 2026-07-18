@@ -348,7 +348,7 @@ export function PreviewStage() {
             <div className="absolute inset-0 z-10 grid place-items-center bg-zinc-900 px-6 text-center">
               <div>
                 <ImagePlus className="mx-auto h-8 w-8 text-zinc-700" />
-                <p className="mt-3 text-[12px] font-medium text-zinc-500">Open or drop a PNG, JPG, GIF, or MP4 to start</p>
+                <p className="mt-3 text-[12px] font-medium text-zinc-500">Open or drop a PNG, JPG, or WEBP to start</p>
               </div>
             </div>
           )}

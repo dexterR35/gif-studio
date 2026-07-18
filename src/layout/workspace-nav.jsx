@@ -20,14 +20,14 @@ const TABS = GIF_WORKSPACES.map((id) => ({
 }))
 
 export function WorkspaceNav() {
-  const { activeTab, goToWorkspace } = useStudio()
+  const { activeTab, goToWorkspace, studioLocked } = useStudio()
 
   return (
     <nav
       className="relative z-30 flex h-[54px] shrink-0 items-center justify-center border-b border-white/[.07] bg-panel/95 px-3 backdrop-blur-xl"
       aria-label="GIF workspaces"
     >
-      <WorkspaceTabs value={activeTab} onChange={goToWorkspace} tabs={TABS} />
+      <WorkspaceTabs value={activeTab} onChange={goToWorkspace} tabs={TABS} disabled={studioLocked} />
     </nav>
   )
 }

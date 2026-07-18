@@ -19,6 +19,12 @@ const MATTE_FALLBACK = [
   { id: 'rembg-isnet', label: 'rembg isnet' },
 ]
 
+const GRABCUT_OPTION = {
+  id: 'opencv-grabcut',
+  label: 'OpenCV GrabCut',
+  ready: true,
+}
+
 function optionLabel(m) {
   if (m.ready === false) {
     if (/\((missing|needs HF)/i.test(m.label)) return m.label
@@ -39,30 +45,31 @@ function BarBtn({
   icon: Icon,
   children,
   title,
-  square = false,
   className,
 }) {
+  const labeled = Boolean(children)
   return (
     <button
       type="button"
       title={title}
+      aria-label={title}
       disabled={disabled}
       onClick={onClick}
       className={cn(
         'inline-flex h-8 items-center justify-center gap-1.5 rounded-[var(--control-radius)]',
-        'border border-white/[.1] bg-control px-2.5 text-[11px] font-medium text-zinc-300',
-        'transition hover:bg-[var(--color-control-hover)] hover:text-zinc-100',
+        'border-0 bg-transparent text-zinc-300',
+        'transition hover:bg-acid/10 hover:text-zinc-100',
         'disabled:pointer-events-none disabled:opacity-35',
-        square && 'w-8 px-0',
+        labeled ? 'px-2.5 text-[11px] font-medium' : 'w-8 px-0',
         className,
       )}
     >
       {busy
-        ? <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin" />
+        ? <LoaderCircle className="h-4 w-4 shrink-0 animate-spin text-acid" />
         : Icon
-          ? <Icon className="h-3.5 w-3.5 shrink-0" />
+          ? <Icon className="h-4 w-4 shrink-0 text-acid" strokeWidth={1.75} />
           : null}
-      {children ? <span className="whitespace-nowrap">{children}</span> : null}
+      {labeled ? <span className="whitespace-nowrap">{children}</span> : null}
     </button>
   )
 }
@@ -70,10 +77,7 @@ function BarBtn({
 export function ContextualTaskBar() {
   const {
     image,
-    segmenting,
-    exporting,
-    downloadBusy,
-    scaleBusy,
+    studioLocked,
     selectMode,
     maskEditing,
     selectedElement,
@@ -82,18 +86,22 @@ export function ContextualTaskBar() {
     setToast,
   } = useStudio()
   const caps = useStudioStore((s) => s.capabilities)
+  const cutoutModel = useStudioStore((s) => s.tools.cutoutModel)
+  const setCutoutModel = useStudioStore((s) => s.setCutoutModel)
 
   const [busy, setBusy] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
-  const [matteModel, setMatteModel] = useState('birefnet')
   const rootRef = useRef(null)
 
-  const matteOptions = useMemo(
-    () => (caps.models?.matte?.length ? caps.models.matte : MATTE_FALLBACK),
-    [caps.models],
-  )
+  const cutoutOptions = useMemo(() => {
+    const matte = caps.models?.matte?.length ? caps.models.matte : MATTE_FALLBACK
+    const withoutGrab = matte.filter((m) => m.id !== GRABCUT_OPTION.id)
+    return [...withoutGrab, GRABCUT_OPTION]
+  }, [caps.models])
 
-  useEffect(() => { setMatteModel((id) => pickReady(matteOptions, id)) }, [matteOptions])
+  useEffect(() => {
+    setCutoutModel((id) => pickReady(cutoutOptions, id || 'birefnet'))
+  }, [cutoutOptions, setCutoutModel])
 
   useEffect(() => {
     if (!menuOpen) return undefined
@@ -116,9 +124,10 @@ export function ContextualTaskBar() {
     [elements, selectedElement],
   )
 
-  const locked = Boolean(busy || segmenting || exporting || downloadBusy || scaleBusy)
+  const locked = Boolean(busy || studioLocked)
   const hidden = !image || selectMode || maskEditing
-  const matteLabel = matteOptions.find((m) => m.id === matteModel)?.label || matteModel
+  const cutoutLabel = cutoutOptions.find((m) => m.id === cutoutModel)?.label || cutoutModel
+  const isGrabCut = cutoutModel === 'opencv-grabcut'
 
   const run = async (label, fn) => {
     setBusy(label)
@@ -149,9 +158,9 @@ export function ContextualTaskBar() {
           disabled={locked}
           busy={busy === 'SelectSubject'}
           icon={UserRound}
-          title={`Select subject · ${matteLabel}`}
+          title={`Select subject · ${cutoutLabel}`}
           onClick={() => run('SelectSubject', () => runMatteCutout({
-            model: matteModel,
+            model: cutoutModel,
             target: 'canvas',
           }))}
         >
@@ -163,10 +172,10 @@ export function ContextualTaskBar() {
           busy={busy === 'RemoveBG'}
           icon={ImageMinus}
           title={selectedCutout
-            ? `Remove background on “${selectedCutout.name}” · ${matteLabel}`
+            ? `Remove background on “${selectedCutout.name}” only · base stays untouched · ${cutoutLabel}`
             : 'Select a cutout layer first'}
           onClick={() => run('RemoveBG', () => runMatteCutout({
-            model: matteModel,
+            model: cutoutModel,
             target: 'selection',
           }))}
         >
@@ -174,24 +183,22 @@ export function ContextualTaskBar() {
         </BarBtn>
 
         <BarBtn
-          square
           disabled={locked}
           busy={busy === 'Matte'}
           icon={Sparkles}
-          title={`Soft matte → layer · ${matteLabel}`}
+          title={`${isGrabCut ? 'GrabCut' : 'Soft matte'} → layer · ${cutoutLabel}`}
           onClick={() => run('Matte', () => runMatteCutout({
-            model: matteModel,
+            model: cutoutModel,
             target: 'canvas',
           }))}
         />
 
         <div className="relative">
           <BarBtn
-            square
             disabled={locked}
             icon={MoreHorizontal}
-            title="More · soft matte model"
-            className={menuOpen ? 'border-acid/40 text-acid' : ''}
+            title="More · cutout engine"
+            className={menuOpen ? 'bg-acid/10 text-acid' : ''}
             onClick={() => setMenuOpen((v) => !v)}
           />
 
@@ -204,15 +211,15 @@ export function ContextualTaskBar() {
               role="menu"
             >
               <label className="block">
-                <span className="gs-label">Soft matte</span>
+                <span className="gs-label">Cutout engine</span>
                 <div className="gs-select-wrap">
                   <select
-                    value={matteModel}
+                    value={cutoutModel}
                     disabled={locked}
-                    onChange={(e) => setMatteModel(e.target.value)}
+                    onChange={(e) => setCutoutModel(e.target.value)}
                     className="gs-select focus-ring"
                   >
-                    {matteOptions.map((m) => (
+                    {cutoutOptions.map((m) => (
                       <option key={m.id} value={m.id} disabled={m.ready === false}>
                         {optionLabel(m)}
                       </option>
@@ -221,7 +228,9 @@ export function ContextualTaskBar() {
                 </div>
               </label>
               <p className="mt-2 text-[10px] leading-snug text-zinc-600">
-                Used by Select subject, Remove background, and the sparkle action.
+                {isGrabCut
+                  ? 'OpenCV GrabCut only — no rembg. Also used by the rectangle tool.'
+                  : 'Selected rembg matte only — GrabCut is a separate option, not a fallback.'}
               </p>
             </div>
           )}

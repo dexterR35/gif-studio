@@ -2,13 +2,16 @@ import { Cpu, ImagePlus } from 'lucide-react'
 import { Button, Section, SelectField, Slider } from '../components/ui'
 import { PRESETS } from '../lib/presets'
 import { EASING_OPTIONS } from '../lib/catalogs'
+import { ALLOWED_UPLOAD_ACCEPT } from '../lib/format'
 import { BASE_MOTION_ID } from '../lib/motion-effects'
 import { useStudio } from '../context/studio-provider'
+import { useStudioStore } from '../store/studio-store'
 
 export default function MotionPage() {
+  const settings = useStudioStore((s) => s.project.settings)
+  const setSelectedMotionEffect = useStudioStore((s) => s.setSelectedMotionEffect)
   const {
-    settings, update, applyPreset, setAmplitude, setSpeed, overlayFileRef, addOverlay,
-    setSelectedMotionEffect,
+    update, applyPreset, setAmplitude, setSpeed, overlayFileRef, addOverlay,
   } = useStudio()
 
   const onPresetChange = (name) => {
@@ -91,7 +94,7 @@ export default function MotionPage() {
         <input
           ref={overlayFileRef}
           type="file"
-          accept="image/*"
+          accept={ALLOWED_UPLOAD_ACCEPT}
           className="hidden"
           onChange={(e) => {
             addOverlay(e.target.files[0])

@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { Outlet } from 'react-router-dom'
-import { ExportModal, Toast } from '../components/ui'
+import { BusyOverlay, ExportModal, Toast } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
 import { LAYER_WORKSPACES } from '../lib/routes'
 import { InspectorAside } from './inspector-aside'
@@ -28,6 +28,7 @@ export function StudioLayout() {
     maskEditing, setMaskEditing, selectMode, setSelectMode, cancelSelection,
     censorSelecting, setCensorSelecting,
     activeTab, setPlaying, poseRig, image,
+    studioLocked, busyLabel, scaleBusy, downloadBusy, segmenting,
   } = useStudio()
 
   const isFocus = FOCUS_TABS.has(activeTab)
@@ -43,6 +44,12 @@ export function StudioLayout() {
     || maskEditing || selectMode || censorSelecting || jointsOpen || artboardSelected
     || (!effectsTab && (Boolean(selectedText) || baseImageSelected || selectedElements.length > 0 || Boolean(selectedOverlay)))
   )
+
+  const busyMessage = busyLabel
+    || (scaleBusy ? 'Upscaling…' : '')
+    || (downloadBusy ? 'Preparing PNG…' : '')
+    || (segmenting ? 'Working…' : '')
+    || 'Working…'
 
   const closeInspector = () => {
     clearLayerSelection()
@@ -132,6 +139,7 @@ export function StudioLayout() {
       </main>
 
       <ExportModal open={exporting} frames={frames} progress={progress} />
+      <BusyOverlay open={studioLocked && !exporting} message={busyMessage} />
       <Toast message={toast} />
     </div>
   )

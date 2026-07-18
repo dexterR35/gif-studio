@@ -25,19 +25,21 @@ export function ToggleGroup({ value, onChange, options, className }) {
   )
 }
 
-export function WorkspaceTabs({ tabs, value, onChange, className }) {
+export function WorkspaceTabs({ tabs, value, onChange, className, disabled = false }) {
   return (
     <div className={cn('flex w-full max-w-3xl items-center gap-1 rounded-xl border border-white/[.06] bg-black/20 p-0.5', className)}>
       {tabs.map(({ id, icon: Icon, label }) => (
         <button
           key={id}
           type="button"
+          disabled={disabled}
           onClick={() => onChange(id)}
           className={cn(
             'flex h-8 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-1 text-[8px] font-bold uppercase tracking-normal transition sm:px-2 sm:text-[10px] sm:tracking-[.08em]',
             value === id
               ? 'bg-acid text-black shadow-tab'
               : 'text-zinc-500 hover:bg-white/[.05] hover:text-white',
+            disabled && 'pointer-events-none opacity-40',
           )}
         >
           {Icon && <Icon className="hidden h-3.5 w-3.5 shrink-0 sm:block" />}
