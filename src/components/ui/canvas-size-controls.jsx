@@ -1,13 +1,13 @@
 import { Field } from './field'
 import { FormGrid } from './form'
 import { SelectField } from './select-field'
+import { Button } from './button'
 import { FIT_MODES } from '../../lib/catalogs'
-import { fmtBytes, MAX_CANVAS } from '../../lib/format'
+import { MAX_CANVAS } from '../../lib/format'
 import { cn } from '../../lib/cn'
 
 /**
- * Shared canvas + image resize controls (matches Python desktop sizing UX).
- * Shrinking width/height lowers estimated render memory (MB).
+ * Artboard size controls — independent from the base-image background layer.
  */
 export function CanvasSizeControls({
   width,
@@ -15,34 +15,47 @@ export function CanvasSizeControls({
   fit,
   sourceWidth,
   sourceHeight,
-  memoryBytes,
   onWidthChange,
   onHeightChange,
   onFitChange,
+  onMatchSource,
+  locked = false,
   max = MAX_CANVAS,
-  showFit = true,
+  showFit = false,
   className,
 }) {
   const sourceLabel = sourceWidth && sourceHeight ? `${sourceWidth} × ${sourceHeight} px` : '—'
   const atSource = sourceWidth > 0 && width === sourceWidth && height === sourceHeight
 
   return (
-    <div className={cn(className)}>
+    <div className={cn(className, locked && 'pointer-events-none opacity-40')}>
       <div className="mb-3 flex items-center justify-between gap-2 text-[10px] text-zinc-600">
-        <span>Source image <b className="text-zinc-400">{sourceLabel}</b></span>
-        {atSource && <span className="font-semibold text-acid/80">Original size</span>}
+        <span>Base image size <b className="text-zinc-400">{sourceLabel}</b></span>
+        {atSource && <span className="font-semibold text-acid/80">Matched</span>}
       </div>
 
       <FormGrid gap={3}>
-        <Field label="Canvas width" value={width} onChange={onWidthChange} min={1} max={max} suffix="px" />
-        <Field label="Canvas height" value={height} onChange={onHeightChange} min={1} max={max} suffix="px" />
+        <Field label="Artboard width" value={width} onChange={onWidthChange} min={1} max={max} suffix="px" />
+        <Field label="Artboard height" value={height} onChange={onHeightChange} min={1} max={max} suffix="px" />
       </FormGrid>
+
+      {onMatchSource && sourceWidth > 0 && sourceHeight > 0 && (
+        <Button
+          variant="soft"
+          full
+          className="mt-3 text-[10px]"
+          disabled={atSource || locked}
+          onClick={onMatchSource}
+        >
+          Match base image size
+        </Button>
+      )}
 
       {showFit && (
         <div className="mt-3">
           <SelectField
             label="Image fit"
-            info="Contain fits inside the canvas. Cover fills it. Stretch ignores aspect. Original size draws source pixels 1:1 (may crop)."
+            info="How the base image sits on the artboard. Contain fits inside. Cover fills. Stretch ignores aspect. Original size draws pixels 1:1."
             value={fit}
             onChange={onFitChange}
           >
@@ -50,16 +63,6 @@ export function CanvasSizeControls({
               <option key={mode}>{mode}</option>
             ))}
           </SelectField>
-        </div>
-      )}
-
-      {typeof memoryBytes === 'number' && (
-        <div className={cn(
-          'mt-3 rounded-xl border border-white/[.06] bg-black/15 px-3 py-2 text-[10px] leading-relaxed text-zinc-500',
-          memoryBytes > 1.8e9 && 'border-red-500/30 text-red-300',
-        )}>
-          Render memory <b className="text-zinc-300">{fmtBytes(memoryBytes)}</b>
-          <span className="text-zinc-600"> · {width} × {height} × frames · shrink canvas to reduce MB</span>
         </div>
       )}
     </div>

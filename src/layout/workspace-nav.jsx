@@ -1,12 +1,13 @@
-import { Film, Settings2, SlidersHorizontal, Sparkles, Type } from 'lucide-react'
+import { Film, Settings2, SlidersHorizontal, Sparkles, Type, Wand2 } from 'lucide-react'
 import { WorkspaceTabs } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
 import { GIF_WORKSPACES } from '../lib/routes'
 
 const TAB_META = {
+  ai: { icon: Wand2, label: 'AI' },
   motion: { icon: Sparkles, label: 'Motion' },
-  text: { icon: Type, label: 'Text' },
   edit: { icon: SlidersHorizontal, label: 'Effects' },
+  text: { icon: Type, label: 'Text' },
   timeline: { icon: Film, label: 'Timeline' },
   output: { icon: Settings2, label: 'Export' },
 }

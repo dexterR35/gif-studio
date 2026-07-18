@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { StudioProvider } from './context/studio-provider'
 import { StudioLayout } from './layout/studio-layout'
+import AiPage from './pages/ai-page'
 import MotionPage from './pages/motion-page'
 import TextPage from './pages/text-page'
 import EditPage from './pages/edit-page'
@@ -13,7 +14,8 @@ function GifApp() {
     <StudioProvider>
       <Routes>
         <Route element={<StudioLayout />}>
-          <Route index element={<Navigate to="motion" replace />} />
+          <Route index element={<Navigate to="ai" replace />} />
+          <Route path="ai" element={<AiPage />} />
           <Route path="motion" element={<MotionPage />} />
           <Route path="elements" element={<Navigate to="../motion" replace />} />
           <Route path="text" element={<TextPage />} />
@@ -21,7 +23,7 @@ function GifApp() {
           <Route path="edit" element={<EditPage />} />
           <Route path="timeline" element={<TimelinePage />} />
           <Route path="output" element={<OutputPage />} />
-          <Route path="preview" element={<Navigate to="../motion" replace />} />
+          <Route path="preview" element={<Navigate to="../ai" replace />} />
         </Route>
       </Routes>
     </StudioProvider>
@@ -32,10 +34,10 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path={ROUTES.home} element={<Navigate to={ROUTES.gif.motion} replace />} />
+        <Route path={ROUTES.home} element={<Navigate to={ROUTES.gif.ai} replace />} />
         <Route path={`${ROUTES.gif.root}/*`} element={<GifApp />} />
-        <Route path="/preview" element={<Navigate to={ROUTES.gif.motion} replace />} />
-        <Route path="*" element={<Navigate to={ROUTES.gif.motion} replace />} />
+        <Route path="/preview" element={<Navigate to={ROUTES.gif.ai} replace />} />
+        <Route path="*" element={<Navigate to={ROUTES.gif.ai} replace />} />
       </Routes>
     </BrowserRouter>
   )

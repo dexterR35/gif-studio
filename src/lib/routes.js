@@ -3,6 +3,7 @@ export const ROUTES = {
   home: '/',
   gif: {
     root: '/gif',
+    ai: '/gif/ai',
     motion: '/gif/motion',
     text: '/gif/text',
     edit: '/gif/edit',
@@ -11,19 +12,24 @@ export const ROUTES = {
   },
 }
 
+/** Tab order: AI → Motion (connected), then Effects (image processing), Text, Timeline, Export. */
 export const GIF_WORKSPACES = [
+  'ai',
   'motion',
-  'text',
   'edit',
+  'text',
   'timeline',
   'output',
 ]
 
-export function gifWorkspacePath(workspace = 'motion') {
+/** Workspaces that keep layers + inspector (not full-width focus panels). */
+export const LAYER_WORKSPACES = new Set(['ai', 'motion', 'edit', 'text'])
+
+export function gifWorkspacePath(workspace = 'ai') {
   return `/gif/${workspace}`
 }
 
 export function workspaceFromPath(pathname) {
   const match = pathname.match(/^\/gif\/([^/]+)/)
-  return match?.[1] && GIF_WORKSPACES.includes(match[1]) ? match[1] : 'motion'
+  return match?.[1] && GIF_WORKSPACES.includes(match[1]) ? match[1] : 'ai'
 }

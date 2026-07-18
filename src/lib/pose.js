@@ -53,6 +53,51 @@ export const POSE_RIG_DEFAULT = {
   driveMotion: true,
   score: 0,
   engine: null,
+  /** Opens the joint animation inspector after detect. */
+  panelOpen: false,
+  selectedJoint: null,
+  /**
+   * Per-joint clip keys — offsets in normalized canvas units (0–1).
+   * Interpolated from start → end across the clip (progress 0–1).
+   * { [jointName]: { startDx, startDy, endDx, endDy } }
+   */
+  jointKeys: {},
+}
+
+/** Ease in-out for production-feeling joint motion. */
+export function easeInOutCubic(t) {
+  const x = Math.max(0, Math.min(1, t))
+  return x < 0.5 ? 4 * x * x * x : 1 - ((-2 * x + 2) ** 3) / 2
+}
+
+/** Sample start→end offset for one joint at clip progress (0–1). */
+export function sampleJointKey(key, progress = 0) {
+  if (!key) return { dx: 0, dy: 0 }
+  const u = easeInOutCubic(progress)
+  return {
+    dx: (key.startDx ?? 0) * (1 - u) + (key.endDx ?? 0) * u,
+    dy: (key.startDy ?? 0) * (1 - u) + (key.endDy ?? 0) * u,
+  }
+}
+
+/** Return joints with keyed offsets applied at clip progress. */
+export function applyJointKeys(joints, jointKeys = {}, progress = 0) {
+  if (!joints?.length) return joints || []
+  return joints.map((j) => {
+    const key = jointKeys[j.name]
+    if (!key) return j
+    const { dx, dy } = sampleJointKey(key, progress)
+    if (!dx && !dy) return j
+    return {
+      ...j,
+      x: Math.max(0, Math.min(1, j.x + dx)),
+      y: Math.max(0, Math.min(1, j.y + dy)),
+    }
+  })
+}
+
+export function emptyJointKey() {
+  return { startDx: 0, startDy: 0, endDx: 0, endDy: 0 }
 }
 
 export function jointByName(joints, name) {
@@ -137,6 +182,7 @@ export function drawPoseSkeleton(ctx, joints, {
   lineWidth = 2,
   jointRadius = 3.5,
   alpha = 0.92,
+  highlight = null,
 } = {}) {
   if (!joints?.length || !width || !height) return
   const byIndex = new Map(joints.map((j) => [j.index, j]))
@@ -162,16 +208,19 @@ export function drawPoseSkeleton(ctx, joints, {
   for (const j of joints) {
     if ((j.score ?? 1) < 0.25) continue
     const key = POSE_KEY_JOINTS.includes(j.name)
-    const r = key ? jointRadius : jointRadius * 0.65
+    const selected = highlight && j.name === highlight
+    const r = selected ? jointRadius * 1.55 : key ? jointRadius : jointRadius * 0.65
     ctx.beginPath()
     ctx.arc(j.x * width, j.y * height, r, 0, Math.PI * 2)
+    ctx.fillStyle = selected ? '#ffffff' : color
     ctx.fill()
-    if (key) {
-      ctx.strokeStyle = 'rgba(0,0,0,0.55)'
-      ctx.lineWidth = 1
+    if (key || selected) {
+      ctx.strokeStyle = selected ? color : 'rgba(0,0,0,0.55)'
+      ctx.lineWidth = selected ? 2 : 1
       ctx.stroke()
       ctx.strokeStyle = color
       ctx.lineWidth = lineWidth
+      ctx.fillStyle = color
     }
   }
   ctx.restore()

@@ -1,9 +1,10 @@
-import { Crosshair, ImagePlus, Info, Pause, Play } from 'lucide-react'
+import { Crosshair, ImagePlus, Pause, Play } from 'lucide-react'
 import { useMemo } from 'react'
 import { Button, CanvasViewport, StageHint, Switch, ZoomControls } from '../components/ui'
 import { EffectTimeline } from '../components/studio/effect-timeline'
 import { StudioKonvaStage } from '../engine/konva-editor'
 import { fmtBytes, MAX_CANVAS, nice, clampNice } from '../lib/format'
+import { applyJointKeys } from '../lib/pose'
 import { useStudio } from '../context/studio-provider'
 import { cn } from '../lib/cn'
 
@@ -23,7 +24,7 @@ export function PreviewStage() {
     gpuPreview, poseRig,
   } = useStudio()
 
-  const canSelectLayers = activeTab === 'motion' || activeTab === 'text'
+  const canSelectLayers = activeTab === 'ai' || activeTab === 'motion' || activeTab === 'edit' || activeTab === 'text'
   const interacting = selectMode || maskEditing || censorSelecting
   const showKonva = Boolean(image) && !playing
   const showPixi = Boolean(image) && playing && gpuPreview
@@ -89,8 +90,7 @@ export function PreviewStage() {
   const handleKonvaSelect = ({ kind, id, additive }) => {
     if (interacting || playing) return
     if (kind === 'image') {
-      if (!imageLocked) selectBaseImage()
-      else clearSelection()
+      selectBaseImage()
       return
     }
     if (kind === 'element') {
@@ -108,7 +108,7 @@ export function PreviewStage() {
     }
   }
 
-  const handleImageTransform = ({ centerX, centerY, boxW, boxH, rotation }) => {
+  const handleImageTransform = ({ centerX, centerY, boxW, boxH, rotation, pivotX, pivotY }) => {
     // Reverse imageTransformBox at t≈progress: derive offsets + scale from fitted unscaled size.
     const iw = source?.width || settings.width
     const ih = source?.height || settings.height
@@ -142,6 +142,9 @@ export function PreviewStage() {
       scaleEnd: scalePct,
       rotateStart: rot,
       rotateEnd: rot,
+      ...(typeof pivotX === 'number' && typeof pivotY === 'number'
+        ? { anchorX: nice(pivotX * 100, 1), anchorY: nice(pivotY * 100, 1) }
+        : {}),
     }))
   }
 
@@ -260,6 +263,7 @@ export function PreviewStage() {
                 height={settings.height}
                 sourceUrl={source?.url}
                 imageTransformBox={imageTransformBox}
+                imageAnchor={{ x: settings.anchorX ?? 50, y: settings.anchorY ?? 50 }}
                 imageLocked={imageLocked}
                 imageEdits={imageEdits}
                 background={settings.background}
@@ -273,7 +277,7 @@ export function PreviewStage() {
                 interactive={!interacting && canSelectLayers}
                 selection={interacting ? selection : null}
                 selectionPoints={interacting ? selectionPoints : []}
-                poseJoints={poseRig.joints || []}
+                poseJoints={applyJointKeys(poseRig.joints || [], poseRig.jointKeys, progress)}
                 showPose={Boolean(poseRig.visible && poseRig.joints?.length)}
                 overlayBounds={overlayBounds}
                 textBounds={textBounds}
@@ -369,19 +373,16 @@ export function PreviewStage() {
 
         {activeTab === 'timeline' && <EffectTimeline />}
 
-        <div className="mt-3 flex items-center justify-between gap-4 border-t border-white/[.05] pt-3 text-[10px] text-zinc-600">
-          <div className="flex gap-4">
-            <span><b className="text-zinc-400">{frames}</b> frames</span>
-            <span title={`GIF delays: ${[...new Set(frameDelays)].join('/')} ms`}>
-              <b className="text-zinc-400">{actualFps.toFixed(2)}</b> real fps
-            </span>
-            <span className="hidden sm:inline">
-              <b className="text-zinc-400">{settings.width} × {settings.height}</b> px
-            </span>
-          </div>
-          <div className={`flex items-center gap-1.5 ${memory > 1.8e9 ? 'text-red-400' : ''}`}>
-            <Info className="h-3.5 w-3.5" /> {fmtBytes(memory)} render memory
-          </div>
+        <div
+          className={`mt-3 border-t border-white/[.05] pt-3 text-[10px] leading-relaxed text-zinc-500 ${
+            memory > 1.8e9 ? 'text-red-300' : ''
+          }`}
+          title={frameDelays?.length ? `GIF delays: ${[...new Set(frameDelays)].join('/')} ms · ${actualFps.toFixed(2)} real fps` : undefined}
+        >
+          Render memory <b className={memory > 1.8e9 ? 'text-red-300' : 'text-zinc-300'}>{fmtBytes(memory)}</b>
+          <span className="text-zinc-600">
+            {' '}· {settings.width} × {settings.height} × {frames} frames · shrink canvas to reduce MB
+          </span>
         </div>
       </div>
     </section>

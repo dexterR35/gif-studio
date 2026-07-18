@@ -35,12 +35,13 @@ export function LayerRow({
   onToggleLock,
   onToggleVisible,
   onRemove,
-  /** Pointer drag handle — same idea as timeline clip drag. */
+  /** Pointer drag handle — reorder is driven by LayersAside window listeners. */
   onDragStart,
-  onDragMove,
   onDragEnd,
   dragging = false,
   dropTarget = false,
+  layerKind,
+  layerId,
   className,
 }) {
   const canDrag = Boolean(onDragStart)
@@ -49,6 +50,8 @@ export function LayerRow({
     <Card
       as="div"
       selected={selected}
+      data-layer-kind={layerKind || undefined}
+      data-layer-id={layerId || undefined}
       className={cn(
         'flex flex-col gap-1 transition',
         dragging && 'opacity-55 ring-1 ring-acid/40',
@@ -67,14 +70,7 @@ export function LayerRow({
               event.preventDefault()
               event.stopPropagation()
               onDragStart?.(event)
-              event.currentTarget.setPointerCapture?.(event.pointerId)
             }}
-            onPointerMove={(event) => onDragMove?.(event)}
-            onPointerUp={(event) => {
-              onDragEnd?.(event)
-              try { event.currentTarget.releasePointerCapture?.(event.pointerId) } catch { /* ignore */ }
-            }}
-            onPointerCancel={(event) => onDragEnd?.(event)}
           >
             <GripVertical className="h-3.5 w-3.5" />
           </button>

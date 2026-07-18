@@ -1,14 +1,9 @@
-import { useState } from 'react'
 import {
   AlignCenter,
   AlignLeft,
   AlignRight,
-  ArrowDown,
-  ArrowUp,
-  ChevronsDown,
-  ChevronsUp,
+  Crosshair,
   Lock,
-  Move,
   Unlock,
   Upload,
 } from 'lucide-react'
@@ -20,7 +15,6 @@ import {
   FormGrid,
   Hint,
   RangeEnds,
-  RotateControls,
   Section,
   SelectField,
   Slider,
@@ -29,44 +23,128 @@ import {
   Textarea,
   ToggleGroup,
 } from '../components/ui'
+import { JointAnimPanel } from '../components/studio/joint-anim-panel'
 import { useStudio } from '../context/studio-provider'
-import { LAYER_MOTION_OPTIONS } from '../lib/catalogs'
+import { FIT_MODES, LAYER_MOTION_OPTIONS } from '../lib/catalogs'
 import { cn } from '../lib/cn'
 import { SecondaryAside } from './secondary-aside'
 
-const POSITION_AXES = {
-  X: { startKey: 'xStart', endKey: 'xEnd', min: -100, max: 100, suffix: '%', label: 'X position' },
-  Y: { startKey: 'yStart', endKey: 'yEnd', min: -100, max: 100, suffix: '%', label: 'Y position' },
-  Rotate: { startKey: 'rotateStart', endKey: 'rotateEnd', min: -180, max: 180, suffix: '°', label: 'Rotation' },
+function TransformFields({
+  rotation,
+  opacity,
+  onRotation,
+  onOpacity,
+  anchorX,
+  anchorY,
+  onAnchor,
+  onResetAnchor,
+  disabled = false,
+  rotationMin = -360,
+  rotationMax = 360,
+}) {
+  const ax = anchorX ?? 50
+  const ay = anchorY ?? 50
+  const centered = ax === 50 && ay === 50
+
+  return (
+    <Section
+      title="Transform"
+      info="Rotation, scale, and flip pivot around the anchor point. Drag handles on the stage or the crosshair on the preview."
+      open
+    >
+      <div className={disabled ? 'pointer-events-none opacity-40' : undefined}>
+        <Slider
+          className="gs-row"
+          label="Rotation"
+          suffix="°"
+          min={rotationMin}
+          max={rotationMax}
+          value={rotation}
+          onChange={onRotation}
+        />
+        <Slider
+          className="gs-row"
+          label="Opacity"
+          suffix="%"
+          min={0}
+          max={100}
+          value={opacity}
+          onChange={onOpacity}
+        />
+        <Slider
+          className="mt-2 gs-row"
+          label="Anchor X"
+          suffix="%"
+          min={0}
+          max={100}
+          step={0.1}
+          value={ax}
+          onChange={(v) => onAnchor('anchorX', v)}
+        />
+        <Slider
+          className="gs-row"
+          label="Anchor Y"
+          suffix="%"
+          min={0}
+          max={100}
+          step={0.1}
+          value={ay}
+          onChange={(v) => onAnchor('anchorY', v)}
+        />
+        <Button
+          variant="soft"
+          full
+          className="mt-2 text-[10px]"
+          disabled={centered}
+          onClick={onResetAnchor}
+        >
+          <Crosshair className="h-3.5 w-3.5" />
+          Reset anchor to center
+        </Button>
+      </div>
+    </Section>
+  )
 }
 
-function ArrangeButtons({ canForward, canBackward, onMove }) {
+function ArtboardPanel() {
+  const {
+    settings, update, source, setCanvasWidth, setCanvasHeight, useSourceSize,
+    canvasLocked, toggleCanvasLock,
+  } = useStudio()
+
   return (
-    <FormGrid gap={2}>
-      <Button disabled={!canForward} onClick={() => onMove('front')}>
-        <ChevronsUp className="h-3.5 w-3.5" />To front
-      </Button>
-      <Button disabled={!canForward} onClick={() => onMove(1)}>
-        <ArrowUp className="h-3.5 w-3.5" />Forward
-      </Button>
-      <Button disabled={!canBackward} onClick={() => onMove(-1)}>
-        <ArrowDown className="h-3.5 w-3.5" />Backward
-      </Button>
-      <Button disabled={!canBackward} onClick={() => onMove('back')}>
-        <ChevronsDown className="h-3.5 w-3.5" />To back
-      </Button>
-    </FormGrid>
+    <>
+      <Section title="Artboard" info="Output board size. Separate from the base-image background layer. Not on the timeline." open>
+        <div className="gs-chip-row stretch mb-3">
+          <button
+            type="button"
+            onClick={toggleCanvasLock}
+            className={cn('gs-chip focus-ring', canvasLocked && 'is-active')}
+          >
+            {canvasLocked ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
+            {canvasLocked ? 'Unlock' : 'Lock'}
+          </button>
+        </div>
+        <CanvasSizeControls
+          width={settings.width}
+          height={settings.height}
+          sourceWidth={source?.width || 0}
+          sourceHeight={source?.height || 0}
+          onWidthChange={setCanvasWidth}
+          onHeightChange={setCanvasHeight}
+          onMatchSource={useSourceSize}
+          locked={canvasLocked}
+          showFit={false}
+        />
+      </Section>
+    </>
   )
 }
 
 function BaseTransformPanel() {
   const {
-    settings, setSettings, update, imageLocked, toggleImageLock,
-    baseImageSelected, selectBaseImage, setBaseImageSelected,
-    source, setCanvasWidth, setCanvasHeight, memory,
+    settings, setSettings, update, imageLocked, resetMotionAnchor,
   } = useStudio()
-  const [positionAxis, setPositionAxis] = useState('X')
-  const axis = POSITION_AXES[positionAxis]
 
   const setBoth = (startKey, endKey, value) => {
     setSettings((current) => ({ ...current, [startKey]: value, [endKey]: value }))
@@ -74,58 +152,34 @@ function BaseTransformPanel() {
 
   return (
     <>
-      <Section title="Base image" info="Select the background on the canvas or layers panel." open>
-        <div className="gs-chip-row stretch">
-          <button
-            type="button"
-            onClick={() => {
-              if (baseImageSelected) setBaseImageSelected(false)
-              else selectBaseImage()
-            }}
-            className={cn('gs-chip focus-ring', baseImageSelected && 'is-active')}
+      <Section title="Background" info="First uploaded image — sits on the artboard like a Photoshop background layer." open>
+        <div className={imageLocked ? 'pointer-events-none opacity-40' : undefined}>
+          <SelectField
+            label="Image fit"
+            info="How this background sits on the artboard."
+            value={settings.fit}
+            onChange={(v) => update('fit', v)}
           >
-            <Move className="h-3 w-3" />
-            Select
-          </button>
-          <button
-            type="button"
-            onClick={toggleImageLock}
-            className={cn('gs-chip focus-ring', imageLocked && 'is-active')}
-          >
-            {imageLocked ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
-            {imageLocked ? 'Unlock' : 'Lock'}
-          </button>
+            {FIT_MODES.map((mode) => (
+              <option key={mode}>{mode}</option>
+            ))}
+          </SelectField>
         </div>
       </Section>
 
-      <Section title="Canvas" info="Resize the output canvas. Smaller canvas = less render memory." open>
-        <CanvasSizeControls
-          width={settings.width}
-          height={settings.height}
-          fit={settings.fit}
-          sourceWidth={source?.width || 0}
-          sourceHeight={source?.height || 0}
-          memoryBytes={memory}
-          onWidthChange={setCanvasWidth}
-          onHeightChange={setCanvasHeight}
-          onFitChange={(v) => update('fit', v)}
-        />
-      </Section>
-
-      <Section title="Transform" open>
-        <div className={imageLocked ? 'pointer-events-none opacity-40' : ''}>
-          <Slider className="gs-row" label="Scale" suffix="%" min={5} max={300} value={settings.scaleStart} onChange={(v) => setBoth('scaleStart', 'scaleEnd', v)} />
-          <div className="gs-row">
-            <SelectField label="Position" value={positionAxis} onChange={setPositionAxis}>
-              <option value="X">X</option>
-              <option value="Y">Y</option>
-              <option value="Rotate">Rotate</option>
-            </SelectField>
-            <Slider className="mt-2" label={axis.label} suffix={axis.suffix} min={axis.min} max={axis.max} value={settings[axis.startKey]} onChange={(v) => setBoth(axis.startKey, axis.endKey, v)} />
-          </div>
-          <Slider className="gs-row" label="Opacity" suffix="%" min={0} max={100} value={settings.opacityStart} onChange={(v) => setBoth('opacityStart', 'opacityEnd', v)} />
-        </div>
-      </Section>
+      <TransformFields
+        rotation={settings.rotateStart}
+        opacity={settings.opacityStart}
+        onRotation={(v) => setBoth('rotateStart', 'rotateEnd', v)}
+        onOpacity={(v) => setBoth('opacityStart', 'opacityEnd', v)}
+        anchorX={settings.anchorX}
+        anchorY={settings.anchorY}
+        onAnchor={(key, value) => update(key, value)}
+        onResetAnchor={resetMotionAnchor}
+        disabled={imageLocked}
+        rotationMin={-180}
+        rotationMax={180}
+      />
     </>
   )
 }
@@ -220,56 +274,38 @@ function SelectionOptionsPanel() {
 }
 
 function ElementTransformPanel({ el }) {
-  const { updateElement, moveElement, elements } = useStudio()
-  const index = elements.findIndex((item) => item.id === el.id)
-  const canForward = index >= 0 && index < elements.length - 1
-  const canBackward = index > 0
+  const { updateElement, resetMotionAnchor, activeTab } = useStudio()
+  const showMotion = activeTab === 'motion' || activeTab === 'ai'
 
   return (
     <>
-      <Section title="Transform" info="Drag handles on the stage to move, scale, and rotate." open>
-        <div className={`space-y-1 ${el.locked ? 'pointer-events-none opacity-40' : ''}`}>
-          <Slider label="X position" value={Math.round(el.x * 1000) / 10} onChange={(v) => updateElement('x', v / 100)} min={-100} max={200} step={0.1} />
-          <Slider label="Y position" value={Math.round(el.y * 1000) / 10} onChange={(v) => updateElement('y', v / 100)} min={-100} max={200} step={0.1} />
-          <Slider label="Box width" value={Math.round(el.w * 1000) / 10} onChange={(v) => updateElement('w', v / 100)} min={1} max={300} step={0.1} />
-          <Slider label="Box height" value={Math.round(el.h * 1000) / 10} onChange={(v) => updateElement('h', v / 100)} min={1} max={300} step={0.1} />
-          <Slider label="Scale X" value={el.scaleX} onChange={(v) => updateElement('scaleX', v)} min={1} max={500} />
-          <Slider label="Scale Y" value={el.scaleY} onChange={(v) => updateElement('scaleY', v)} min={1} max={500} />
-          <Slider label="Rotation" value={el.rotation} onChange={(v) => updateElement('rotation', v)} min={-360} max={360} />
-          <Slider label="Opacity" value={el.opacity} onChange={(v) => updateElement('opacity', v)} min={0} max={100} />
-        </div>
-        <RotateControls
-          className={`mt-3 ${el.locked ? 'pointer-events-none opacity-40' : ''}`}
-          value={el.rotation}
-          onChange={(v) => updateElement('rotation', v)}
-        />
-        <FormGrid className={`mt-3 ${el.locked ? 'pointer-events-none opacity-40' : ''}`} gap={3}>
-          <Switch label="Flip H" checked={el.flipX} onChange={(v) => updateElement('flipX', v)} />
-          <Switch label="Flip V" checked={el.flipY} onChange={(v) => updateElement('flipY', v)} />
-        </FormGrid>
-      </Section>
+      <TransformFields
+        rotation={el.rotation}
+        opacity={el.opacity}
+        onRotation={(v) => updateElement('rotation', v)}
+        onOpacity={(v) => updateElement('opacity', v)}
+        anchorX={el.anchorX}
+        anchorY={el.anchorY}
+        onAnchor={(key, value) => updateElement(key, value)}
+        onResetAnchor={resetMotionAnchor}
+        disabled={el.locked}
+      />
 
-      <Section title="Arrange" info="Stack order within extracted layers. Front draws on top." open>
-        <ArrangeButtons
-          canForward={canForward}
-          canBackward={canBackward}
-          onMove={(dir) => moveElement(el.id, dir)}
-        />
-      </Section>
-
-      <Section title="Motion" open>
-        <div className={el.locked ? 'pointer-events-none opacity-40' : ''}>
-          <SelectField label="Animation" value={el.motion} onChange={(v) => updateElement('motion', v)}>
-            {LAYER_MOTION_OPTIONS.map((x) => (
-              <option key={x}>{x}</option>
-            ))}
-          </SelectField>
-          <Slider className="mt-3 gs-row" label="Amount" suffix="%" min={0} max={40} value={el.amplitude} onChange={(v) => updateElement('amplitude', v)} />
-          <Slider className="gs-row" label="Speed" suffix="×" min={0.1} max={8} step={0.1} value={el.speed} onChange={(v) => updateElement('speed', v)} />
-          <Slider className="gs-row" label="Parallax depth" suffix="%" min={0} max={100} value={el.depth ?? 50} onChange={(v) => updateElement('depth', v)} />
-          <RangeEnds className="mt-1" left="Far" right="Near" />
-        </div>
-      </Section>
+      {showMotion && (
+        <Section title="Motion" open>
+          <div className={el.locked ? 'pointer-events-none opacity-40' : ''}>
+            <SelectField label="Animation" value={el.motion} onChange={(v) => updateElement('motion', v)}>
+              {LAYER_MOTION_OPTIONS.map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </SelectField>
+            <Slider className="mt-3 gs-row" label="Amount" suffix="%" min={0} max={40} value={el.amplitude} onChange={(v) => updateElement('amplitude', v)} />
+            <Slider className="gs-row" label="Speed" suffix="×" min={0.1} max={8} step={0.1} value={el.speed} onChange={(v) => updateElement('speed', v)} />
+            <Slider className="gs-row" label="Parallax depth" suffix="%" min={0} max={100} value={el.depth ?? 50} onChange={(v) => updateElement('depth', v)} />
+            <RangeEnds className="mt-1" left="Far" right="Near" />
+          </div>
+        </Section>
+      )}
     </>
   )
 }
@@ -321,58 +357,19 @@ function ParallaxPanel({ layers }) {
 }
 
 function OverlayTransformPanel({ overlay }) {
-  const { updateOverlay, removeOverlay, moveOverlay, overlays } = useStudio()
-  const index = overlays.findIndex((item) => item.id === overlay.id)
-  const canForward = index >= 0 && index < overlays.length - 1
-  const canBackward = index > 0
+  const { updateOverlay, resetMotionAnchor } = useStudio()
 
   return (
-    <>
-      <Section title="Transform" info="Position, size, and appearance of this image overlay." open>
-        <div className="space-y-1">
-          <Slider label="X position" value={overlay.x} onChange={(v) => updateOverlay('x', v)} min={-100} max={200} />
-          <Slider label="Y position" value={overlay.y} onChange={(v) => updateOverlay('y', v)} min={-100} max={200} />
-          <Slider label="Size" value={overlay.width} onChange={(v) => updateOverlay('width', v)} min={1} max={300} />
-          <Slider label="Scale X" value={overlay.scaleX || 100} onChange={(v) => updateOverlay('scaleX', v)} min={1} max={500} />
-          <Slider label="Scale Y" value={overlay.scaleY || 100} onChange={(v) => updateOverlay('scaleY', v)} min={1} max={500} />
-          <Slider label="Rotation" value={overlay.rotation} onChange={(v) => updateOverlay('rotation', v)} min={-360} max={360} />
-          <Slider label="Opacity" value={overlay.opacity} onChange={(v) => updateOverlay('opacity', v)} min={0} max={100} />
-        </div>
-        <RotateControls
-          className="mt-3"
-          value={overlay.rotation}
-          onChange={(v) => updateOverlay('rotation', v)}
-        />
-        <FormGrid className="mt-3" gap={3}>
-          <Switch label="Flip H" checked={overlay.flipX} onChange={(v) => updateOverlay('flipX', v)} />
-          <Switch label="Flip V" checked={overlay.flipY} onChange={(v) => updateOverlay('flipY', v)} />
-        </FormGrid>
-      </Section>
-
-      <Section title="Arrange" info="Stack order within image overlays. Front draws on top." open>
-        <ArrangeButtons
-          canForward={canForward}
-          canBackward={canBackward}
-          onMove={(dir) => moveOverlay(overlay.id, dir)}
-        />
-      </Section>
-
-      <Section title="Layer" open>
-        <Switch
-          label="Show overlay"
-          checked={overlay.visible}
-          onChange={(v) => updateOverlay('visible', v)}
-        />
-        <Button
-          variant="danger"
-          full
-          className="mt-3 text-[10px]"
-          onClick={() => removeOverlay(overlay.id)}
-        >
-          Remove overlay
-        </Button>
-      </Section>
-    </>
+    <TransformFields
+      rotation={overlay.rotation}
+      opacity={overlay.opacity}
+      onRotation={(v) => updateOverlay('rotation', v)}
+      onOpacity={(v) => updateOverlay('opacity', v)}
+      anchorX={overlay.anchorX}
+      anchorY={overlay.anchorY}
+      onAnchor={(key, value) => updateOverlay(key, value)}
+      onResetAnchor={resetMotionAnchor}
+    />
   )
 }
 
@@ -456,6 +453,8 @@ function TextPropertiesPanel({ layer }) {
 /** Properties inspector (2nd bar) — transform, text, mask paint, selection, parallax. */
 export function InspectorAside() {
   const {
+    artboardSelected,
+    setArtboardSelected,
     baseImageSelected,
     selectedElements,
     elements,
@@ -473,6 +472,7 @@ export function InspectorAside() {
     cancelSelection,
     censorSelecting,
     setCensorSelecting,
+    poseRig, setPoseRig,
   } = useStudio()
 
   const selectedLayers = elements.filter((el) => selectedElements.includes(el.id))
@@ -480,25 +480,30 @@ export function InspectorAside() {
   const single = selectedLayers.length === 1 ? selectedLayers[0] : null
   const overlay = overlays.find((item) => item.id === selectedOverlay) || null
   const textLayer = textLayers.find((item) => item.id === selectedText) || null
+  const jointsOpen = Boolean(poseRig.panelOpen && poseRig.joints?.length)
 
-  const open = Boolean(textLayer) || baseImageSelected || selectedLayers.length > 0 || Boolean(overlay) || maskEditing || selectMode || censorSelecting
+  const open = Boolean(textLayer) || artboardSelected || baseImageSelected || selectedLayers.length > 0 || Boolean(overlay) || maskEditing || selectMode || censorSelecting || jointsOpen
 
   let title = 'Properties'
   if (censorSelecting) title = 'Censor'
   else if (maskEditing) title = 'Mask'
   else if (selectMode) title = 'Selection'
+  else if (jointsOpen) title = 'Joint animation'
+  else if (artboardSelected) title = 'Artboard'
   else if (textLayer) title = textLayer.name || 'Text'
   else if (multi) title = `${selectedLayers.length} layers`
   else if (single) title = single.name || 'Layer'
-  else if (overlay) title = overlay.name || 'Overlay'
-  else if (baseImageSelected) title = 'Base image'
+  else if (overlay) title = overlay.name || 'Image'
+  else if (baseImageSelected) title = 'Background'
 
   const close = () => {
     clearLayerSelection()
+    setArtboardSelected(false)
     setSelectedOverlay(null)
     setSelectedText(null)
     setMaskEditing(false)
     setCensorSelecting(false)
+    setPoseRig((current) => ({ ...current, panelOpen: false }))
     if (selectMode) {
       cancelSelection()
       setSelectMode(false)
@@ -509,6 +514,8 @@ export function InspectorAside() {
   if (censorSelecting) body = <CensorPanel />
   else if (maskEditing) body = <MaskPaintPanel />
   else if (selectMode) body = <SelectionOptionsPanel />
+  else if (jointsOpen) body = <JointAnimPanel />
+  else if (artboardSelected) body = <ArtboardPanel />
   else if (textLayer) body = <TextPropertiesPanel layer={textLayer} />
   else if (multi) body = <ParallaxPanel layers={selectedLayers} />
   else if (single) body = <ElementTransformPanel el={single} />
@@ -516,7 +523,7 @@ export function InspectorAside() {
   else if (baseImageSelected) body = <BaseTransformPanel />
 
   return (
-    <SecondaryAside open={open} title={title} onClose={close} width={textLayer ? 260 : 228}>
+    <SecondaryAside open={open} title={title} onClose={close} width={jointsOpen || textLayer ? 260 : 228}>
       {body}
     </SecondaryAside>
   )

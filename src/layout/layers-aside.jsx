@@ -1,15 +1,17 @@
-import { useRef, useState } from 'react'
-import { ImageIcon, Layers3, Type } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Frame, ImageIcon, Layers3, Type } from 'lucide-react'
 import { EmptyState, LayerRow } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
 
 /**
  * Third sidebar — Photoshop-style layers (front at top · drag to reorder).
+ * Image overlays, extracted layers, and text share this list as the source of truth.
  */
 export function LayersAside() {
   const {
     elements, selectedElements, selectedElement, selectLayer, selectBaseImage,
     baseImageSelected, imageLocked, toggleImageLock,
+    artboardSelected, selectArtboard, canvasLocked, toggleCanvasLock,
     toggleElementLock, toggleElementVisible, removeElement, reorderElement,
     overlays, selectedOverlay, selectOverlay, toggleOverlayVisible, removeOverlay, reorderOverlay,
     textLayers, selectedText, setSelectedText, setPlaying, removeText, reorderText, toggleTextLock, updateText,
@@ -22,7 +24,7 @@ export function LayersAside() {
   const [dragState, setDragState] = useState(null) // { kind, id, overId }
 
   const layerCount = elements.length + overlays.length + textLayers.length
-  // Front of stack at top of list (array end → first).
+  // Front of stack at top of list (array end → first). Higher index draws on top.
   const elementsFrontFirst = [...elements].reverse()
   const overlaysFrontFirst = [...overlays].reverse()
   const textFrontFirst = [...textLayers].reverse()
@@ -30,20 +32,32 @@ export function LayersAside() {
   const beginLayerDrag = (event, kind, id) => {
     event.preventDefault()
     event.stopPropagation()
-    dragRef.current = { kind, id, moved: false }
+    dragRef.current = { kind, id, overId: id }
     setDragState({ kind, id, overId: id })
     setSelectMode(false)
     setPlaying(false)
   }
 
-  const moveLayerDrag = (event, kind, overId) => {
+  const moveLayerDrag = (event) => {
     const drag = dragRef.current
-    if (!drag || drag.kind !== kind || drag.id === overId) return
-    drag.moved = true
-    if (kind === 'element') reorderElement(drag.id, overId)
-    if (kind === 'overlay') reorderOverlay(drag.id, overId)
-    if (kind === 'text') reorderText(drag.id, overId)
-    setDragState({ kind, id: drag.id, overId })
+    if (!drag) return
+
+    const hit = document.elementsFromPoint(event.clientX, event.clientY)
+      .find((node) => (
+        node instanceof Element
+        && node.getAttribute('data-layer-kind') === drag.kind
+        && node.getAttribute('data-layer-id')
+      ))
+    if (!hit) return
+
+    const overId = hit.getAttribute('data-layer-id')
+    if (!overId || overId === drag.id || overId === drag.overId) return
+
+    drag.overId = overId
+    if (drag.kind === 'element') reorderElement(drag.id, overId)
+    if (drag.kind === 'overlay') reorderOverlay(drag.id, overId)
+    if (drag.kind === 'text') reorderText(drag.id, overId)
+    setDragState({ kind: drag.kind, id: drag.id, overId })
   }
 
   const endLayerDrag = () => {
@@ -51,6 +65,21 @@ export function LayersAside() {
     dragRef.current = null
     setDragState(null)
   }
+
+  // While dragging, listen on window so reorder works even when the pointer leaves the grip.
+  useEffect(() => {
+    if (!dragState) return undefined
+    const onMove = (event) => moveLayerDrag(event)
+    const onUp = () => endLayerDrag()
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+  }, [dragState?.kind, dragState?.id])
 
   const isDragging = (kind, id) => dragState?.kind === kind && dragState?.id === id
   const isDropTarget = (kind, id) => (
@@ -71,7 +100,7 @@ export function LayersAside() {
       <div className="flex flex-col gap-1 p-2">
         {!elements.length && !overlays.length && !textLayers.length && (
           <EmptyState icon={Layers3} className="mt-2 px-1">
-            Use a selection tool to extract layers, or add an image overlay
+            Use a selection tool to extract layers, or add an image
           </EmptyState>
         )}
 
@@ -80,6 +109,8 @@ export function LayersAside() {
           return (
             <LayerRow
               key={layer.id}
+              layerKind="text"
+              layerId={layer.id}
               selected={selected}
               onClick={() => {
                 clearLayerSelection()
@@ -99,7 +130,6 @@ export function LayersAside() {
               onToggleLock={() => toggleTextLock(layer.id)}
               onRemove={() => removeText(layer.id)}
               onDragStart={(e) => beginLayerDrag(e, 'text', layer.id)}
-              onDragMove={(e) => moveLayerDrag(e, 'text', layer.id)}
               onDragEnd={endLayerDrag}
               dragging={isDragging('text', layer.id)}
               dropTarget={isDropTarget('text', layer.id)}
@@ -117,6 +147,8 @@ export function LayersAside() {
           return (
             <LayerRow
               key={el.id}
+              layerKind="element"
+              layerId={el.id}
               selected={selected}
               role={role}
               onClick={(event) => {
@@ -136,7 +168,6 @@ export function LayersAside() {
               onToggleLock={() => toggleElementLock(el.id)}
               onRemove={() => removeElement(el.id)}
               onDragStart={(e) => beginLayerDrag(e, 'element', el.id)}
-              onDragMove={(e) => moveLayerDrag(e, 'element', el.id)}
               onDragEnd={endLayerDrag}
               dragging={isDragging('element', el.id)}
               dropTarget={isDropTarget('element', el.id)}
@@ -150,6 +181,8 @@ export function LayersAside() {
           return (
             <LayerRow
               key={overlay.id}
+              layerKind="overlay"
+              layerId={overlay.id}
               selected={selected}
               onClick={() => {
                 selectOverlay(overlay.id)
@@ -167,7 +200,6 @@ export function LayersAside() {
               onToggleVisible={() => toggleOverlayVisible(overlay.id)}
               onRemove={() => removeOverlay(overlay.id)}
               onDragStart={(e) => beginLayerDrag(e, 'overlay', overlay.id)}
-              onDragMove={(e) => moveLayerDrag(e, 'overlay', overlay.id)}
               onDragEnd={endLayerDrag}
               dragging={isDragging('overlay', overlay.id)}
               dropTarget={isDropTarget('overlay', overlay.id)}
@@ -184,11 +216,26 @@ export function LayersAside() {
             setMaskEditing(false)
           }}
           icon={ImageIcon}
-          title="Base image"
-          subtitle={imageLocked ? 'Locked' : 'Background'}
+          title="Background"
+          subtitle={imageLocked ? 'Locked' : 'Base image'}
           visible
           locked={imageLocked}
           onToggleLock={toggleImageLock}
+          className="!rounded-md !p-1.5"
+        />
+
+        <LayerRow
+          selected={artboardSelected}
+          onClick={() => {
+            selectArtboard()
+            setSelectMode(false)
+            setMaskEditing(false)
+          }}
+          icon={Frame}
+          title="Artboard"
+          subtitle={canvasLocked ? 'Locked' : 'Canvas size'}
+          locked={canvasLocked}
+          onToggleLock={toggleCanvasLock}
           className="!rounded-md !p-1.5"
         />
 

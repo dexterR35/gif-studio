@@ -9,16 +9,39 @@ import { POSE_BONES, POSE_KEY_JOINTS } from '../lib/pose'
 import useHtmlImage from './use-html-image'
 
 function nodeToNorm(node, width, height) {
-  const scaleX = node.scaleX()
-  const scaleY = node.scaleY()
+  const scaleX = Math.abs(node.scaleX()) || 1
+  const scaleY = Math.abs(node.scaleY()) || 1
   const w = Math.max(0.02, (node.width() * scaleX) / width)
   const h = Math.max(0.02, (node.height() * scaleY) / height)
+  // With offset set to the anchor, node.x/y is the pivot; recover unrotated top-left.
+  const ax = node.width() ? node.offsetX() / node.width() : 0.5
+  const ay = node.height() ? node.offsetY() / node.height() : 0.5
+  const pivotX = node.x() / width
+  const pivotY = node.y() / height
   return {
-    x: node.x() / width,
-    y: node.y() / height,
+    x: pivotX - ax * w,
+    y: pivotY - ay * h,
     w,
     h,
     rotation: node.rotation(),
+    pivotX,
+    pivotY,
+  }
+}
+
+/** Local-space offset + stage position so rotate/scale pivot on anchor %. */
+function anchorNodeProps(box, width, height, anchorX = 50, anchorY = 50) {
+  const pxW = box.w * width
+  const pxH = box.h * height
+  const ox = ((anchorX ?? 50) / 100) * pxW
+  const oy = ((anchorY ?? 50) / 100) * pxH
+  return {
+    x: box.x * width + ox,
+    y: box.y * height + oy,
+    width: pxW,
+    height: pxH,
+    offsetX: ox,
+    offsetY: oy,
   }
 }
 
@@ -28,6 +51,7 @@ function nodeToNorm(node, width, height) {
  *   height: number,
  *   sourceUrl?: string|null,
  *   imageTransformBox: {x:number,y:number,w:number,h:number,rotation:number},
+ *   imageAnchor?: {x:number,y:number},
  *   imageLocked?: boolean,
  *   imageEdits?: {flipX?:boolean,flipY?:boolean},
  *   background?: string,
@@ -59,6 +83,7 @@ export function StudioKonvaStage({
   height,
   sourceUrl,
   imageTransformBox,
+  imageAnchor = { x: 50, y: 50 },
   imageLocked = false,
   imageEdits = {},
   background = '#111114',
@@ -123,19 +148,20 @@ export function StudioKonvaStage({
     const n = nodeToNorm(node, width, height)
     const cx = n.x + n.w / 2
     const cy = n.y + n.h / 2
-    // Unscaled fitted size ≈ current box / current scale factor; parent maps center→offsets.
     onTransformImage?.({
       centerX: cx,
       centerY: cy,
       boxW: n.w,
       boxH: n.h,
       rotation: n.rotation,
+      pivotX: n.pivotX,
+      pivotY: n.pivotY,
     })
     node.scaleX(imageEdits.flipX ? -1 : 1)
     node.scaleY(imageEdits.flipY ? -1 : 1)
   }
 
-  const commitElement = (id, node) => {
+  const commitElement = (id, node, el) => {
     const n = nodeToNorm(node, width, height)
     onTransformElement?.(id, {
       x: +n.x.toFixed(4),
@@ -143,9 +169,19 @@ export function StudioKonvaStage({
       w: +n.w.toFixed(4),
       h: +n.h.toFixed(4),
       rotation: +n.rotation.toFixed(1),
+      scaleX: 100,
+      scaleY: 100,
     })
-    node.scaleX(1)
-    node.scaleY(1)
+    const ox = ((el.anchorX ?? 50) / 100) * n.w * width
+    const oy = ((el.anchorY ?? 50) / 100) * n.h * height
+    node.scaleX(el.flipX ? -1 : 1)
+    node.scaleY(el.flipY ? -1 : 1)
+    node.width(n.w * width)
+    node.height(n.h * height)
+    node.offsetX(ox)
+    node.offsetY(oy)
+    node.x(n.x * width + ox)
+    node.y(n.y * height + oy)
   }
 
   const commitOverlay = (id, node, overlay) => {
@@ -213,48 +249,57 @@ export function StudioKonvaStage({
           listening={false}
         />
 
-        {sourceImage && (
-          <KonvaImage
-            ref={(n) => setNodeRef('image', n)}
-            name="base-image"
-            image={sourceImage}
-            x={box.x * width}
-            y={box.y * height}
-            width={box.w * width}
-            height={box.h * height}
-            rotation={box.rotation || 0}
-            scaleX={imageEdits.flipX ? -1 : 1}
-            scaleY={imageEdits.flipY ? -1 : 1}
-            offsetX={imageEdits.flipX ? box.w * width : 0}
-            offsetY={imageEdits.flipY ? box.h * height : 0}
-            draggable={interactive && !imageLocked}
-            onClick={(e) => {
-              e.cancelBubble = true
-              onSelect?.({ kind: 'image' })
-            }}
-            onTap={(e) => {
-              e.cancelBubble = true
-              onSelect?.({ kind: 'image' })
-            }}
-            onDragEnd={(e) => commitImageTransform(e.target)}
-            onTransformEnd={(e) => commitImageTransform(e.target)}
-          />
-        )}
+        {sourceImage && (() => {
+          // Base-image anchor is canvas %; convert to local offset within the fitted box.
+          const pivotX = ((imageAnchor?.x ?? 50) / 100) * width
+          const pivotY = ((imageAnchor?.y ?? 50) / 100) * height
+          const ox = pivotX - box.x * width
+          const oy = pivotY - box.y * height
+          const flipX = Boolean(imageEdits.flipX)
+          const flipY = Boolean(imageEdits.flipY)
+          return (
+            <KonvaImage
+              ref={(n) => setNodeRef('image', n)}
+              name="base-image"
+              image={sourceImage}
+              x={pivotX}
+              y={pivotY}
+              width={box.w * width}
+              height={box.h * height}
+              offsetX={ox}
+              offsetY={oy}
+              rotation={box.rotation || 0}
+              scaleX={flipX ? -1 : 1}
+              scaleY={flipY ? -1 : 1}
+              draggable={interactive && !imageLocked}
+              onClick={(e) => {
+                e.cancelBubble = true
+                onSelect?.({ kind: 'image' })
+              }}
+              onTap={(e) => {
+                e.cancelBubble = true
+                onSelect?.({ kind: 'image' })
+              }}
+              onDragEnd={(e) => commitImageTransform(e.target)}
+              onTransformEnd={(e) => commitImageTransform(e.target)}
+            />
+          )
+        })()}
 
         {overlays.filter((ov) => ov.visible !== false).map((overlay) => {
           const b = overlayBounds?.(overlay) || { x: 0.2, y: 0.2, w: 0.3, h: 0.3, rotation: 0 }
           const key = `overlay:${overlay.id}`
+          const props = anchorNodeProps(b, width, height, overlay.anchorX, overlay.anchorY)
           return (
             <KonvaImage
               key={overlay.id}
               ref={(n) => setNodeRef(key, n)}
               image={overlay.image}
-              x={b.x * width}
-              y={b.y * height}
-              width={b.w * width}
-              height={b.h * height}
+              {...props}
               rotation={b.rotation || 0}
               opacity={(overlay.opacity ?? 100) / 100}
+              scaleX={overlay.flipX ? -1 : 1}
+              scaleY={overlay.flipY ? -1 : 1}
               draggable={interactive}
               onClick={(e) => {
                 e.cancelBubble = true
@@ -273,15 +318,14 @@ export function StudioKonvaStage({
         {elements.filter((el) => el.visible !== false).map((el) => {
           const key = `element:${el.id}`
           const selected = selectedIds.includes(el.id) || selectedId === el.id
+          const boxEl = { x: el.x, y: el.y, w: el.w, h: el.h }
+          const props = anchorNodeProps(boxEl, width, height, el.anchorX, el.anchorY)
           return (
             <KonvaImage
               key={el.id}
               ref={(n) => setNodeRef(key, n)}
               image={el.bitmap}
-              x={el.x * width}
-              y={el.y * height}
-              width={el.w * width}
-              height={el.h * height}
+              {...props}
               rotation={el.rotation || 0}
               opacity={(el.opacity ?? 100) / 100}
               scaleX={(el.scaleX || 100) / 100 * (el.flipX ? -1 : 1)}
@@ -298,41 +342,8 @@ export function StudioKonvaStage({
                 e.cancelBubble = true
                 onSelect?.({ kind: 'element', id: el.id })
               }}
-              onDragEnd={(e) => {
-                // Reset flip/scale baked into attrs before normalizing
-                const node = e.target
-                const sx = Math.abs(node.scaleX()) || 1
-                const sy = Math.abs(node.scaleY()) || 1
-                onTransformElement?.(el.id, {
-                  x: +(node.x() / width).toFixed(4),
-                  y: +(node.y() / height).toFixed(4),
-                  w: +((node.width() * sx) / width).toFixed(4),
-                  h: +((node.height() * sy) / height).toFixed(4),
-                  rotation: +node.rotation().toFixed(1),
-                  scaleX: 100,
-                  scaleY: 100,
-                })
-                node.scaleX(el.flipX ? -1 : 1)
-                node.scaleY(el.flipY ? -1 : 1)
-                node.width((el.w * width))
-                node.height((el.h * height))
-              }}
-              onTransformEnd={(e) => {
-                const node = e.target
-                const sx = Math.abs(node.scaleX()) || 1
-                const sy = Math.abs(node.scaleY()) || 1
-                onTransformElement?.(el.id, {
-                  x: +(node.x() / width).toFixed(4),
-                  y: +(node.y() / height).toFixed(4),
-                  w: +((node.width() * sx) / width).toFixed(4),
-                  h: +((node.height() * sy) / height).toFixed(4),
-                  rotation: +node.rotation().toFixed(1),
-                  scaleX: 100,
-                  scaleY: 100,
-                })
-                node.scaleX(el.flipX ? -1 : 1)
-                node.scaleY(el.flipY ? -1 : 1)
-              }}
+              onDragEnd={(e) => commitElement(el.id, e.target, el)}
+              onTransformEnd={(e) => commitElement(el.id, e.target, el)}
             />
           )
         })}

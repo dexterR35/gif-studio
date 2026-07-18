@@ -3,14 +3,22 @@ import { FileImage, FolderOpen, ImagePlus, X } from 'lucide-react'
 import { useStudio } from '../context/studio-provider'
 import { cn } from '../lib/cn'
 
+const TAB_TITLES = {
+  ai: 'AI',
+  motion: 'Motion',
+  edit: 'Effects',
+  text: 'Text',
+}
+
 export function ProjectAside() {
   const {
     mobilePanel, setMobilePanel, fileRef, dropActive, setDropActive,
     loadFile, source, activeTab,
   } = useStudio()
 
-  const canReplace = activeTab === 'motion'
+  const canReplace = activeTab === 'ai' || activeTab === 'motion'
   const hasSource = Boolean(source?.url)
+  const tabTitle = TAB_TITLES[activeTab] || 'Project'
 
   const empty = (
     <>
@@ -58,7 +66,7 @@ export function ProjectAside() {
       className={`scrollbar absolute inset-y-0 left-0 z-20 h-full w-[286px] overflow-y-auto overscroll-contain border-r border-white/[.06] bg-panel px-3.5 transition-transform lg:relative lg:inset-auto lg:shrink-0 lg:translate-x-0 ${mobilePanel ? 'translate-x-0' : '-translate-x-full'}`}
     >
       <div className="flex h-11 items-center justify-between border-b border-white/[.06]">
-        <span className="text-[10px] font-semibold uppercase tracking-[.14em] text-zinc-500">Project</span>
+        <span className="text-[10px] font-semibold uppercase tracking-[.14em] text-zinc-500">{tabTitle}</span>
         <button type="button" onClick={() => setMobilePanel(false)} className="lg:hidden">
           <X className="h-4 w-4" />
         </button>

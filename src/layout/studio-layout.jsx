@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { Outlet } from 'react-router-dom'
 import { ExportModal, Toast } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
+import { LAYER_WORKSPACES } from '../lib/routes'
 import { InspectorAside } from './inspector-aside'
 import { LayersAside } from './layers-aside'
 import { ProjectAside } from './project-aside'
@@ -10,10 +11,9 @@ import { StudioHeader } from './studio-header'
 import { ToolsRail } from './tools-rail'
 import { WorkspaceNav } from './workspace-nav'
 
-const FOCUS_TABS = new Set(['edit', 'timeline', 'output'])
+const FOCUS_TABS = new Set(['timeline', 'output'])
 
 const FOCUS_TITLES = {
-  edit: 'Effects',
   timeline: 'Timeline',
   output: 'Export',
 }
@@ -25,13 +25,15 @@ export function StudioLayout() {
     selectedOverlay, setSelectedOverlay,
     maskEditing, setMaskEditing, selectMode, setSelectMode, cancelSelection,
     censorSelecting, setCensorSelecting,
-    activeTab, setPlaying,
+    activeTab, setPlaying, poseRig,
   } = useStudio()
 
   const isFocus = FOCUS_TABS.has(activeTab)
   const isOutput = activeTab === 'output'
-  const canSelectLayers = activeTab === 'motion'
-  const inspectorOpen = !isFocus && (Boolean(selectedText) || baseImageSelected || selectedElements.length > 0 || Boolean(selectedOverlay) || maskEditing || selectMode || censorSelecting)
+  const hasLayers = LAYER_WORKSPACES.has(activeTab)
+  const showTools = activeTab === 'ai' || activeTab === 'motion'
+  const jointsOpen = Boolean(poseRig?.panelOpen && poseRig?.joints?.length)
+  const inspectorOpen = hasLayers && (Boolean(selectedText) || baseImageSelected || selectedElements.length > 0 || Boolean(selectedOverlay) || maskEditing || selectMode || censorSelecting || jointsOpen)
 
   const closeInspector = () => {
     clearLayerSelection()
@@ -61,9 +63,9 @@ export function StudioLayout() {
     }
   }, [isFocus, isOutput]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Image / element / overlay selection is Motion-only.
+  // Tools that need a selection target only clear when leaving layer workspaces.
   useEffect(() => {
-    if (canSelectLayers) return
+    if (hasLayers) return
     clearLayerSelection()
     setSelectedOverlay(null)
     setMaskEditing(false)
@@ -72,7 +74,7 @@ export function StudioLayout() {
       cancelSelection()
       setSelectMode(false)
     }
-  }, [canSelectLayers]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [hasLayers]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="flex h-screen max-h-screen flex-col overflow-hidden bg-ink text-zinc-100">
@@ -83,7 +85,7 @@ export function StudioLayout() {
         {!isFocus && (
           <>
             <ProjectAside />
-            {canSelectLayers && <ToolsRail />}
+            {showTools && <ToolsRail />}
             {(mobilePanel || inspectorOpen) && (
               <button
                 type="button"

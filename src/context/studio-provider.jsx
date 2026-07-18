@@ -13,12 +13,14 @@ import { useStudioStore } from '../store/studio-store'
 import { sampleKeyframes } from '../lib/keyframes'
 import { loadOpenCV, isOpenCVReady } from '../engine/opencv-filters'
 import { playTimeline, stopTimeline } from '../engine/gsap-playback'
-import { POSE_RIG_DEFAULT, drawPoseSkeleton, samplePoseSway } from '../lib/pose'
+import {
+  POSE_RIG_DEFAULT, POSE_KEY_JOINTS, drawPoseSkeleton, samplePoseSway, applyJointKeys,
+} from '../lib/pose'
 
 const StudioContext = createContext(null)
 
 /** Focus workspaces use the right panel, not the mobile inspector sheet. */
-const FOCUS_WORKSPACES = new Set(['edit', 'timeline', 'output'])
+const FOCUS_WORKSPACES = new Set(['timeline', 'output'])
 
 const revokeBlobUrl = (url) => {
   if (typeof url === 'string' && url.startsWith('blob:')) URL.revokeObjectURL(url)
@@ -55,14 +57,15 @@ function moveInStack(list, id, direction) {
   return copy
 }
 
-/** Drag-reorder: place `fromId` where `toId` currently sits (same stack order semantics). */
+/** Drag-reorder: place `fromId` at the current index of `toId` (index +/−). */
 function reorderInStack(list, fromId, toId) {
   if (fromId === toId) return list
   const from = list.findIndex((item) => item.id === fromId)
-  const to = list.findIndex((item) => item.id === toId)
-  if (from < 0 || to < 0 || from === to) return list
+  if (from < 0) return list
   const copy = [...list]
   const [item] = copy.splice(from, 1)
+  const to = copy.findIndex((entry) => entry.id === toId)
+  if (to < 0) return list
   copy.splice(to, 0, item)
   return copy
 }
@@ -152,6 +155,9 @@ export function StudioProvider({ children }) {
   const [layerInsertAt, setLayerInsertAt] = useState('front')
   const [baseImageSelected, setBaseImageSelected] = useState(false)
   const [imageLocked, setImageLocked] = useState(false)
+  /** Artboard (output canvas) — separate from the base-image background layer. */
+  const [artboardSelected, setArtboardSelected] = useState(false)
+  const [canvasLocked, setCanvasLocked] = useState(false)
   const [selectMode, setSelectMode] = useState(false)
   const [selectionTool, setSelectionTool] = useState('Rectangle')
   const [selection, setSelection] = useState(null)
@@ -338,7 +344,7 @@ export function StudioProvider({ children }) {
   useEffect(() => {
     // OpenCV.js is ~15MB WASM — do not load on startup (freezes play).
     // Load lazily when Edit tab opens.
-    if (activeTab !== 'edit') return undefined
+    if (activeTab !== 'ai' && activeTab !== 'edit') return undefined
     let cancelled = false
     loadOpenCV()
       .then(() => {
@@ -579,7 +585,8 @@ export function StudioProvider({ children }) {
           ty = Math.sin(phase) * amplitudeY
         }
         if (el.motion === 'Pose sway' && (el.poseJoints?.length || poseRig.joints?.length)) {
-          const joints = el.poseJoints?.length ? el.poseJoints : poseRig.joints
+          const baseJoints = el.poseJoints?.length ? el.poseJoints : poseRig.joints
+          const joints = applyJointKeys(baseJoints, poseRig.jointKeys, rawT)
           const sway = samplePoseSway(joints, {
             phase,
             amplitude: el.amplitude,
@@ -594,6 +601,14 @@ export function StudioProvider({ children }) {
           ty += sway.ty
           elementRotation += sway.rotationRad
           elementScale *= sway.scale
+          // Pull the layer a bit toward keyed limb motion (e.g. hand wave).
+          const focus = poseRig.selectedJoint
+            && joints.find((j) => j.name === poseRig.selectedJoint)
+          const rest = focus && baseJoints.find((j) => j.name === poseRig.selectedJoint)
+          if (focus && rest) {
+            tx += (focus.x - rest.x) * W
+            ty += (focus.y - rest.y) * H
+          }
           if (poseRig.driveMotion !== false) {
             anchorXPct = sway.anchorX
             anchorYPct = sway.anchorY
@@ -709,14 +724,16 @@ export function StudioProvider({ children }) {
       ctx.restore()
     })
 
-    // Body joints overlay (MediaPipe Pose) — drawn above layers, below GIF color FX.
+    // Body joints overlay — keyed offsets animate across clip progress.
     if (poseRig.visible && poseRig.joints?.length) {
-      drawPoseSkeleton(ctx, poseRig.joints, {
+      const animJoints = applyJointKeys(poseRig.joints, poseRig.jointKeys, rawT)
+      drawPoseSkeleton(ctx, animJoints, {
         width: W,
         height: H,
         color: '#d8ff3e',
         lineWidth: Math.max(1.5, Math.min(W, H) * 0.004),
         jointRadius: Math.max(2.5, Math.min(W, H) * 0.008),
+        highlight: poseRig.selectedJoint,
       })
     }
 
@@ -849,6 +866,7 @@ export function StudioProvider({ children }) {
       setElements([])
       setSelectedElements([])
       setBaseImageSelected(false)
+      setArtboardSelected(false)
       setImageLocked(false)
       setTextLayers([])
       setSelectedText(null)
@@ -992,6 +1010,7 @@ export function StudioProvider({ children }) {
     : settings.width / Math.max(1, settings.height)
 
   const setCanvasWidth = (width) => {
+    if (canvasLocked) { setToast('Unlock the artboard to resize'); return }
     const nextWidth = clamp(width, 1, MAX_CANVAS)
     setSettings((current) => {
       if (!lockAspect) return { ...current, width: nextWidth }
@@ -1001,6 +1020,7 @@ export function StudioProvider({ children }) {
   }
 
   const setCanvasHeight = (height) => {
+    if (canvasLocked) { setToast('Unlock the artboard to resize'); return }
     const nextHeight = clamp(height, 1, MAX_CANVAS)
     setSettings((current) => {
       if (!lockAspect) return { ...current, height: nextHeight }
@@ -1010,13 +1030,34 @@ export function StudioProvider({ children }) {
   }
 
   const useSourceSize = () => {
+    if (canvasLocked) { setToast('Unlock the artboard to resize'); return }
     if (!source?.width || !source?.height) { setToast('Open an image first'); return }
     if (source.width > MAX_CANVAS || source.height > MAX_CANVAS) {
-      setToast(`Source exceeds ${MAX_CANVAS}px limit — enter a smaller canvas size`)
+      setToast(`Source exceeds ${MAX_CANVAS}px limit — enter a smaller artboard size`)
       return
     }
     setSettings((current) => ({ ...current, width: source.width, height: source.height }))
-    setToast(`Canvas restored to original ${source.width} × ${source.height} px`)
+    setToast(`Artboard set to base image size ${source.width} × ${source.height} px`)
+  }
+
+  const toggleCanvasLock = () => {
+    setCanvasLocked((current) => {
+      const next = !current
+      setToast(next ? 'Artboard locked' : 'Artboard unlocked')
+      return next
+    })
+  }
+
+  const selectArtboard = () => {
+    setArtboardSelected(true)
+    setBaseImageSelected(false)
+    setSelectedElements([])
+    setSelectedOverlay(null)
+    setSelectedText(null)
+    setPlaying(false)
+    setSelectMode(false)
+    setMaskEditing(false)
+    setCensorSelecting(false)
   }
 
   const applyPreset = (name) => setSettings((s) => ({
@@ -1030,6 +1071,8 @@ export function StudioProvider({ children }) {
     setSettings(empty.settings)
     setElements([])
     setSelectedElements([])
+    setBaseImageSelected(false)
+    setArtboardSelected(false)
     setTextLayers([])
     setSelectedText(null)
     setMaskEditing(false)
@@ -1181,7 +1224,9 @@ export function StudioProvider({ children }) {
     const id = newStudioId()
     const element = { id, name: `Element ${elements.length + 1}`, ...rect, bitmap, sourceBitmap, maskCanvas, cleanup, effects: { ...EFFECT_DEFAULTS }, rotation: 0, scaleX: 100, scaleY: 100, flipX: false, flipY: false, opacity: 100, motion: 'Float', amplitude: 5, speed: 1, depth: Math.min(100, 30 + elements.length * 20), visible: true, locked: false, anchorX: 50, anchorY: 50 }
     setElements((current) => insertInStack(current, element, layerInsertAt, selectedElement))
-    setSelectedElements([id]); goToWorkspace('motion')
+    setSelectedElements([id])
+    setEffectTarget('Selected element')
+    if (activeTab !== 'ai' && activeTab !== 'edit') goToWorkspace('motion')
     setSettings((current) => ({ ...current, preset: 'Still', ...PRESETS.Still }))
     setToast(layerInsertAt === 'front' ? 'Element extracted in front — choose its motion' : 'Element extracted in back — choose its motion')
   }
@@ -1215,7 +1260,9 @@ export function StudioProvider({ children }) {
       const smartRect = { x: result.rect.x / sourceCanvas.width, y: result.rect.y / sourceCanvas.height, w: result.rect.width / sourceCanvas.width, h: result.rect.height / sourceCanvas.height }
       const element = { id, name: `Element ${elements.length + 1}`, ...smartRect, bitmap, sourceBitmap, maskCanvas, cleanup: null, effects: { ...EFFECT_DEFAULTS }, rotation: 0, scaleX: 100, scaleY: 100, flipX: false, flipY: false, opacity: 100, motion: 'Float', amplitude: 5, speed: 1, depth: Math.min(100, 30 + elements.length * 20), visible: true, smart: true, locked: false, anchorX: 50, anchorY: 50 }
       setElements((current) => insertInStack(current, element, layerInsertAt, selectedElement))
-      setSelectedElements([id]); goToWorkspace('motion')
+      setSelectedElements([id])
+      setEffectTarget('Selected element')
+      if (activeTab !== 'ai' && activeTab !== 'edit') goToWorkspace('motion')
       setSettings((current) => ({ ...current, preset: 'Still', fit: 'Contain', ...PRESETS.Still }))
       replaceSource({
         ...(source || {}),
@@ -1319,7 +1366,8 @@ export function StudioProvider({ children }) {
     }
     setElements((current) => insertInStack(current, element, layerInsertAt, selectedElement))
     setSelectedElements([id])
-    goToWorkspace('motion')
+    setEffectTarget('Selected element')
+    if (activeTab !== 'ai' && activeTab !== 'edit') goToWorkspace('motion')
     setSettings((current) => ({ ...current, preset: 'Still', ...PRESETS.Still }))
     setToast(`${name} ready · ${engine}`)
     return id
@@ -1391,8 +1439,16 @@ export function StudioProvider({ children }) {
     }
   }
 
-  /** Auto-detect body, mark joints, cut out character, enable Pose sway motion. */
-  const runPoseDetect = async ({ segment = true, driveMotion = true } = {}) => {
+  /**
+   * Body and/or joints via MediaPipe Pose.
+   * @param {{ segment?: boolean, joints?: boolean, openPanel?: boolean, driveMotion?: boolean }} opts
+   */
+  const runPoseDetect = async ({
+    segment = true,
+    joints = true,
+    openPanel = false,
+    driveMotion = true,
+  } = {}) => {
     const canvas = canvasRef.current
     if (!canvas || !image) { setToast('Open an image first'); return }
     setSegmenting(true)
@@ -1400,23 +1456,40 @@ export function StudioProvider({ children }) {
       const { detectBodyAndJoints } = await import('../ai/mediapipe')
       const result = await detectBodyAndJoints(canvas, { segment })
       useStudioStore.getState().setCapabilities({ mediapipe: true })
-      setPoseRig({
-        joints: result.joints,
-        visible: true,
-        driveMotion,
-        score: result.score,
-        engine: result.engine,
-      })
+
+      const marked = result.joints.filter((j) => (j.score ?? 1) >= 0.25)
+      const firstKey = marked.find((j) => POSE_KEY_JOINTS.includes(j.name))?.name
+        || marked[0]?.name
+        || null
+
+      if (joints && result.joints?.length) {
+        setPoseRig((current) => ({
+          ...current,
+          joints: result.joints,
+          visible: true,
+          driveMotion,
+          score: result.score,
+          engine: result.engine,
+          panelOpen: openPanel,
+          selectedJoint: openPanel ? (current.selectedJoint || firstKey) : current.selectedJoint,
+          jointKeys: current.jointKeys || {},
+        }))
+        setBaseImageSelected(false)
+        setArtboardSelected(false)
+        setSelectedElements([])
+        setSelectedOverlay(null)
+        setSelectedText(null)
+      }
 
       let elementId = null
-      if (result.maskCanvas) {
+      if (segment && result.maskCanvas) {
         elementId = addElementFromMask(result.maskCanvas, {
           name: 'Body',
           engine: result.engine || 'mediapipe-pose',
         })
       }
 
-      if (elementId != null) {
+      if (elementId != null && result.joints?.length) {
         setElements((current) => current.map((el) => {
           if (el.id !== elementId) return el
           const sway = samplePoseSway(result.joints, {
@@ -1439,15 +1512,15 @@ export function StudioProvider({ children }) {
             anchorY: sway.anchorY,
           }
         }))
-        goToWorkspace('motion')
       }
 
-      const marked = result.joints.filter((j) => (j.score ?? 1) >= 0.25).length
-      setToast(
-        result.maskCanvas
-          ? `Body + ${marked} joints · Pose sway ready`
-          : `Pose · ${marked} joints marked (no cutout mask)`,
-      )
+      if (segment && elementId != null && !openPanel) {
+        setToast(`Body layer · ${marked.length} joints attached`)
+      } else if (openPanel && marked.length) {
+        setToast(`${marked.length} joints · set start/end keys in settings`)
+      } else {
+        setToast(marked.length ? `Pose · ${marked.length} joints` : 'No body / joints found')
+      }
     } catch (err) {
       setToast(err?.message || 'Body / pose detect failed')
     } finally {
@@ -1599,18 +1672,19 @@ export function StudioProvider({ children }) {
   const clearLayerSelection = () => {
     setSelectedElements([])
     setBaseImageSelected(false)
+    setArtboardSelected(false)
     setSelectedOverlay(null)
   }
   const selectLayer = (id, event) => {
     const el = elements.find((item) => item.id === id)
     if (!el) return
     setBaseImageSelected(false)
+    setArtboardSelected(false)
     setSelectedOverlay(null)
     setSelectedText(null)
     setPlaying(false)
     setSelectMode(false)
     setEffectTarget('Selected element')
-    goToWorkspace('motion')
     const additive = Boolean(event?.metaKey || event?.ctrlKey)
     const range = Boolean(event?.shiftKey)
     setSelectedElements((prev) => {
@@ -1706,14 +1780,13 @@ export function StudioProvider({ children }) {
   })()
 
   const selectBaseImage = () => {
-    if (imageLocked) { setToast('Base image is locked'); return }
     setBaseImageSelected(true)
+    setArtboardSelected(false)
     setSelectedElements([])
     setSelectedOverlay(null)
     setSelectedText(null)
     setPlaying(false)
     setEffectTarget('Entire GIF')
-    goToWorkspace('motion')
   }
   const selectOverlay = (id) => {
     const overlay = overlays.find((item) => item.id === id)
@@ -1721,12 +1794,12 @@ export function StudioProvider({ children }) {
     setSelectedOverlay(id)
     setSelectedElements([])
     setBaseImageSelected(false)
+    setArtboardSelected(false)
     setSelectedText(null)
     setPlaying(false)
     setSelectMode(false)
     setMaskEditing(false)
     setEffectTarget('Selected overlay')
-    goToWorkspace('motion')
   }
   const toggleOverlayVisible = (id) => {
     setOverlays((current) => current.map((overlay) => (
@@ -1771,7 +1844,6 @@ export function StudioProvider({ children }) {
       setToast('Element is locked — unlock to transform')
     }
     selectLayer(id, event)
-    goToWorkspace('motion')
   }
 
   const imageTransformBox = useMemo(() => {
@@ -1966,10 +2038,11 @@ export function StudioProvider({ children }) {
     setSelectedOverlay(id)
     setSelectedElements([])
     setBaseImageSelected(false)
+    setArtboardSelected(false)
     setSelectedText(null)
     setEffectTarget('Selected overlay')
     setPlaying(false)
-    goToWorkspace('motion')
+    if (activeTab !== 'ai' && activeTab !== 'edit') goToWorkspace('motion')
     setToast(layerInsertAt === 'front' ? 'Image overlay added in front' : 'Image overlay added in back')
   }
   const updateOverlay = (key, value) => setOverlays((current) => current.map((overlay) => {
@@ -2223,6 +2296,8 @@ export function StudioProvider({ children }) {
     selectLayer, clearLayerSelection, updateElementById, moveElement, moveOverlay,
     reorderElement, reorderOverlay, reorderText,
     baseImageSelected, setBaseImageSelected,
+    artboardSelected, setArtboardSelected, selectArtboard,
+    canvasLocked, setCanvasLocked, toggleCanvasLock,
     imageLocked, setImageLocked, imageTransformBox,
     selectMode, setSelectMode, selectionTool, setSelectionTool,
     selection, setSelection, selectionPoints, setSelectionPoints, extractTolerance, setExtractTolerance,
