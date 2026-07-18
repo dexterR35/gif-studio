@@ -29,11 +29,18 @@ def __getattr__(name: str):
             "grounding_dino_ready": grounding_dino_ready,
             "detect_with_grounding_dino": detect_with_grounding_dino,
         }[name]
-    if name in ("realesrgan_ready", "upscale_with_realesrgan"):
-        from .realesrgan_runner import realesrgan_ready, upscale_with_realesrgan
+    if name in ("realesrgan_ready", "upscale_with_realesrgan", "upscale_available", "normalize_model"):
+        from .realesrgan_runner import (
+            normalize_model,
+            realesrgan_ready,
+            upscale_available,
+            upscale_with_realesrgan,
+        )
 
         return {
             "realesrgan_ready": realesrgan_ready,
+            "upscale_available": upscale_available,
+            "normalize_model": normalize_model,
             "upscale_with_realesrgan": upscale_with_realesrgan,
         }[name]
     if name in ("rife_ready", "interpolate_with_rife"):

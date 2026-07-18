@@ -34,8 +34,7 @@ def grounding_dino_available() -> bool:
         return grounding_dino_ready()
     except Exception:
         return bool(
-            (_env_model("GROUNDING_DINO_CONFIG") and _env_model("GROUNDING_DINO_CHECKPOINT"))
-            or _env_model("GROUNDING_DINO_HF_ID")
+            _env_model("GROUNDING_DINO_CONFIG") and _env_model("GROUNDING_DINO_CHECKPOINT")
         )
 
 
@@ -71,45 +70,93 @@ def rembg_available() -> bool:
     return importlib.util.find_spec("rembg") is not None
 
 
-def segment_sam2(payload: bytes, point: tuple[float, float] | None = None) -> dict[str, Any]:
+def segment_sam2(
+    payload: bytes,
+    point: tuple[float, float] | None = None,
+    box: tuple[float, float, float, float] | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
     """Run SAM2 segmentation. Raises if SAM2 is not installed/configured."""
     if not sam2_available():
         raise RuntimeError(
-            "SAM2 is not available. Install SAM2 and place weights under models/sam2, "
-            "or set SAM2_CHECKPOINT / GIF_STUDIO_SAM2."
+            "SAM2 is not available. Install SAM2 and place weights under models/sam2 "
+            "(python scripts/setup_ai_models.py)."
         )
 
     from .ai.sam2_runner import segment_with_sam2
 
-    return segment_with_sam2(payload, point)
+    return segment_with_sam2(payload, point=point, box=box, model=model)
 
 
-def detect_objects(payload: bytes, prompt: str = "", confidence: float = 0.35) -> dict[str, Any]:
-    """Run Grounding DINO detection. Raises if the model is not available."""
+def detect_objects(
+    payload: bytes,
+    prompt: str = "",
+    confidence: float = 0.35,
+    refine_sam2: bool = True,
+    dino_model: str | None = None,
+    sam2_model: str | None = None,
+) -> dict[str, Any]:
+    """Grounding DINO detection (IDEA-Research), optionally refined with SAM2 mask.
+
+    When ``refine_sam2`` is True and SAM2 is available, the top box is passed to
+    SAM2 (Grounded-SAM style) so the cutout follows the object, not the cube.
+    """
     if not grounding_dino_available():
         raise RuntimeError(
-            "Grounding DINO is not available. Install the package and place weights "
-            "under models/groundingdino, or set GROUNDING_DINO_* env vars."
+            "Grounding DINO is not available. Install the official package + local "
+            "weights (python scripts/setup_ai_models.py)."
         )
     if not prompt:
         raise ValueError("A text prompt is required for Grounding DINO detection.")
 
     from .ai.grounding_dino_runner import detect_with_grounding_dino
 
-    return detect_with_grounding_dino(payload, prompt, confidence=confidence)
+    result = detect_with_grounding_dino(
+        payload, prompt, confidence=confidence, model=dino_model,
+    )
+    boxes = result.get("boxes") or []
+    if not refine_sam2 or not boxes or not sam2_available():
+        return result
+
+    top = max(boxes, key=lambda b: float(b.get("score") or 0))
+    x1 = float(top["x"])
+    y1 = float(top["y"])
+    x2 = x1 + float(top["w"])
+    y2 = y1 + float(top["h"])
+    try:
+        from .ai.sam2_runner import segment_with_sam2
+
+        seg = segment_with_sam2(
+            payload,
+            point=( (x1 + x2) / 2.0, (y1 + y2) / 2.0 ),
+            box=(x1, y1, x2, y2),
+            model=sam2_model,
+        )
+        result = {
+            **result,
+            "mask_png_base64": seg.get("mask_png_base64"),
+            "mask_score": seg.get("score"),
+            "engine": f"{result.get('engine')}+{seg.get('engine')}",
+            "refined": "sam2",
+        }
+    except Exception as exc:
+        result = {**result, "refine_error": str(exc), "refined": None}
+    return result
 
 
-def upscale_image(payload: bytes, scale: int = 2) -> tuple[bytes, str]:
-    """Return (png_bytes, engine_name). Requires RealESRGAN."""
-    if not realesrgan_available():
+def upscale_image(payload: bytes, scale: int = 2, model: str = "realesrgan") -> tuple[bytes, str]:
+    """Return (png_bytes, engine_name). Bicubic always works; GAN models need RealESRGAN stack."""
+    from .ai.realesrgan_runner import normalize_model, upscale_available, upscale_with_realesrgan
+
+    mid = normalize_model(model)
+    if not upscale_available(mid):
         raise RuntimeError(
-            "RealESRGAN is not available. Install spandrel/basicsr and place weights "
-            "under models/realesrgan, or set REALESRGAN_MODEL / GIF_STUDIO_REALESRGAN."
+            "AI upscale is not available. Install spandrel/basicsr and place weights "
+            "under models/realesrgan, or set REALESRGAN_MODEL / GIF_STUDIO_REALESRGAN. "
+            "Bicubic works without AI packages."
         )
 
-    from .ai.realesrgan_runner import upscale_with_realesrgan
-
-    return upscale_with_realesrgan(payload, scale=scale)
+    return upscale_with_realesrgan(payload, scale=scale, model=mid)
 
 
 def interpolate_frames(frames: list[bytes], factor: int = 2) -> tuple[list[bytes], str]:
@@ -137,6 +184,9 @@ def interpolate_rife(frames: list[bytes], factor: int = 2) -> list[bytes]:
 
 
 def capability_flags() -> dict[str, Any]:
+    from .ai.local_models import catalog
+
+    models = catalog()
     return {
         "sam2": sam2_available(),
         "grounding_dino": grounding_dino_available(),
@@ -145,6 +195,14 @@ def capability_flags() -> dict[str, Any]:
         "rife": rife_available(),
         "rembg": rembg_available(),
         "mediapipe_server": False,
+        "device": models["device"],
+        "allow_huggingface": models["allow_huggingface"],
+        "models": {
+            "sam2": models["sam2"],
+            "grounding_dino": models["grounding_dino"],
+            "upscale": models["upscale"],
+            "models_dir": models["models_dir"],
+        },
     }
 
 

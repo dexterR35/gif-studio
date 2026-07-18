@@ -188,12 +188,19 @@ function BaseTransformPanel() {
 function MaskPaintPanel() {
   const {
     maskBrush, setMaskBrush, resetElementMask, invertElementMask, featherElementMask,
-    selectedElement, elements,
+    trimElementTransparentBounds, selectedElement, elements,
   } = useStudio()
   const el = elements.find((item) => item.id === selectedElement)
+  const erasing = maskBrush.mode === 'Hide'
 
   return (
-    <Section title="Mask paint" info="Hide or reveal pixels on the selected layer." open>
+    <Section
+      title={erasing ? 'Erase path' : 'Mask paint'}
+      info={erasing
+        ? 'Brush away wrong cutout pixels (hair, hand, box edges). After each stroke the layer box shrinks to what’s left.'
+        : 'Reveal / restore pixels on the selected layer mask.'}
+      open
+    >
       {el && (
         <p className="mb-3 truncate text-[11px] text-zinc-500">
           Layer: <span className="font-medium text-zinc-300">{el.name}</span>
@@ -203,7 +210,7 @@ function MaskPaintPanel() {
         value={maskBrush.mode}
         onChange={(mode) => setMaskBrush((current) => ({ ...current, mode }))}
         options={[
-          { value: 'Hide', label: 'Hide' },
+          { value: 'Hide', label: 'Erase' },
           { value: 'Reveal', label: 'Reveal' },
         ]}
       />
@@ -219,6 +226,15 @@ function MaskPaintPanel() {
         <Button className="text-[10px]" onClick={invertElementMask}>Invert</Button>
         <Button className="text-[10px]" onClick={featherElementMask}>Feather</Button>
       </FormGrid>
+      {erasing && selectedElement && (
+        <Button
+          full
+          className="mt-2 text-[10px]"
+          onClick={() => trimElementTransparentBounds(selectedElement)}
+        >
+          Tighten box now
+        </Button>
+      )}
     </Section>
   )
 }
@@ -470,6 +486,7 @@ export function InspectorAside() {
     setSelectedText,
     maskEditing,
     setMaskEditing,
+    maskBrush,
     selectMode,
     setSelectMode,
     cancelSelection,
@@ -496,7 +513,7 @@ export function InspectorAside() {
 
   let title = 'Properties'
   if (censorSelecting) title = 'Censor'
-  else if (maskEditing) title = 'Mask'
+  else if (maskEditing) title = maskBrush?.mode === 'Hide' ? 'Erase' : 'Mask'
   else if (selectMode) title = 'Selection'
   else if (jointsOpen) title = 'Joint animation'
   else if (artboardSelected) title = 'Artboard'
@@ -545,7 +562,7 @@ export function InspectorAside() {
       open={open}
       title={title}
       onClose={effectsPinned ? undefined : close}
-      width={effectsPinned || jointsOpen || textLayer ? 260 : 228}
+      width={effectsPinned || jointsOpen ? 280 : textLayer ? 260 : 228}
     >
       {body}
     </SecondaryAside>

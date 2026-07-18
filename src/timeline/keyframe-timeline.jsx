@@ -41,6 +41,7 @@ export function KeyframeTimeline({
   onChange,
   onScrub,
   onAdd,
+  hint = 'Double-click a track to add a keyframe. Drag diamonds to retime.',
   className,
 }) {
   const railRef = useRef(null)
@@ -146,7 +147,7 @@ export function KeyframeTimeline({
           </div>
         ))}
       </div>
-      <p className="mt-2 text-[10px] text-zinc-600">Double-click a track to add a keyframe. Drag diamonds to retime.</p>
+      {hint ? <p className="mt-2 text-[10px] text-zinc-600">{hint}</p> : null}
     </div>
   )
 }

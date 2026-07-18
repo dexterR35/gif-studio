@@ -359,6 +359,11 @@ export function PreviewStage() {
             </div>
           )}
           {censorSelecting && !selection && <StageHint>Drag over the area to censor</StageHint>}
+          {maskEditing && (
+            <StageHint>
+              Brush on the cutout — erase stray hair / hand; box shrinks when you release
+            </StageHint>
+          )}
 
           {showMotionAnchor && (
             <button
@@ -431,7 +436,9 @@ export function PreviewStage() {
           <span className="w-11 font-mono text-[10px] text-zinc-500">{actualDuration.toFixed(1)}s</span>
         </div>
 
-        {activeTab === 'timeline' && <EffectTimeline />}
+        {(activeTab === 'timeline' || hasPoseJoints) && (
+          <EffectTimeline defaultOpen={activeTab === 'timeline' || poseRig.panelOpen} />
+        )}
 
         <div
           className={`mt-3 border-t border-white/[.05] pt-3 text-[10px] leading-relaxed text-zinc-500 ${

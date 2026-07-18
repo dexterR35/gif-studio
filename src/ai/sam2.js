@@ -13,7 +13,7 @@ export function sam2Configured() {
   return Boolean(ENCODER_URL && DECODER_URL)
 }
 
-async function viaServer(imageBlob, point) {
+async function viaServer(imageBlob, point, model) {
   const form = new FormData()
   form.append('image', imageBlob, 'frame.png')
   if (point) {
@@ -21,6 +21,7 @@ async function viaServer(imageBlob, point) {
     form.append('point_y', String(point.y))
   }
   form.append('engine', 'sam2')
+  if (model) form.append('model', model)
   const res = await fetch('/api/ai/segment', { method: 'POST', body: form })
   if (!res.ok) throw new Error(await res.text())
   return res.json()
@@ -29,12 +30,12 @@ async function viaServer(imageBlob, point) {
 /**
  * Point-prompt segmentation. Falls back to FastAPI when ONNX weights are absent.
  */
-export async function segmentWithSam2({ imageCanvas, point, imageBlob }) {
+export async function segmentWithSam2({ imageCanvas, point, imageBlob, model }) {
   if (!sam2Configured()) {
     const blob = imageBlob || await new Promise((resolve) => {
       imageCanvas.toBlob(resolve, 'image/png')
     })
-    return viaServer(blob, point)
+    return viaServer(blob, point, model)
   }
 
   const ctx = imageCanvas.getContext('2d', { willReadFrequently: true })

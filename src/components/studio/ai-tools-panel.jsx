@@ -1,14 +1,41 @@
 /**
- * AI tools — SAM2, Grounding DINO, Body + joints, RealESRGAN, RIFE.
+ * AI tools — local SAM2, Grounding DINO, Body + joints, RealESRGAN, RIFE.
  */
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   LoaderCircle, Sparkles, User, ScanSearch, Maximize2,
   BetweenHorizonalEnd, PersonStanding, Bone,
 } from 'lucide-react'
-import { Button, Section, Switch } from '../ui'
+import { Button, Section, SelectField, Switch } from '../ui'
 import { useStudio } from '../../context/studio-provider'
 import { useStudioStore } from '../../store/studio-store'
+import { UPSCALE_MODELS } from '../../ai/realesrgan'
+
+const SAM2_FALLBACK = [
+  { id: 'sam2.1_hiera_tiny', label: 'SAM2.1 Tiny' },
+  { id: 'sam2.1_hiera_small', label: 'SAM2.1 Small' },
+  { id: 'sam2.1_hiera_base_plus', label: 'SAM2.1 Base+' },
+  { id: 'sam2.1_hiera_large', label: 'SAM2.1 Large' },
+]
+
+const DINO_FALLBACK = [
+  { id: 'swint_ogc', label: 'GroundingDINO-T (Swin-T)' },
+  { id: 'swinb_cogcoor', label: 'GroundingDINO-B (Swin-B)' },
+]
+
+function optionLabel(m) {
+  if (m.ready === false) return `${m.label} (missing)`
+  return m.label
+}
+
+function deviceLabel(device) {
+  if (!device?.device) return 'device unknown'
+  const d = String(device.device)
+  if (d.startsWith('cuda') && device.gpu_name) return `${d} · ${device.gpu_name}`
+  if (d === 'mps') return 'mps (Apple)'
+  if (d === 'cpu') return 'cpu'
+  return d
+}
 
 export function AiToolsPanel() {
   const {
@@ -20,6 +47,45 @@ export function AiToolsPanel() {
   const [prompt, setPrompt] = useState('')
   const [busy, setBusy] = useState('')
   const [cutoutBody, setCutoutBody] = useState(true)
+  const [upscaleModel, setUpscaleModel] = useState('realesrgan')
+  const [upscaleScale, setUpscaleScale] = useState(2)
+  const [sam2Model, setSam2Model] = useState('sam2.1_hiera_tiny')
+  const [dinoModel, setDinoModel] = useState('swint_ogc')
+
+  const sam2Options = useMemo(
+    () => (caps.models?.sam2?.length ? caps.models.sam2 : SAM2_FALLBACK),
+    [caps.models],
+  )
+  const dinoOptions = useMemo(
+    () => (caps.models?.grounding_dino?.length ? caps.models.grounding_dino : DINO_FALLBACK),
+    [caps.models],
+  )
+  const upscaleOptions = useMemo(
+    () => (caps.models?.upscale?.length ? caps.models.upscale : UPSCALE_MODELS),
+    [caps.models],
+  )
+
+  useEffect(() => {
+    const readySam = sam2Options.find((m) => m.ready !== false)
+    if (readySam && !sam2Options.some((m) => m.id === sam2Model && m.ready !== false)) {
+      setSam2Model(readySam.id)
+    }
+  }, [sam2Options, sam2Model])
+
+  useEffect(() => {
+    const readyDino = dinoOptions.find((m) => m.ready !== false)
+    if (readyDino && !dinoOptions.some((m) => m.id === dinoModel && m.ready !== false)) {
+      setDinoModel(readyDino.id)
+    }
+  }, [dinoOptions, dinoModel])
+
+  useEffect(() => {
+    const readyUp = upscaleOptions.find((m) => m.ready !== false && m.id !== 'bicubic')
+      || upscaleOptions.find((m) => m.id === 'bicubic')
+    if (readyUp && !upscaleOptions.some((m) => m.id === upscaleModel && m.ready !== false)) {
+      setUpscaleModel(readyUp.id)
+    }
+  }, [upscaleOptions, upscaleModel])
 
   const requireCanvas = () => {
     if (!image || !canvasRef.current) {
@@ -41,33 +107,56 @@ export function AiToolsPanel() {
   }
 
   const jointCount = poseRig.joints?.filter((j) => (j.score ?? 1) >= 0.25).length || 0
+  const device = deviceLabel(caps.device)
 
   return (
     <div className="space-y-1">
       <Section
         title="Detect"
-        info={`${caps.api ? 'API online' : 'API offline'}${caps.rembg ? ' · rembg' : ''}${caps.opencv ? ' · OpenCV' : ''}. SAM2 / DINO / RealESRGAN / RIFE need packages and weights.`}
+        info={`Local weights · ${device}${caps.api ? ' · API online' : ' · API offline'}. HF Hub disabled unless GIF_STUDIO_ALLOW_HF=1.`}
         open
       >
         <div className="space-y-2">
+          <SelectField
+            label="SAM2 model"
+            value={sam2Model}
+            onChange={setSam2Model}
+          >
+            {sam2Options.map((m) => (
+              <option key={m.id} value={m.id} disabled={m.ready === false}>
+                {optionLabel(m)}
+              </option>
+            ))}
+          </SelectField>
           <Button
             variant="ghost"
             size="sm"
             full
             disabled={Boolean(busy)}
-            onClick={() => run('SAM2', () => runSam2Segment())}
+            onClick={() => run('SAM2', () => runSam2Segment(null, { model: sam2Model }))}
           >
             {busy === 'SAM2' ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
             SAM2 segment → layer
           </Button>
 
+          <SelectField
+            label="Grounding DINO model"
+            value={dinoModel}
+            onChange={setDinoModel}
+          >
+            {dinoOptions.map((m) => (
+              <option key={m.id} value={m.id} disabled={m.ready === false}>
+                {optionLabel(m)}
+              </option>
+            ))}
+          </SelectField>
           <label className="block text-[10px] font-semibold uppercase tracking-[.12em] text-zinc-500">
             Text prompt
             <input
               className="gs-input mt-1.5 w-full normal-case tracking-normal"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="person, logo, product…"
+              placeholder="chair . person . dog ."
             />
           </label>
           <Button
@@ -75,11 +164,19 @@ export function AiToolsPanel() {
             size="sm"
             full
             disabled={Boolean(busy) || !prompt.trim()}
-            onClick={() => run('DINO', () => runTextDetect(prompt))}
+            onClick={() => run('DINO', () => runTextDetect(prompt, {
+              dinoModel,
+              sam2Model,
+            }))}
           >
             {busy === 'DINO' ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ScanSearch className="h-3.5 w-3.5" />}
             Text-guided detect → layer
           </Button>
+          <p className="text-[10px] leading-snug text-zinc-600">
+            IDEA-Research Grounding DINO (open-set). Separate categories with{' '}
+            <span className="font-mono text-zinc-400">.</span>
+            {' '}— then SAM2 refines the top box into a mask (Grounded-SAM style).
+          </p>
 
           <Button
             variant="ghost"
@@ -156,8 +253,32 @@ export function AiToolsPanel() {
         )}
       </Section>
 
-      <Section title="Enhance" info="Upscale and frame interpolation." open={false}>
+      <Section
+        title="Enhance"
+        info={`Local xinntao weights · ${device}. Bicubic always works.`}
+        open={false}
+      >
         <div className="space-y-2">
+          <SelectField
+            label="Upscale model"
+            value={upscaleModel}
+            onChange={setUpscaleModel}
+          >
+            {upscaleOptions.map((m) => (
+              <option key={m.id} value={m.id} disabled={m.ready === false}>
+                {optionLabel(m)}
+              </option>
+            ))}
+          </SelectField>
+          <SelectField
+            label="Scale"
+            value={String(upscaleScale)}
+            onChange={(v) => setUpscaleScale(Number(v))}
+          >
+            {[2, 3, 4].map((s) => (
+              <option key={s} value={s}>{s}×</option>
+            ))}
+          </SelectField>
           <Button
             variant="ghost"
             size="sm"
@@ -167,18 +288,23 @@ export function AiToolsPanel() {
               const canvas = requireCanvas()
               if (!canvas) return
               const { upscaleWithRealESRGAN } = await import('../../ai/realesrgan')
-              const result = await upscaleWithRealESRGAN({ imageCanvas: canvas, scale: 2 })
+              const result = await upscaleWithRealESRGAN({
+                imageCanvas: canvas,
+                scale: upscaleScale,
+                model: upscaleModel,
+              })
               if (!result.url && !result.blob) {
                 throw new Error('Upscale returned no image')
               }
               const blob = result.blob || await (await fetch(result.url)).blob()
-              await loadFile(new File([blob], 'upscaled.png', { type: 'image/png' }))
+              const tag = upscaleOptions.find((m) => m.id === upscaleModel)?.label || upscaleModel
+              await loadFile(new File([blob], `upscaled-${upscaleModel}.png`, { type: 'image/png' }))
               if (result.url) URL.revokeObjectURL(result.url)
-              setToast(`Upscale · ${result.engine || 'ok'}`)
+              setToast(`Upscale · ${tag} · ${result.engine || 'ok'} · ${device}`)
             })}
           >
             {busy === 'Upscale' ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Maximize2 className="h-3.5 w-3.5" />}
-            Upscale 2× (RealESRGAN)
+            Upscale {upscaleScale}×
           </Button>
 
           <Button

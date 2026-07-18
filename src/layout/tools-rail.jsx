@@ -1,6 +1,7 @@
 import {
   BoxSelect,
   Brush,
+  Eraser,
   FlipHorizontal2,
   FlipVertical2,
   Grid3x3,
@@ -19,6 +20,7 @@ import { cn } from '../lib/cn'
 
 const MOVE_TOOL = 'Move'
 const MASK_TOOL = 'Mask'
+const ERASE_TOOL = 'Erase'
 const CENSOR_TOOL = 'Censor'
 
 const SELECTION_TOOLS = [
@@ -59,16 +61,21 @@ export function ToolsRail() {
     selectedElement, setToast, setBaseImageSelected,
     toggleFlip, rotateSelection, selectionFlip,
     baseImageSelected, censorSelecting, setCensorSelecting,
-    runSam2Segment, runHumanSegment,
+    runSam2Segment, runHumanSegment, beginMaskErase, maskBrush, setMaskBrush,
   } = useStudio()
+
+  const erasing = maskEditing && maskBrush.mode === 'Hide'
+  const revealing = maskEditing && maskBrush.mode !== 'Hide'
 
   const activeId = censorSelecting
     ? CENSOR_TOOL
-    : maskEditing
-      ? MASK_TOOL
-      : selectMode
-        ? selectionTool
-        : MOVE_TOOL
+    : erasing
+      ? ERASE_TOOL
+      : revealing
+        ? MASK_TOOL
+        : selectMode
+          ? selectionTool
+          : MOVE_TOOL
   const hasTarget = Boolean(selectedElement || baseImageSelected)
   const flipHint = selectedElement
     ? 'Flip selected layer'
@@ -101,11 +108,25 @@ export function ToolsRail() {
     }
     cancelSelection()
     setSelectMode(false)
+    setMaskBrush((current) => ({ ...current, mode: 'Reveal' }))
     setMaskEditing(true)
     setCensorSelecting(false)
     setPlaying(false)
     setMobilePanel(false)
     setBaseImageSelected(false)
+  }
+
+  const activateErase = () => {
+    if (!selectedElement) {
+      setToast('Select a cutout layer — then brush away hair, hand, or box edges')
+      return
+    }
+    cancelSelection()
+    setSelectMode(false)
+    setCensorSelecting(false)
+    beginMaskErase(selectedElement)
+    setMobilePanel(false)
+    setToast('Erase brush — paint to delete wrong path; the box shrinks')
   }
 
   const activateCensor = () => {
@@ -203,8 +224,16 @@ export function ToolsRail() {
       <div className="my-1.5 h-px w-6 bg-white/[.08]" />
 
       <ToolButton
+        label="Erase path"
+        hint="Brush-delete wrong cutout pixels (hair/hand). Bounds shrink after each stroke."
+        icon={Eraser}
+        active={activeId === ERASE_TOOL}
+        disabled={segmenting}
+        onClick={activateErase}
+      />
+      <ToolButton
         label="Mask paint"
-        hint="Paint a layer mask — options open in the properties panel"
+        hint="Reveal / restore mask pixels — options open in the properties panel"
         icon={Brush}
         active={activeId === MASK_TOOL}
         disabled={segmenting}

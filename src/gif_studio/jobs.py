@@ -46,12 +46,12 @@ def task(name: str):
 
 
 @task("gif_studio.upscale")
-def job_upscale(storage_key: str, scale: int = 2) -> dict[str, Any]:
+def job_upscale(storage_key: str, scale: int = 2, model: str = "realesrgan") -> dict[str, Any]:
     from .ai_pipeline import upscale_image
     from .storage import get_bytes, put_bytes
 
     data = get_bytes(storage_key)
-    out, engine = upscale_image(data, scale=scale)
+    out, engine = upscale_image(data, scale=scale, model=model)
     key = put_bytes(out, content_type="image/png")
     return {"storage_key": key, "engine": engine}
 

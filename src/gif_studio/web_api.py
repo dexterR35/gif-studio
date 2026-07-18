@@ -145,6 +145,7 @@ def health() -> dict[str, object]:
 
     caps = ai_pipeline.capability_flags()
     rembg = caps["rembg"]
+    device = caps.get("device") or {}
     return {
         "status": "ok",
         "opencv": cv2.__version__,
@@ -159,6 +160,9 @@ def health() -> dict[str, object]:
         "yolo": caps["yolo"],
         "realesrgan": caps["realesrgan"],
         "rife": caps["rife"],
+        "device": device,
+        "allow_huggingface": caps.get("allow_huggingface", False),
+        "models": caps.get("models") or {},
         "database": db_available(),
         "storage": storage_configured(),
         "storage_local": True,
@@ -493,14 +497,18 @@ async def ai_segment(
     point_x: Annotated[float | None, Form()] = None,
     point_y: Annotated[float | None, Form()] = None,
     engine: Annotated[str, Form()] = "sam2",
+    model: Annotated[str, Form()] = "",
 ) -> dict[str, object]:
+    del engine
     payload = await image.read()
     _require_upload_image(payload, image.filename)
     point = (point_x, point_y) if point_x is not None and point_y is not None else None
     try:
         from .ai_pipeline import segment_sam2
 
-        return await run_in_threadpool(segment_sam2, payload, point)
+        return await run_in_threadpool(
+            segment_sam2, payload, point, None, model or None,
+        )
     except Exception as exc:
         raise _ai_http_error(exc, default_message="AI segment failed") from exc
 
@@ -510,7 +518,10 @@ async def ai_detect(
     image: Annotated[UploadFile, File()],
     prompt: Annotated[str, Form()] = "",
     confidence: Annotated[float, Form()] = 0.35,
+    refine_sam2: Annotated[bool, Form()] = True,
     engine: Annotated[str, Form()] = "auto",
+    dino_model: Annotated[str, Form()] = "",
+    sam2_model: Annotated[str, Form()] = "",
 ) -> dict[str, object]:
     del engine  # selected inside pipeline
     payload = await image.read()
@@ -518,7 +529,15 @@ async def ai_detect(
     try:
         from .ai_pipeline import detect_objects
 
-        return await run_in_threadpool(detect_objects, payload, prompt, confidence)
+        return await run_in_threadpool(
+            detect_objects,
+            payload,
+            prompt,
+            confidence,
+            refine_sam2,
+            dino_model or None,
+            sam2_model or None,
+        )
     except Exception as exc:
         raise _ai_http_error(exc, default_message="AI detect failed") from exc
 
@@ -527,6 +546,7 @@ async def ai_detect(
 async def ai_upscale(
     image: Annotated[UploadFile, File()],
     scale: Annotated[int, Form()] = 2,
+    model: Annotated[str, Form()] = "realesrgan",
     async_job: Annotated[bool, Form()] = False,
 ):
     payload = await image.read()
@@ -536,21 +556,21 @@ async def ai_upscale(
         from .storage import get_bytes, put_bytes
 
         key = put_bytes(payload, content_type="image/png")
-        result = job_upscale.delay(key, scale)
+        result = job_upscale.delay(key, scale, model)
 
         def build_inline(data: dict) -> Response:
             out = get_bytes(data["storage_key"])
             return Response(
                 out,
                 media_type="image/png",
-                headers={"X-Upscale-Engine": str(data.get("engine") or "realesrgan")},
+                headers={"X-Upscale-Engine": str(data.get("engine") or model or "realesrgan")},
             )
 
         return _inline_or_queued(result, inline_builder=build_inline)
     try:
         from .ai_pipeline import upscale_image
 
-        out, engine = await run_in_threadpool(upscale_image, payload, scale)
+        out, engine = await run_in_threadpool(upscale_image, payload, scale, model)
         return Response(out, media_type="image/png", headers={"X-Upscale-Engine": engine})
     except Exception as exc:
         raise _ai_http_error(exc, default_message="Upscale failed") from exc

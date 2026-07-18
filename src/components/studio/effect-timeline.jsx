@@ -27,6 +27,7 @@ export function EffectTimeline({ defaultOpen = true }) {
     addMotionEffect, updateMotionEffect, moveMotionEffectTrack,
     selectedMotionEffect, setSelectedMotionEffect, goToWorkspace,
     elements, overlays, textLayers, addTextLayer, updateTextById, activeTab,
+    poseRig, setPoseRig,
   } = useStudio()
 
   const clips = settings.motionEffects || []
@@ -71,6 +72,33 @@ export function EffectTimeline({ defaultOpen = true }) {
       visible: ov.visible !== false,
     })),
   ]
+
+  const jointCount = (poseRig.joints || []).filter((j) => (j.score ?? 1) >= 0.25).length
+  const jointLane = jointCount > 0
+    ? {
+      id: 'joints',
+      label: 'J',
+      title: poseRig.selectedJoint
+        ? poseRig.selectedJoint.replace(/_/g, ' ')
+        : 'Joints',
+      subtitle: `${jointCount} keys`,
+      color: '#d8ff3e',
+    }
+    : null
+
+  const openJointPanel = () => {
+    setPoseRig((current) => ({
+      ...current,
+      panelOpen: true,
+      visible: true,
+      selectedJoint: current.selectedJoint
+        || current.joints?.find((j) => (j.score ?? 1) >= 0.25)?.name
+        || null,
+    }))
+    setSelectedMotionEffect('joints')
+    setPlaying(false)
+    if (activeTab !== 'ai' && activeTab !== 'motion') goToWorkspace?.('ai')
+  }
 
   const selectClip = (id) => {
     setSelectedMotionEffect(id)
@@ -174,6 +202,7 @@ export function EffectTimeline({ defaultOpen = true }) {
           Timeline
           <span className="ml-2 font-mono normal-case tracking-normal text-zinc-600">
             M · {textLanes.length}/{MAX_TEXT_LAYERS}T · {clips.length}/{MAX_MOTION_EFFECTS}
+            {jointLane ? ' · J' : ''}
           </span>
         </>
       )}
@@ -192,6 +221,9 @@ export function EffectTimeline({ defaultOpen = true }) {
               {lane.label}
             </span>
           ))}
+          {jointLane && (
+            <span className="gs-timeline-lane-label" title="Body joint keys">J</span>
+          )}
           {lockedLanes.map((lane) => (
             <span key={lane.id} className="gs-timeline-lane-label" title={lane.title}>
               {lane.label}
@@ -352,6 +384,47 @@ export function EffectTimeline({ defaultOpen = true }) {
               </div>
             </div>
           ))}
+
+          {jointLane && (
+            <div className="gs-timeline-lane-rail" data-track="joints">
+              <div
+                role="button"
+                tabIndex={0}
+                title={`${jointLane.title} · start → end joint keys · click to edit`}
+                className={cn(
+                  'gs-timeline-clip',
+                  selectedMotionEffect === 'joints' && 'is-active',
+                )}
+                style={{
+                  left: '0%',
+                  width: '100%',
+                  background: jointLane.color,
+                  color: '#111',
+                }}
+                onPointerDown={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  openJointPanel()
+                }}
+              >
+                <span>{jointLane.title}</span>
+                <em className="gs-timeline-lock" style={{ color: '#111', opacity: 0.7 }}>
+                  {jointLane.subtitle}
+                </em>
+                {/* Start / end key markers */}
+                <i
+                  aria-hidden
+                  className="pointer-events-none absolute top-1/2 left-0 h-2.5 w-2.5 -translate-y-1/2 rotate-45 border border-black/40 bg-white"
+                  title="Start key"
+                />
+                <i
+                  aria-hidden
+                  className="pointer-events-none absolute top-1/2 right-0 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 border border-black/40 bg-white"
+                  title="End key"
+                />
+              </div>
+            </div>
+          )}
 
           {lockedLanes.map((lane) => (
             <div key={lane.id} className="gs-timeline-lane-rail" data-track={lane.id}>

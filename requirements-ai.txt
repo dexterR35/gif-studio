@@ -1,20 +1,25 @@
-# Optional heavy AI engines for GIF Studio (PyTorch).
+# Optional heavy AI engines for GIF Studio (PyTorch) — local weights.
 #   pip install -r requirements-ai.txt
 #   pip install "git+https://github.com/facebookresearch/sam2.git"
 #   python scripts/setup_ai_models.py
+#
+# Inference is local-only by default (models/). Hugging Face Hub is opt-in:
+#   GIF_STUDIO_ALLOW_HF=1
 #
 # Note: basicsr/realesrgan often fail on Python ≥3.12 — Spandrel is the
 # preferred Real-ESRGAN weight loader (still uses xinntao .pth checkpoints).
 
 torch>=2.5.1
 torchvision>=0.20.1
+
+# One-time RIFE weight fetch in setup_ai_models.py (stored under models/rife/)
 huggingface_hub>=0.26
 
-# Grounding DINO (IDEA-Research) via Transformers
-transformers>=4.45
-
-# Real-ESRGAN weights loader (xinntao checkpoints)
+# Real-ESRGAN weights loader (xinntao checkpoints under models/realesrgan/)
 spandrel>=0.4.0
+
+# Grounding DINO (loads models/groundingdino/hf-tiny with local_files_only)
+transformers>=4.45
 
 # Optional classic stack (may fail on newer Python):
 # realesrgan>=0.3.0

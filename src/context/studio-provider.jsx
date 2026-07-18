@@ -400,6 +400,9 @@ export function StudioProvider({ children }) {
       realesrgan: Boolean(apiInfo?.realesrgan),
       rife: Boolean(apiInfo?.rife),
       rembg: Boolean(apiInfo?.rembg || apiInfo?.ai),
+      device: apiInfo?.device || null,
+      models: apiInfo?.models || null,
+      allowHuggingFace: Boolean(apiInfo?.allow_huggingface),
     })
   }, [apiAvailable, apiInfo])
 
@@ -1194,7 +1197,12 @@ export function StudioProvider({ children }) {
     setSelection({ x: Math.min(start.x, point.x), y: Math.min(start.y, point.y), w: Math.abs(point.x - start.x), h: Math.abs(point.y - start.y) })
   }
   const finishSelection = (event) => {
-    if (maskEditing) { paintElementMask(event); maskPainting.current = false; return }
+    if (maskEditing) {
+      const wasPainting = maskPainting.current
+      maskPainting.current = false
+      if (wasPainting) endMaskStroke(event)
+      return
+    }
     if (censorSelecting && selectionStart.current) { const point = pointerPosition(event), start = selectionStart.current; const rect = { x: Math.min(start.x, point.x), y: Math.min(start.y, point.y), w: Math.abs(point.x - start.x), h: Math.abs(point.y - start.y) }; setCensor((current) => ({ ...current, enabled: true, x: rect.x * 100, y: rect.y * 100, w: rect.w * 100, h: rect.h * 100 })); selectionStart.current = null; setSelection(null); setToast('Censor region added'); return }
     if (selectMode && selectionTool === 'Freehand Lasso' && selectionStart.current) {
       const point = pointerPosition(event), points = [...selectionPoints, point], rect = selectionBounds(points)
@@ -1272,10 +1280,11 @@ export function StudioProvider({ children }) {
     if (activeTab !== 'ai' && activeTab !== 'edit') goToWorkspace('motion')
     setSettings((current) => ({ ...current, preset: 'Still', ...PRESETS.Still }))
     setToast(layerInsertAt === 'front' ? 'Element extracted in front — choose its motion' : 'Element extracted in back — choose its motion')
+    return id
   }
 
   const extractElement = async (rect) => {
-    if (!apiAvailable) { extractElementLocal(rect); return }
+    if (!apiAvailable) return extractElementLocal(rect)
     const sourceCanvas = canvasRef.current
     if (!sourceCanvas) return
     setSegmenting(true); setToast('OpenCV is separating the object…')
@@ -1314,9 +1323,12 @@ export function StudioProvider({ children }) {
         url: result.background,
       })
       setToast(`${result.engine.startsWith('rembg') ? 'AI' : 'GrabCut'} object ready · ${layerInsertAt === 'front' ? 'in front' : 'in back'}`)
+      return id
     } catch (error) {
-      console.warn(error); extractElementLocal(rect)
+      console.warn(error)
+      const id = extractElementLocal(rect)
       setToast(`${error.message}. Used edge selection instead.`)
+      return id
     } finally { setSegmenting(false) }
   }
 
@@ -1416,14 +1428,14 @@ export function StudioProvider({ children }) {
     return id
   }
 
-  const runSam2Segment = async (point = null) => {
+  const runSam2Segment = async (point = null, { model } = {}) => {
     const canvas = canvasRef.current
     if (!canvas || !image) { setToast('Open an image first'); return }
     setSegmenting(true)
     try {
       const { segmentWithSam2 } = await import('../ai/sam2')
       const pt = point || { x: canvas.width / 2, y: canvas.height / 2 }
-      const result = await segmentWithSam2({ imageCanvas: canvas, point: pt })
+      const result = await segmentWithSam2({ imageCanvas: canvas, point: pt, model })
       let maskCanvas = null
       if (result.mask_png_base64) {
         maskCanvas = document.createElement('canvas')
@@ -1590,20 +1602,50 @@ export function StudioProvider({ children }) {
     }
   }
 
-  const runTextDetect = async (prompt) => {
+  const runTextDetect = async (prompt, { dinoModel, sam2Model } = {}) => {
     const canvas = canvasRef.current
     if (!canvas || !image) { setToast('Open an image first'); return }
     if (!prompt?.trim()) { setToast('Enter a text prompt'); return }
     setSegmenting(true)
     try {
+      // IDEA-Research/GroundingDINO → boxes; SAM2 refines to object mask (Grounded-SAM).
       const { detectWithGroundingDino } = await import('../ai/grounding-dino')
-      const result = await detectWithGroundingDino({ imageCanvas: canvas, prompt: prompt.trim() })
+      const result = await detectWithGroundingDino({
+        imageCanvas: canvas,
+        prompt: prompt.trim(),
+        refineSam2: true,
+        dinoModel,
+        sam2Model,
+      })
       const boxes = result.boxes || []
       if (!boxes.length) {
         setToast(`Detect · ${result.engine || 'ok'} · no boxes`)
         return
       }
       useStudioStore.getState().setCapabilities({ groundingDino: true })
+
+      if (result.mask_png_base64) {
+        const maskCanvas = document.createElement('canvas')
+        const img = new Image()
+        await new Promise((resolve, reject) => {
+          img.onload = resolve
+          img.onerror = reject
+          img.src = `data:image/png;base64,${result.mask_png_base64}`
+        })
+        maskCanvas.width = img.naturalWidth
+        maskCanvas.height = img.naturalHeight
+        maskCanvas.getContext('2d').drawImage(img, 0, 0)
+        useStudioStore.getState().setCapabilities({ sam2: true })
+        const layerId = addElementFromMask(maskCanvas, {
+          name: prompt.trim().slice(0, 28) || 'Detected',
+          engine: result.engine || 'grounding-dino+sam2',
+        })
+        if (layerId) beginMaskErase(layerId)
+        setToast(`Grounding DINO + SAM2 · object mask · refine with erase if needed`)
+        return
+      }
+
+      // Fallback: box only (no SAM2) — cube crop + erase brush.
       const top = [...boxes].sort((a, b) => (b.score || 0) - (a.score || 0))[0]
       const rect = {
         x: top.x / canvas.width,
@@ -1611,8 +1653,11 @@ export function StudioProvider({ children }) {
         w: top.w / canvas.width,
         h: top.h / canvas.height,
       }
-      await extractElement(rect)
-      setToast(`Detect · ${result.engine} · ${boxes.length} box${boxes.length === 1 ? '' : 'es'} · extracted top hit`)
+      const layerId = await extractElement(rect)
+      if (layerId) beginMaskErase(layerId)
+      setToast(
+        `Detect · ${result.engine} · box only (install SAM2 for object mask) · erase stray edges`,
+      )
     } catch (err) {
       setToast(err?.message || 'Text detect failed')
     } finally {
@@ -2003,21 +2048,137 @@ export function StudioProvider({ children }) {
     const copy = document.createElement('canvas'); copy.width = mask.width; copy.height = mask.height; copy.getContext('2d').drawImage(mask, 0, 0)
     const context = mask.getContext('2d'); context.clearRect(0, 0, mask.width, mask.height); context.filter = `blur(${maskBrush.feather}px)`; context.drawImage(copy, 0, 0); context.filter = 'none'
   })
+  const strokeMaskAtEvent = (element, mask, event) => {
+    if (!stageRef.current) return false
+    const point = pointerPosition(event)
+    const localX = (point.x - element.x) / element.w
+    const localY = (point.y - element.y) / element.h
+    if (localX < 0 || localX > 1 || localY < 0 || localY > 1) return false
+    const context = mask.getContext('2d')
+    const x = localX * mask.width
+    const y = localY * mask.height
+    const radius = maskBrush.size / 2 * mask.width / Math.max(1, settings.width * element.w)
+    const gradient = context.createRadialGradient(x, y, radius * maskBrush.hardness / 100, x, y, radius)
+    const alpha = maskBrush.opacity / 100
+    if (maskBrush.mode === 'Hide') {
+      context.globalCompositeOperation = 'destination-out'
+      gradient.addColorStop(0, `rgba(0,0,0,${alpha})`)
+      gradient.addColorStop(1, 'rgba(0,0,0,0)')
+    } else {
+      context.globalCompositeOperation = 'source-over'
+      gradient.addColorStop(0, `rgba(255,255,255,${alpha})`)
+      gradient.addColorStop(1, 'rgba(255,255,255,0)')
+    }
+    context.fillStyle = gradient
+    context.beginPath()
+    context.arc(x, y, radius, 0, Math.PI * 2)
+    context.fill()
+    context.globalCompositeOperation = 'source-over'
+    return true
+  }
+
   const paintElementMask = (event) => {
     const element = elements.find((item) => item.id === selectedElement)
-    if (!element?.maskCanvas || !stageRef.current) return
-    const point = pointerPosition(event)
-    const localX = (point.x - element.x) / element.w, localY = (point.y - element.y) / element.h
-    if (localX < 0 || localX > 1 || localY < 0 || localY > 1) return
-    mutateMask(element.id, (mask) => {
-      const context = mask.getContext('2d'), x = localX * mask.width, y = localY * mask.height
-      const radius = maskBrush.size / 2 * mask.width / Math.max(1, settings.width * element.w)
-      const gradient = context.createRadialGradient(x, y, radius * maskBrush.hardness / 100, x, y, radius)
-      const alpha = maskBrush.opacity / 100
-      if (maskBrush.mode === 'Hide') { context.globalCompositeOperation = 'destination-out'; gradient.addColorStop(0, `rgba(0,0,0,${alpha})`); gradient.addColorStop(1, 'rgba(0,0,0,0)') }
-      else { context.globalCompositeOperation = 'source-over'; gradient.addColorStop(0, `rgba(255,255,255,${alpha})`); gradient.addColorStop(1, 'rgba(255,255,255,0)') }
-      context.fillStyle = gradient; context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.fill(); context.globalCompositeOperation = 'source-over'
-    })
+    if (!element?.maskCanvas) return
+    mutateMask(element.id, (mask) => { strokeMaskAtEvent(element, mask, event) })
+  }
+
+  const cropCanvas = (src, minX, minY, nw, nh) => {
+    if (!src) return null
+    const canvas = document.createElement('canvas')
+    canvas.width = nw
+    canvas.height = nh
+    canvas.getContext('2d').drawImage(src, minX, minY, nw, nh, 0, 0, nw, nh)
+    return canvas
+  }
+
+  const tightBoundsFromBitmap = (bitmap) => {
+    const w = bitmap.width
+    const h = bitmap.height
+    if (w < 2 || h < 2) return null
+    const data = bitmap.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, w, h).data
+    let minX = w
+    let minY = h
+    let maxX = -1
+    let maxY = -1
+    for (let y = 0; y < h; y += 1) {
+      for (let x = 0; x < w; x += 1) {
+        if (data[(y * w + x) * 4 + 3] > 10) {
+          if (x < minX) minX = x
+          if (y < minY) minY = y
+          if (x > maxX) maxX = x
+          if (y > maxY) maxY = y
+        }
+      }
+    }
+    if (maxX < 0) return null
+    minX = Math.max(0, minX - 1)
+    minY = Math.max(0, minY - 1)
+    maxX = Math.min(w - 1, maxX + 1)
+    maxY = Math.min(h - 1, maxY + 1)
+    const nw = maxX - minX + 1
+    const nh = maxY - minY + 1
+    if (nw >= w - 2 && nh >= h - 2) return null
+    return { minX, minY, nw, nh, w, h }
+  }
+
+  const applyTightBounds = (el, bounds) => {
+    if (!bounds) return el
+    const { minX, minY, nw, nh, w, h } = bounds
+    return {
+      ...el,
+      x: el.x + (minX / w) * el.w,
+      y: el.y + (minY / h) * el.h,
+      w: (nw / w) * el.w,
+      h: (nh / h) * el.h,
+      bitmap: cropCanvas(el.bitmap, minX, minY, nw, nh),
+      sourceBitmap: cropCanvas(el.sourceBitmap, minX, minY, nw, nh) || cropCanvas(el.bitmap, minX, minY, nw, nh),
+      maskCanvas: cropCanvas(el.maskCanvas, minX, minY, nw, nh),
+      cleanup: el.cleanup ? cropCanvas(el.cleanup, minX, minY, nw, nh) : null,
+    }
+  }
+
+  /** Last dab of a brush stroke — paint + (when erasing) shrink the transform box. */
+  const endMaskStroke = (event) => {
+    const id = selectedElement
+    if (!id) return
+    setElements((current) => current.map((element) => {
+      if (element.id !== id || !element.maskCanvas) return element
+      strokeMaskAtEvent(element, element.maskCanvas, event)
+      let next = rebuildMaskedElement(element)
+      if (maskBrush.mode === 'Hide' && next.bitmap) {
+        next = applyTightBounds(next, tightBoundsFromBitmap(next.bitmap))
+      }
+      return next
+    }))
+  }
+
+  /** Crop layer bitmaps + shrink transform box to opaque mask pixels (after erase brush). */
+  const trimElementTransparentBounds = (id) => {
+    setElements((current) => current.map((el) => {
+      if (el.id !== id || !el.bitmap) return el
+      return applyTightBounds(el, tightBoundsFromBitmap(el.bitmap))
+    }))
+  }
+
+  /** Enter erase brush on the selected cutout — delete stray path (hair/hand) from the mask. */
+  const beginMaskErase = (elementId = selectedElement) => {
+    const id = elementId || selectedElement
+    if (!id) {
+      setToast('Select a cutout layer first')
+      return false
+    }
+    setSelectedElements([id])
+    setBaseImageSelected(false)
+    setArtboardSelected(false)
+    setSelectedOverlay(null)
+    setSelectedText(null)
+    setSelectMode(false)
+    setCensorSelecting(false)
+    setMaskBrush((current) => ({ ...current, mode: 'Hide' }))
+    setMaskEditing(true)
+    setPlaying(false)
+    return true
   }
 
   const addTextLayer = (opts = {}) => {
@@ -2436,7 +2597,9 @@ export function StudioProvider({ children }) {
     update, setAmplitude, setSpeed, applyQuality, applyPreset, reset, loadFile, draw, cancelSelection, completePathSelection,
     startSelection, moveSelection, finishSelection, updateElement, removeElement,
     toggleElementLock, toggleElementVisible, toggleImageLock, toggleFlip, rotateSelection, selectionFlip, toggleTextLock, selectBaseImage, selectStageElement,
-    resetElementMask, invertElementMask, featherElementMask, addTextLayer, updateText, updateTextById, removeText, moveText,
+    resetElementMask, invertElementMask, featherElementMask, paintElementMask,
+    trimElementTransparentBounds, beginMaskErase,
+    addTextLayer, updateText, updateTextById, removeText, moveText,
     uploadFont, updateEffect,
     addOverlay, updateOverlay, updateOverlayById, selectOverlay, selectStageOverlay, overlayBounds, toggleOverlayVisible, removeOverlay, saveCurrentPng, compressExistingGif,
     beginAnchorDrag, moveAnchorDrag, endAnchorDrag, resetMotionAnchor,

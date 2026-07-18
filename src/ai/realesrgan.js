@@ -1,18 +1,44 @@
 /**
- * RealESRGAN upscaling — ONNX in-browser or FastAPI/Celery job.
+ * Upscale — Bicubic (local) or ESRGAN / Real-ESRGAN / A-ESRGAN via local API weights.
  */
 import { getOnnxSession, imageDataToFloatTensor, ort } from './onnx'
 
 const MODEL_URL = import.meta.env.VITE_REALESRGAN_ONNX || ''
 
+/** Fallback list when /api/health has not loaded yet. */
+export const UPSCALE_MODELS = [
+  { id: 'bicubic', label: 'Bicubic', ready: true },
+  { id: 'esrgan', label: 'ESRGAN', ready: false },
+  { id: 'realesrgan', label: 'Real-ESRGAN', ready: false },
+  { id: 'realesrgan-x2', label: 'Real-ESRGAN x2', ready: false },
+  { id: 'a-esrgan', label: 'A-ESRGAN (anime)', ready: false },
+]
+
 export function realesrganConfigured() {
   return Boolean(MODEL_URL)
 }
 
-async function viaServer(imageBlob, scale = 2) {
+async function viaBicubic(imageCanvas, scale = 2) {
+  const w = Math.max(1, Math.round(imageCanvas.width * scale))
+  const h = Math.max(1, Math.round(imageCanvas.height * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(imageCanvas, 0, 0, w, h)
+  const blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not encode bicubic image'))), 'image/png')
+  })
+  return { blob, url: URL.createObjectURL(blob), engine: 'bicubic' }
+}
+
+async function viaServer(imageBlob, scale = 2, model = 'realesrgan') {
   const form = new FormData()
   form.append('image', imageBlob, 'frame.png')
   form.append('scale', String(scale))
+  form.append('model', model)
   const res = await fetch('/api/ai/upscale', { method: 'POST', body: form })
   if (!res.ok) throw new Error(await res.text())
   if (res.headers.get('content-type')?.includes('json')) {
@@ -26,7 +52,7 @@ async function viaServer(imageBlob, scale = 2) {
     throw new Error(data.detail || 'Upscale failed')
   }
   const blob = await res.blob()
-  const engine = res.headers.get('X-Upscale-Engine') || 'realesrgan-server'
+  const engine = res.headers.get('X-Upscale-Engine') || `${model}-server`
   return { blob, url: URL.createObjectURL(blob), engine }
 }
 
@@ -70,26 +96,48 @@ async function tensorToPngUrl(tensor, fallbackW, fallbackH) {
   return { blob, url: URL.createObjectURL(blob) }
 }
 
-export async function upscaleWithRealESRGAN({ imageCanvas, imageBlob, scale = 2 }) {
+export async function upscaleWithRealESRGAN({
+  imageCanvas,
+  imageBlob,
+  scale = 2,
+  model = 'realesrgan',
+}) {
+  const mid = String(model || 'realesrgan').toLowerCase()
+
+  if (mid === 'bicubic' && imageCanvas) {
+    return viaBicubic(imageCanvas, scale)
+  }
+
   const blob = imageBlob || await new Promise((resolve, reject) => {
+    if (!imageCanvas) {
+      reject(new Error('Could not read canvas'))
+      return
+    }
     imageCanvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not read canvas'))), 'image/png')
   })
-  if (!realesrganConfigured()) return viaServer(blob, scale)
 
-  const ctx = imageCanvas.getContext('2d', { willReadFrequently: true })
-  const imageData = ctx.getImageData(0, 0, imageCanvas.width, imageCanvas.height)
-  const session = await getOnnxSession(MODEL_URL)
-  const input = imageDataToFloatTensor(imageData, {
-    size: Math.max(imageCanvas.width, imageCanvas.height),
-    normalize: false,
-  })
-  const out = await session.run({ input })
-  const tensor = out.output || Object.values(out)[0]
-  if (!tensor?.data) {
-    throw new Error('RealESRGAN ONNX returned no tensor — check VITE_REALESRGAN_ONNX or use the server path')
+  if (mid === 'bicubic') {
+    return viaServer(blob, scale, 'bicubic')
   }
-  const png = await tensorToPngUrl(tensor, imageCanvas.width * scale, imageCanvas.height * scale)
-  return { ...png, tensor, engine: 'realesrgan-onnx', ort }
+
+  if (mid === 'realesrgan' && realesrganConfigured() && imageCanvas) {
+    const ctx = imageCanvas.getContext('2d', { willReadFrequently: true })
+    const imageData = ctx.getImageData(0, 0, imageCanvas.width, imageCanvas.height)
+    const session = await getOnnxSession(MODEL_URL)
+    const input = imageDataToFloatTensor(imageData, {
+      size: Math.max(imageCanvas.width, imageCanvas.height),
+      normalize: false,
+    })
+    const out = await session.run({ input })
+    const tensor = out.output || Object.values(out)[0]
+    if (!tensor?.data) {
+      throw new Error('RealESRGAN ONNX returned no tensor — check VITE_REALESRGAN_ONNX or use the server path')
+    }
+    const png = await tensorToPngUrl(tensor, imageCanvas.width * scale, imageCanvas.height * scale)
+    return { ...png, tensor, engine: 'realesrgan-onnx', ort }
+  }
+
+  return viaServer(blob, scale, mid)
 }
 
 export async function probeRealESRGAN() {

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Download / clone weights for SAM2, Real-ESRGAN, Grounding DINO, and RIFE.
+"""Download local AI checkpoints (no Hugging Face Hub at runtime).
+
+Weights go under ``models/``. Grounding DINO is cloned to ``third_party/``.
 
 Usage:
-  python scripts/setup_ai_models.py
+  python scripts/setup_ai_models.py              # all local ckpts (default)
   python scripts/setup_ai_models.py --skip-rife
-  python scripts/setup_ai_models.py --rife-hf MonsterMMORPG/RIFE_4_26
-
-This does NOT install pip packages — see requirements-ai.txt for that.
+  python scripts/setup_ai_models.py --tiny-only  # SAM2 tiny + DINO Swin-T only
 """
 
 from __future__ import annotations
@@ -29,15 +29,49 @@ REALESRGAN_URLS = {
     "RealESRGAN_x2plus.pth": (
         "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth"
     ),
+    "ESRGAN_SRx4_DF2KOST_official-ff704c30.pth": (
+        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.1/"
+        "ESRGAN_SRx4_DF2KOST_official-ff704c30.pth"
+    ),
+    "RealESRGAN_x4plus_anime_6B.pth": (
+        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/"
+        "RealESRGAN_x4plus_anime_6B.pth"
+    ),
 }
 
-GROUNDING_DINO_CKPT = (
-    "https://github.com/IDEA-Research/GroundingDINO/releases/download/"
-    "v0.1.0-alpha/groundingdino_swint_ogc.pth"
-)
-SAM2_TINY = (
-    "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt"
-)
+SAM2_URLS = {
+    "sam2.1_hiera_tiny.pt": (
+        "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt"
+    ),
+    "sam2.1_hiera_small.pt": (
+        "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt"
+    ),
+    "sam2.1_hiera_base_plus.pt": (
+        "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt"
+    ),
+    "sam2.1_hiera_large.pt": (
+        "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt"
+    ),
+}
+
+GROUNDING_DINO = [
+    {
+        "file": "groundingdino_swint_ogc.pth",
+        "config": "GroundingDINO_SwinT_OGC.py",
+        "url": (
+            "https://github.com/IDEA-Research/GroundingDINO/releases/download/"
+            "v0.1.0-alpha/groundingdino_swint_ogc.pth"
+        ),
+    },
+    {
+        "file": "groundingdino_swinb_cogcoor.pth",
+        "config": "GroundingDINO_SwinB_cfg.py",
+        "url": (
+            "https://github.com/IDEA-Research/GroundingDINO/releases/download/"
+            "v0.1.0-alpha2/groundingdino_swinb_cogcoor.pth"
+        ),
+    },
+]
 
 
 def download(url: str, dest: Path) -> None:
@@ -66,38 +100,104 @@ def clone_repo(url: str, dest: Path) -> None:
 
 
 def setup_realesrgan() -> None:
-    print("\n[Real-ESRGAN]")
+    print("\n[Real-ESRGAN / ESRGAN / A-ESRGAN] GitHub releases → models/realesrgan/")
     for name, url in REALESRGAN_URLS.items():
         download(url, MODELS / "realesrgan" / name)
 
 
-def setup_sam2(local_ckpt: bool) -> None:
-    print("\n[SAM2]")
-    if local_ckpt:
-        download(SAM2_TINY, MODELS / "sam2" / "sam2.1_hiera_tiny.pt")
-        print("  tip: set SAM2_CHECKPOINT=models/sam2/sam2.1_hiera_tiny.pt")
-        print("       SAM2_CONFIG=configs/sam2.1/sam2.1_hiera_t.yaml")
-    else:
-        print("  using Hugging Face on first inference (facebook/sam2-hiera-tiny)")
-        print("  install: pip install 'git+https://github.com/facebookresearch/sam2.git'")
+def setup_sam2(tiny_only: bool) -> None:
+    print("\n[SAM2] Meta CDN → models/sam2/")
+    items = list(SAM2_URLS.items())
+    if tiny_only:
+        items = items[:1]
+    for name, url in items:
+        download(url, MODELS / "sam2" / name)
+    print("  install package: pip install 'git+https://github.com/facebookresearch/sam2.git'")
 
 
-def setup_grounding_dino(local_ckpt: bool) -> None:
-    print("\n[Grounding DINO]")
-    if local_ckpt:
-        download(GROUNDING_DINO_CKPT, MODELS / "groundingdino" / "groundingdino_swint_ogc.pth")
-        print("  tip: install official package from IDEA-Research/GroundingDINO")
-        print("       and set GROUNDING_DINO_CONFIG + GROUNDING_DINO_CHECKPOINT")
-    else:
-        print("  using Hugging Face Transformers on first inference")
-        print("  (IDEA-Research/grounding-dino-tiny)")
-        print("  install: pip install transformers")
+def setup_bert_local() -> None:
+    """Optional BERT for official .pth path — stored under models/ once."""
+    dest = MODELS / "groundingdino" / "bert-base-uncased"
+    if (dest / "config.json").exists():
+        print(f"  skip (exists): {dest.relative_to(ROOT)}")
+        return
+    print("  downloading google-bert/bert-base-uncased → models/groundingdino/bert-base-uncased")
+    print("  (one-time; inference uses this folder, not the Hub)")
+    try:
+        from huggingface_hub import snapshot_download
+
+        snapshot_download(
+            repo_id="google-bert/bert-base-uncased",
+            local_dir=str(dest),
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"  WARNING: BERT download failed ({exc})")
+
+
+def setup_dino_transformers(tiny_only: bool) -> None:
+    """Primary runtime path: Transformers snapshots on disk (local_files_only)."""
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError:
+        print("  WARNING: huggingface_hub missing — cannot download Transformers DINO snapshots")
+        return
+    repos = [
+        ("IDEA-Research/grounding-dino-tiny", MODELS / "groundingdino" / "hf-tiny"),
+    ]
+    if not tiny_only:
+        repos.append(
+            ("IDEA-Research/grounding-dino-base", MODELS / "groundingdino" / "hf-base"),
+        )
+    for repo_id, dest in repos:
+        if (dest / "config.json").exists():
+            print(f"  skip (exists): {dest.relative_to(ROOT)}")
+            continue
+        print(f"  downloading {repo_id} → {dest.relative_to(ROOT)}")
+        print("  (one-time; runtime uses local_files_only — no Hub)")
+        try:
+            snapshot_download(repo_id=repo_id, local_dir=str(dest))
+        except Exception as exc:  # noqa: BLE001
+            print(f"  WARNING: {repo_id} failed ({exc})")
+
+
+def setup_grounding_dino(tiny_only: bool, install_pkg: bool) -> None:
+    print("\n[Grounding DINO] local Transformers snapshots + optional official .pth")
+    setup_dino_transformers(tiny_only=tiny_only)
+
+    clone_repo(
+        "https://github.com/IDEA-Research/GroundingDINO.git",
+        THIRD / "GroundingDINO",
+    )
+    specs = GROUNDING_DINO[:1] if tiny_only else GROUNDING_DINO
+    cfg_dir = THIRD / "GroundingDINO" / "groundingdino" / "config"
+    for spec in specs:
+        download(spec["url"], MODELS / "groundingdino" / spec["file"])
+        cfg_src = cfg_dir / spec["config"]
+        cfg_dst = MODELS / "groundingdino" / spec["config"]
+        if cfg_src.exists():
+            cfg_dst.parent.mkdir(parents=True, exist_ok=True)
+            cfg_dst.write_text(cfg_src.read_text(encoding="utf-8"), encoding="utf-8")
+            print(f"  copied config → {cfg_dst.relative_to(ROOT)}")
+        else:
+            print(f"  WARNING: config missing at {cfg_src}")
+
+    setup_bert_local()
+
+    if install_pkg and (THIRD / "GroundingDINO").is_dir():
+        print("  optional: official package already installed or skip with --no-install-dino")
+        # Keep install best-effort; Transformers local path is primary.
+        try:
+            run(
+                [sys.executable, "-m", "pip", "install", "-e", ".", "--no-build-isolation"],
+                cwd=THIRD / "GroundingDINO",
+            )
+        except subprocess.CalledProcessError as exc:
+            print(f"  WARNING: official package install skipped ({exc})")
 
 
 def setup_rife(hf_repo: str | None) -> None:
     print("\n[RIFE]")
     clone_repo("https://github.com/hzwer/Practical-RIFE.git", THIRD / "Practical-RIFE")
-    # Also keep ECCV2022-RIFE available as alternate
     clone_repo("https://github.com/hzwer/ECCV2022-RIFE.git", THIRD / "ECCV2022-RIFE")
 
     train_log = MODELS / "rife" / "train_log"
@@ -107,13 +207,12 @@ def setup_rife(hf_repo: str | None) -> None:
         try:
             from huggingface_hub import snapshot_download
 
-            print(f"  downloading weights from hf.co/{hf_repo}")
+            print(f"  downloading RIFE weights once from hf.co/{hf_repo}")
             snapshot_download(
                 repo_id=hf_repo,
                 local_dir=str(MODELS / "rife" / "hf"),
                 local_dir_use_symlinks=False,
             )
-            # Prefer nested train_log if present
             nested = MODELS / "rife" / "hf" / "train_log"
             if nested.is_dir():
                 for item in nested.iterdir():
@@ -128,12 +227,11 @@ def setup_rife(hf_repo: str | None) -> None:
             )
             print(f"  weights → {train_log.relative_to(ROOT)}")
         except Exception as exc:  # noqa: BLE001
-            print(f"  WARNING: HF download failed ({exc})")
+            print(f"  WARNING: download failed ({exc})")
             print("  Place flownet.pkl (+ RIFE_HDv3.py) manually in models/rife/train_log/")
     else:
-        print("  clone done. Download a Practical-RIFE model zip and extract into:")
+        print("  clone done. Place weights in:")
         print(f"    {train_log}")
-        print("  or re-run with: --rife-hf MonsterMMORPG/RIFE_4_26")
 
     print("  set RIFE_REPO=third_party/Practical-RIFE")
     print("  set RIFE_MODEL=models/rife/train_log")
@@ -142,27 +240,43 @@ def setup_rife(hf_repo: str | None) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-rife", action="store_true")
-    parser.add_argument("--local-ckpts", action="store_true", help="Also download SAM2/DINO .pth files")
+    parser.add_argument(
+        "--tiny-only",
+        action="store_true",
+        help="Only SAM2 tiny + Grounding DINO Swin-T (faster download)",
+    )
+    parser.add_argument(
+        "--no-install-dino",
+        action="store_true",
+        help="Skip pip install -e third_party/GroundingDINO",
+    )
     parser.add_argument(
         "--rife-hf",
         default=os.environ.get("RIFE_HF_REPO", "MonsterMMORPG/RIFE_4_26"),
-        help="Hugging Face repo id containing train_log/ for RIFE",
+        help="One-time download source for RIFE train_log (stored locally after)",
     )
     parser.add_argument("--no-rife-hf", action="store_true")
+    # Keep old flag as no-op alias (local is now default)
+    parser.add_argument("--local-ckpts", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     MODELS.mkdir(parents=True, exist_ok=True)
     THIRD.mkdir(parents=True, exist_ok=True)
 
     setup_realesrgan()
-    setup_sam2(local_ckpt=args.local_ckpts)
-    setup_grounding_dino(local_ckpt=args.local_ckpts)
+    setup_sam2(tiny_only=args.tiny_only)
+    setup_grounding_dino(
+        tiny_only=args.tiny_only,
+        install_pkg=not args.no_install_dino,
+    )
     if not args.skip_rife:
         setup_rife(None if args.no_rife_hf else args.rife_hf)
 
-    print("\nDone. Install Python deps with:")
+    print("\nDone. Local-only inference (GIF_STUDIO_ALLOW_HF unset).")
     print("  pip install -r requirements-ai.txt")
-    print("Then restart the API and check /api/health for sam2 / grounding_dino / realesrgan / rife.")
+    print("  pip install 'git+https://github.com/facebookresearch/sam2.git'")
+    print("Device auto-selects CUDA → MPS → CPU (override: GIF_STUDIO_TORCH_DEVICE).")
+    print("Check /api/health for device + models.*.ready flags.")
     return 0
 
 

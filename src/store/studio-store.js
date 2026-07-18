@@ -19,6 +19,9 @@ export const useStudioStore = create((set, get) => ({
     rife: false,
     rembg: false,
     api: false,
+    device: null,
+    models: null,
+    allowHuggingFace: false,
   },
 
   resetProject: () => set({ project: createEmptyProject() }),
