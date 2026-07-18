@@ -33,4 +33,13 @@ transformers>=4.45
 # https://github.com/ultralytics/ultralytics
 ultralytics>=8.3.0
 
+# Soft matte (BiRefNet / RMBG / isnet sessions)
+rembg>=2.0.50
+
+# Optional LaMa helper (OpenCV Telea always works without it):
+# simple-lama-inpainting
+
+# SAM3 (gated HF) — install separately:
+#   pip install 'git+https://github.com/facebookresearch/sam3.git'
+
 # RIFE uses third_party/Practical-RIFE (cloned by setup_ai_models.py).

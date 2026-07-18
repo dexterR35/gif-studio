@@ -8,17 +8,19 @@ export const ROUTES = {
     text: '/gif/text',
     edit: '/gif/edit',
     timeline: '/gif/timeline',
+    scale: '/gif/scale',
     output: '/gif/output',
   },
 }
 
-/** Tab order: AI → Motion (connected), then Effects (image processing), Text, Timeline, Export. */
+/** Tab order: AI → Motion → Effects → Text → Timeline → Scale → Export. */
 export const GIF_WORKSPACES = [
   'ai',
   'motion',
   'edit',
   'text',
   'timeline',
+  'scale',
   'output',
 ]
 

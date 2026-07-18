@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Frame, ImageIcon, Layers3, Type } from 'lucide-react'
+import { Frame, ImageIcon, Layers3, Maximize2, Type } from 'lucide-react'
 import { EmptyState, LayerRow } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
 
@@ -11,6 +11,9 @@ export function LayersAside() {
   const {
     elements, selectedElements, selectedElement, selectLayer, selectBaseImage,
     baseImageSelected, imageLocked, toggleImageLock,
+    imageVisible, setImageVisible,
+    enhancedLayer, enhancedSelected, selectEnhancedLayer,
+    updateEnhancedLayer, removeEnhancedLayer,
     artboardSelected, selectArtboard, canvasLocked, toggleCanvasLock,
     toggleElementLock, toggleElementVisible, removeElement, reorderElement,
     overlays, selectedOverlay, selectOverlay, toggleOverlayVisible, removeOverlay, reorderOverlay,
@@ -23,7 +26,7 @@ export function LayersAside() {
   const dragRef = useRef(null)
   const [dragState, setDragState] = useState(null) // { kind, id, overId }
 
-  const layerCount = elements.length + overlays.length + textLayers.length
+  const layerCount = elements.length + overlays.length + textLayers.length + (enhancedLayer ? 1 : 0)
   // Front of stack at top of list (array end → first). Higher index draws on top.
   const elementsFrontFirst = [...elements].reverse()
   const overlaysFrontFirst = [...overlays].reverse()
@@ -218,11 +221,31 @@ export function LayersAside() {
           icon={ImageIcon}
           title="Background"
           subtitle={imageLocked ? 'Locked' : 'Base image'}
-          visible
+          visible={imageVisible !== false}
+          onToggleVisible={() => setImageVisible((v) => !v)}
           locked={imageLocked}
           onToggleLock={toggleImageLock}
           className="!rounded-md !p-1.5"
         />
+
+        {enhancedLayer && (
+          <LayerRow
+            selected={enhancedSelected}
+            onClick={() => {
+              selectEnhancedLayer()
+              setSelectMode(false)
+              setMaskEditing(false)
+              goToWorkspace('scale')
+            }}
+            icon={Maximize2}
+            title={enhancedLayer.name || 'Enhanced'}
+            subtitle={`${enhancedLayer.width}×${enhancedLayer.height} · under base`}
+            visible={enhancedLayer.visible !== false}
+            onToggleVisible={() => updateEnhancedLayer({ visible: enhancedLayer.visible === false })}
+            onRemove={removeEnhancedLayer}
+            className="!rounded-md !p-1.5"
+          />
+        )}
 
         <LayerRow
           selected={artboardSelected}

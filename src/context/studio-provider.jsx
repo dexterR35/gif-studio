@@ -22,7 +22,7 @@ import { warpElementByJoints, poseHasWarp } from '../lib/pose-warp'
 const StudioContext = createContext(null)
 
 /** Focus workspaces use the right panel, not the mobile inspector sheet. */
-const FOCUS_WORKSPACES = new Set(['timeline', 'output'])
+const FOCUS_WORKSPACES = new Set(['timeline', 'scale', 'output'])
 
 const revokeBlobUrl = (url) => {
   if (typeof url === 'string' && url.startsWith('blob:')) URL.revokeObjectURL(url)
@@ -130,6 +130,11 @@ export function StudioProvider({ children }) {
   playingRef.current = playing
 
   const [exporting, setExporting] = useState(false)
+  /** Shared finish lock — only one of export / PNG download / upscale at a time. */
+  const ioLockRef = useRef(false)
+  const [downloadBusy, setDownloadBusy] = useState(false)
+  const [scaleBusy, setScaleBusy] = useState(false)
+  const enhanceGenRef = useRef(0)
   const [dropActive, setDropActive] = useState(false)
   const [mobilePanel, setMobilePanel] = useState(false)
   const [toast, setToast] = useState('')
@@ -157,6 +162,11 @@ export function StudioProvider({ children }) {
   const [layerInsertAt, setLayerInsertAt] = useState('front')
   const [baseImageSelected, setBaseImageSelected] = useState(false)
   const [imageLocked, setImageLocked] = useState(false)
+  /** When false, base is hidden so the enhanced underlay can be seen. */
+  const [imageVisible, setImageVisible] = useState(true)
+  /** Upscaled alternate under Background — never replaces source. */
+  const [enhancedLayer, setEnhancedLayer] = useState(null)
+  const [enhancedSelected, setEnhancedSelected] = useState(false)
   /** Artboard (output canvas) — separate from the base-image background layer. */
   const [artboardSelected, setArtboardSelected] = useState(false)
   const [canvasLocked, setCanvasLocked] = useState(false)
@@ -396,8 +406,15 @@ export function StudioProvider({ children }) {
     useStudioStore.getState().setCapabilities({
       api: apiAvailable,
       sam2: Boolean(apiInfo?.sam2),
+      sam3: Boolean(apiInfo?.sam3),
       groundingDino: Boolean(apiInfo?.grounding_dino),
       yolo: Boolean(apiInfo?.yolo),
+      matte: Boolean(apiInfo?.matte),
+      depth: Boolean(apiInfo?.depth),
+      lama: Boolean(apiInfo?.lama),
+      inpaint: Boolean(apiInfo?.inpaint ?? true),
+      film: Boolean(apiInfo?.film),
+      gfpgan: Boolean(apiInfo?.gfpgan),
       realesrgan: Boolean(apiInfo?.realesrgan),
       rife: Boolean(apiInfo?.rife),
       rembg: Boolean(apiInfo?.rembg || apiInfo?.ai),
@@ -527,15 +544,47 @@ export function StudioProvider({ children }) {
     const originY = ((settings.anchorY ?? 50) / 100) * H - top
     const sx = (imageEdits.flipX ? -1 : 1) * scale
     const sy = (imageEdits.flipY ? -1 : 1) * scale
-    ctx.save()
-    ctx.translate(left + originX, top + originY)
-    ctx.rotate((rotation + imageEdits.rotation) * Math.PI / 180)
-    ctx.scale(sx, sy)
-    ctx.translate(-originX, -originY)
-    ctx.filter = `brightness(${imageEdits.brightness}%) contrast(${imageEdits.contrast}%) saturate(${imageEdits.saturation}%) blur(${imageEdits.blur}px) hue-rotate(${imageEdits.hue}deg) grayscale(${imageEdits.grayscale}%) sepia(${imageEdits.sepia}%)`
-    ctx.globalAlpha = opacity
-    ctx.drawImage(drawSource, 0, 0, iw, ih, 0, 0, baseDw, baseDh)
-    ctx.restore()
+
+    // Enhanced underlay — drawn under the base; never replaces source.
+    const enhanced = enhancedLayer
+    if (enhanced?.image && enhanced.visible !== false) {
+      const eiw = enhanced.width || enhanced.image.naturalWidth || enhanced.image.width
+      const eih = enhanced.height || enhanced.image.naturalHeight || enhanced.image.height
+      const eFit = enhanced.fit || 'Contain'
+      const eContain = Math.min(W / eiw, H / eih)
+      const eCover = Math.max(W / eiw, H / eih)
+      const eBase = eFit === 'Cover'
+        ? eCover
+        : eFit === 'Original size'
+          ? exportScale
+          : eContain
+      const eDw = eFit === 'Stretch' ? W : eiw * eBase
+      const eDh = eFit === 'Stretch' ? H : eih * eBase
+      const eLeft = cx - eDw / 2
+      const eTop = cy - eDh / 2
+      const eOriginX = ((settings.anchorX ?? 50) / 100) * W - eLeft
+      const eOriginY = ((settings.anchorY ?? 50) / 100) * H - eTop
+      ctx.save()
+      ctx.translate(eLeft + eOriginX, eTop + eOriginY)
+      ctx.rotate((rotation + imageEdits.rotation) * Math.PI / 180)
+      ctx.scale(sx, sy)
+      ctx.translate(-eOriginX, -eOriginY)
+      ctx.globalAlpha = opacity
+      ctx.drawImage(enhanced.image, 0, 0, eiw, eih, 0, 0, eDw, eDh)
+      ctx.restore()
+    }
+
+    if (imageVisible !== false) {
+      ctx.save()
+      ctx.translate(left + originX, top + originY)
+      ctx.rotate((rotation + imageEdits.rotation) * Math.PI / 180)
+      ctx.scale(sx, sy)
+      ctx.translate(-originX, -originY)
+      ctx.filter = `brightness(${imageEdits.brightness}%) contrast(${imageEdits.contrast}%) saturate(${imageEdits.saturation}%) blur(${imageEdits.blur}px) hue-rotate(${imageEdits.hue}deg) grayscale(${imageEdits.grayscale}%) sepia(${imageEdits.sepia}%)`
+      ctx.globalAlpha = opacity
+      ctx.drawImage(drawSource, 0, 0, iw, ih, 0, 0, baseDw, baseDh)
+      ctx.restore()
+    }
 
     if (censor.enabled) {
       const cx = Math.round(censor.x / 100 * W), cy = Math.round(censor.y / 100 * H)
@@ -816,7 +865,7 @@ export function StudioProvider({ children }) {
         phase: distort.phase || 0,
       })
     }
-  }, [image, settings, elements, textLayers, parallax, imageEdits, censor, overlays, gifEffects, poseRig])
+  }, [image, settings, elements, textLayers, parallax, imageEdits, censor, overlays, gifEffects, poseRig, enhancedLayer, imageVisible])
 
   drawRef.current = draw
 
@@ -915,6 +964,12 @@ export function StudioProvider({ children }) {
       setBaseImageSelected(false)
       setArtboardSelected(false)
       setImageLocked(false)
+      setImageVisible(true)
+      setEnhancedLayer((current) => {
+        if (current?.url) revokeBlobUrl(current.url)
+        return null
+      })
+      setEnhancedSelected(false)
       setTextLayers([])
       setSelectedText(null)
       setOverlays((current) => {
@@ -1100,6 +1155,7 @@ export function StudioProvider({ children }) {
     setBaseImageSelected(false)
     setSelectedElements([])
     setSelectedOverlay(null)
+    setEnhancedSelected(false)
     setSelectedText(null)
     setPlaying(false)
     setSelectMode(false)
@@ -1120,6 +1176,12 @@ export function StudioProvider({ children }) {
     setSelectedElements([])
     setBaseImageSelected(false)
     setArtboardSelected(false)
+    setImageVisible(true)
+    setEnhancedLayer((current) => {
+      if (current?.url) revokeBlobUrl(current.url)
+      return null
+    })
+    setEnhancedSelected(false)
     setTextLayers([])
     setSelectedText(null)
     setMaskEditing(false)
@@ -1470,10 +1532,138 @@ export function StudioProvider({ children }) {
         maskCanvas.getContext('2d').putImageData(idata, 0, 0)
       }
       if (!maskCanvas) throw new Error('No mask returned')
-      useStudioStore.getState().setCapabilities({ sam2: true })
-      addElementFromMask(maskCanvas, { name: 'SAM2 cutout', engine: result.engine || 'sam2' })
+      const isSam3 = String(model || result.engine || '').includes('sam3')
+      useStudioStore.getState().setCapabilities(isSam3 ? { sam3: true } : { sam2: true })
+      const layerId = addElementFromMask(maskCanvas, {
+        name: isSam3 ? 'SAM3 cutout' : 'SAM2 cutout',
+        engine: result.engine || (isSam3 ? 'sam3' : 'sam2'),
+      })
+      if (layerId) selectDetectedCutout(layerId)
     } catch (err) {
-      setToast(err?.message || 'SAM2 segment failed')
+      setToast(err?.message || 'Segment failed')
+    } finally {
+      setSegmenting(false)
+    }
+  }
+
+  /** Soft matte → new layer from the full canvas, or rematte a selected cutout in place. */
+  const runMatteCutout = async ({
+    model = 'rembg-isnet',
+    /** 'canvas' = always base image → new layer; 'selection' = selected cutout when present */
+    target = 'canvas',
+  } = {}) => {
+    const canvas = canvasRef.current
+    if (!canvas || !image) { setToast('Open an image first'); return }
+    const el = target === 'selection'
+      ? elements.find((e) => e.id === selectedElement && (e.sourceBitmap || e.bitmap))
+      : null
+    setSegmenting(true)
+    try {
+      const { matteWithModel } = await import('../ai/matte')
+
+      // Remove BG on the selected cutout — rewrite that layer's mask / bitmap.
+      if (el) {
+        const src = el.sourceBitmap || el.bitmap
+        const result = await matteWithModel({ imageCanvas: src, model })
+        if (!result.mask_png_base64) throw new Error('No matte mask returned')
+        const maskImg = new Image()
+        await new Promise((resolve, reject) => {
+          maskImg.onload = resolve
+          maskImg.onerror = reject
+          maskImg.src = `data:image/png;base64,${result.mask_png_base64}`
+        })
+        const w = src.width
+        const h = src.height
+        const maskCanvas = document.createElement('canvas')
+        maskCanvas.width = w
+        maskCanvas.height = h
+        maskCanvas.getContext('2d').drawImage(maskImg, 0, 0, w, h)
+        const bitmap = document.createElement('canvas')
+        bitmap.width = w
+        bitmap.height = h
+        const bctx = bitmap.getContext('2d')
+        bctx.drawImage(src, 0, 0)
+        bctx.globalCompositeOperation = 'destination-in'
+        bctx.drawImage(maskCanvas, 0, 0)
+        bctx.globalCompositeOperation = 'source-over'
+        useStudioStore.getState().setCapabilities({ matte: true })
+        setElements((current) => current.map((item) => {
+          if (item.id !== el.id) return item
+          return {
+            ...item,
+            bitmap,
+            maskCanvas,
+            engine: result.engine || model,
+            name: item.name || 'Soft matte',
+          }
+        }))
+        selectDetectedCutout(el.id)
+        setToast(`Remove BG · ${result.engine || model} · ${el.name}`)
+        return
+      }
+
+      if (target === 'selection') {
+        setToast('Select a cutout layer to remove its background')
+        return
+      }
+
+      const result = await matteWithModel({ imageCanvas: canvas, model })
+      if (!result.mask_png_base64) throw new Error('No matte mask returned')
+      const maskCanvas = document.createElement('canvas')
+      const img = new Image()
+      await new Promise((resolve, reject) => {
+        img.onload = resolve
+        img.onerror = reject
+        img.src = `data:image/png;base64,${result.mask_png_base64}`
+      })
+      maskCanvas.width = img.naturalWidth
+      maskCanvas.height = img.naturalHeight
+      maskCanvas.getContext('2d').drawImage(img, 0, 0)
+      useStudioStore.getState().setCapabilities({ matte: true })
+      const layerId = addElementFromMask(maskCanvas, {
+        name: 'Soft matte',
+        engine: result.engine || model,
+      })
+      if (layerId) selectDetectedCutout(layerId)
+      setToast(`Matte · ${result.engine || model} · soft contour`)
+    } catch (err) {
+      setToast(err?.message || 'Matte failed')
+    } finally {
+      setSegmenting(false)
+    }
+  }
+
+  const runDepthForParallax = async ({ model = 'depth-anything-v2-small' } = {}) => {
+    const canvas = canvasRef.current
+    if (!canvas || !image) { setToast('Open an image first'); return }
+    setSegmenting(true)
+    try {
+      const { estimateDepth } = await import('../ai/depth')
+      const result = await estimateDepth({ imageCanvas: canvas, model })
+      useStudioStore.getState().setCapabilities({ depth: true })
+      const suggested = Number(result.suggested_layer_depth)
+      setParallax((current) => ({
+        ...current,
+        enabled: true,
+        strength: Math.max(current.strength || 8, 12),
+      }))
+      if (Number.isFinite(suggested) && selectedElement) {
+        setElements((els) => els.map((el) => (
+          el.id === selectedElement ? { ...el, depth: suggested } : el
+        )))
+      } else if (Number.isFinite(suggested) && elements.length) {
+        // Distribute depths from map mean onto all cutout layers
+        setElements((els) => els.map((el, i) => ({
+          ...el,
+          depth: Math.max(5, Math.min(95, suggested + (i - els.length / 2) * 12)),
+        })))
+      }
+      setToast(
+        `Depth · ${result.engine} · parallax on`
+        + (Number.isFinite(suggested) ? ` · depth ~${suggested}%` : ''),
+      )
+    } catch (err) {
+      setToast(err?.message || 'Depth failed')
     } finally {
       setSegmenting(false)
     }
@@ -1658,7 +1848,7 @@ export function StudioProvider({ children }) {
   }
 
   const runTextDetect = async (prompt, {
-    dinoModel, sam2Model, yoloModel, engine = 'grounding_dino',
+    dinoModel, sam2Model, yoloModel, sam3Model, engine = 'grounding_dino',
   } = {}) => {
     const canvas = canvasRef.current
     if (!canvas || !image) { setToast('Open an image first'); return }
@@ -1667,23 +1857,27 @@ export function StudioProvider({ children }) {
     if (needsPrompt && !prompt?.trim()) { setToast('Enter a text prompt'); return }
     setSegmenting(true)
     try {
-      // DINO (open-vocab) or Ultralytics YOLO (COCO) → boxes; SAM2 refines to mask.
+      // Roles: SAM3 text→mask | DINO+SAM2 refine | YOLO (+ SAM2). Never SAM3 on top of DINO.
       const { detectWithGroundingDino } = await import('../ai/grounding-dino')
       const result = await detectWithGroundingDino({
         imageCanvas: canvas,
         prompt: (prompt || '').trim(),
-        refineSam2: true,
+        refineSam2: detectEngine !== 'sam3',
         engine: detectEngine,
         dinoModel,
         sam2Model,
         yoloModel,
+        sam3Model,
       })
       const boxes = result.boxes || []
-      if (!boxes.length) {
+      if (!boxes.length && !result.mask_png_base64) {
         setToast(`Detect · ${result.engine || 'ok'} · no boxes`)
         return
       }
-      if (result.detect_engine === 'yolo' || /yolo/i.test(result.engine || '')) {
+      const eng = String(result.detect_engine || result.engine || '')
+      if (/sam3/i.test(eng)) {
+        useStudioStore.getState().setCapabilities({ sam3: true })
+      } else if (/yolo/i.test(eng)) {
         useStudioStore.getState().setCapabilities({ yolo: true })
       } else {
         useStudioStore.getState().setCapabilities({ groundingDino: true })
@@ -1700,15 +1894,23 @@ export function StudioProvider({ children }) {
         maskCanvas.width = img.naturalWidth
         maskCanvas.height = img.naturalHeight
         maskCanvas.getContext('2d').drawImage(img, 0, 0)
-        useStudioStore.getState().setCapabilities({ sam2: true })
+        if (/sam3/i.test(eng)) {
+          useStudioStore.getState().setCapabilities({ sam3: true })
+        } else {
+          useStudioStore.getState().setCapabilities({ sam2: true })
+        }
         const label = result.selected_label || prompt.trim()
         const layerId = addElementFromMask(maskCanvas, {
           name: String(label).slice(0, 28) || 'Detected',
-          engine: result.engine || 'grounding-dino+sam2',
+          engine: result.engine || eng || 'detect',
         })
-        // Cutout keeps mask contour; select transform cube (do not auto-enter erase).
         if (layerId) selectDetectedCutout(layerId)
-        setToast(`Grounding DINO + SAM2 · “${label}” contour · cube selected`)
+        const how = /sam3/i.test(eng)
+          ? 'SAM 3 text→mask'
+          : /yolo/i.test(eng)
+            ? 'YOLO + SAM2'
+            : 'Grounding DINO + SAM2'
+        setToast(`${how} · “${label}” contour · cube selected`)
         return
       }
 
@@ -1849,6 +2051,7 @@ export function StudioProvider({ children }) {
     setBaseImageSelected(false)
     setArtboardSelected(false)
     setSelectedOverlay(null)
+    setEnhancedSelected(false)
   }
   const selectLayer = (id, event) => {
     const el = elements.find((item) => item.id === id)
@@ -1856,6 +2059,7 @@ export function StudioProvider({ children }) {
     setBaseImageSelected(false)
     setArtboardSelected(false)
     setSelectedOverlay(null)
+    setEnhancedSelected(false)
     setSelectedText(null)
     setPlaying(false)
     setSelectMode(false)
@@ -1959,9 +2163,20 @@ export function StudioProvider({ children }) {
     setArtboardSelected(false)
     setSelectedElements([])
     setSelectedOverlay(null)
+    setEnhancedSelected(false)
     setSelectedText(null)
     setPlaying(false)
     setEffectTarget('Entire GIF')
+  }
+  const selectEnhancedLayer = () => {
+    if (!enhancedLayer) return
+    setEnhancedSelected(true)
+    setBaseImageSelected(false)
+    setArtboardSelected(false)
+    setSelectedElements([])
+    setSelectedOverlay(null)
+    setSelectedText(null)
+    setPlaying(false)
   }
   const selectOverlay = (id) => {
     const overlay = overlays.find((item) => item.id === id)
@@ -1970,6 +2185,7 @@ export function StudioProvider({ children }) {
     setSelectedElements([])
     setBaseImageSelected(false)
     setArtboardSelected(false)
+    setEnhancedSelected(false)
     setSelectedText(null)
     setPlaying(false)
     setSelectMode(false)
@@ -2091,6 +2307,46 @@ export function StudioProvider({ children }) {
       rotation,
     }
   }, [source?.width, source?.height, settings, imageEdits.rotation, progress])
+
+  const enhancedTransformBox = useMemo(() => {
+    if (!enhancedLayer?.width || !enhancedLayer?.height || !settings.width || !settings.height) {
+      return null
+    }
+    const iw = enhancedLayer.width
+    const ih = enhancedLayer.height
+    const fit = enhancedLayer.fit || 'Contain'
+    let udw
+    let udh
+    if (fit === 'Stretch') {
+      udw = 1
+      udh = 1
+    } else if (fit === 'Original size') {
+      udw = iw / settings.width
+      udh = ih / settings.height
+    } else {
+      const contain = Math.min(settings.width / iw, settings.height / ih)
+      const cover = Math.max(settings.width / iw, settings.height / ih)
+      const base = fit === 'Cover' ? cover : contain
+      udw = (iw * base) / settings.width
+      udh = (ih * base) / settings.height
+    }
+    const scale = (settings.scaleStart ?? 100) / 100
+    const ox = (settings.xStart ?? 0) / 100
+    const oy = (settings.yStart ?? 0) / 100
+    const cx = 0.5 + ox
+    const cy = 0.5 + oy
+    const left = cx - udw / 2
+    const top = cy - udh / 2
+    const ax = (settings.anchorX ?? 50) / 100
+    const ay = (settings.anchorY ?? 50) / 100
+    return {
+      x: ax + (left - ax) * scale,
+      y: ay + (top - ay) * scale,
+      w: Math.max(0.02, udw * scale),
+      h: Math.max(0.02, udh * scale),
+      rotation: (settings.rotateStart || 0) + (imageEdits.rotation || 0),
+    }
+  }, [enhancedLayer, settings, imageEdits.rotation])
 
   const rebuildMaskedElement = (element) => {
     if (!element.sourceBitmap || !element.maskCanvas) return element
@@ -2299,6 +2555,147 @@ export function StudioProvider({ children }) {
     } catch { setToast('This font file could not be loaded') }
   }
   const imageFromUrl = (url) => new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = url })
+
+  const clearEnhancedLayer = () => {
+    setEnhancedLayer((current) => {
+      if (current?.url) revokeBlobUrl(current.url)
+      return null
+    })
+    setEnhancedSelected(false)
+  }
+
+  const updateEnhancedLayer = (patch) => {
+    setEnhancedLayer((current) => (current ? { ...current, ...patch } : current))
+  }
+
+  const removeEnhancedLayer = () => {
+    clearEnhancedLayer()
+    setToast('Enhanced layer removed')
+  }
+
+  const matchEnhancedSize = () => {
+    if (canvasLocked) { setToast('Unlock the artboard to resize'); return }
+    if (!enhancedLayer?.width || !enhancedLayer?.height) {
+      setToast('Upscale an image first')
+      return
+    }
+    if (enhancedLayer.width > MAX_CANVAS || enhancedLayer.height > MAX_CANVAS) {
+      setToast(`Enhanced exceeds ${MAX_CANVAS}px limit — lower scale or enter a smaller artboard`)
+      return
+    }
+    setSettings((current) => ({
+      ...current,
+      width: enhancedLayer.width,
+      height: enhancedLayer.height,
+      fit: 'Original size',
+    }))
+    setEnhancedLayer((current) => (current ? { ...current, fit: 'Original size' } : current))
+    setToast(`Artboard set to enhanced size ${enhancedLayer.width} × ${enhancedLayer.height} px`)
+  }
+
+  const runUpscaleToEnhanced = async ({ model = 'realesrgan', scale = 2 } = {}) => {
+    if (!image) {
+      setToast('Open an image first')
+      return
+    }
+    if (ioLockRef.current || exporting || downloadBusy || scaleBusy) {
+      setToast('Wait for the current export or download to finish')
+      return
+    }
+    if (String(model).toLowerCase() === 'gfpgan') {
+      throw new Error('GFPGAN slot — place weights under models/gfpgan/, or use Real-ESRGAN')
+    }
+    const gen = ++enhanceGenRef.current
+    ioLockRef.current = true
+    setScaleBusy(true)
+    setToast('Upscaling…')
+    try {
+      // Always upscale the original source bitmap — not the composited preview canvas.
+      const srcCanvas = document.createElement('canvas')
+      srcCanvas.width = image.naturalWidth || image.width
+      srcCanvas.height = image.naturalHeight || image.height
+      srcCanvas.getContext('2d').drawImage(image, 0, 0)
+      const { upscaleWithRealESRGAN } = await import('../ai/realesrgan')
+      const result = await upscaleWithRealESRGAN({
+        imageCanvas: srcCanvas,
+        scale,
+        model,
+      })
+      if (gen !== enhanceGenRef.current) return
+      if (!result.url && !result.blob) throw new Error('Upscale returned no image')
+      const blob = result.blob || await (await fetch(result.url)).blob()
+      const url = result.url || URL.createObjectURL(blob)
+      const img = await imageFromUrl(url)
+      if (gen !== enhanceGenRef.current) {
+        if (url.startsWith('blob:')) revokeBlobUrl(url)
+        return
+      }
+      setEnhancedLayer((prev) => {
+        if (prev?.url && prev.url !== url) revokeBlobUrl(prev.url)
+        return {
+          id: newStudioId(),
+          name: `Enhanced ${scale}×`,
+          url,
+          image: img,
+          width: img.naturalWidth || img.width,
+          height: img.naturalHeight || img.height,
+          scale,
+          model,
+          engine: result.engine || model,
+          fit: 'Contain',
+          visible: true,
+          bytes: blob.size,
+        }
+      })
+      setEnhancedSelected(true)
+      setBaseImageSelected(false)
+      setImageVisible(false)
+      setToast(`Enhanced layer · ${scale}× · ${result.engine || model} · hide base to preview`)
+    } finally {
+      if (gen === enhanceGenRef.current) {
+        ioLockRef.current = false
+        setScaleBusy(false)
+      }
+    }
+  }
+
+  const downloadEnhancedPng = async () => {
+    if (!enhancedLayer?.image) {
+      setToast('Upscale an image first')
+      return
+    }
+    if (ioLockRef.current || exporting || downloadBusy || scaleBusy) {
+      setToast('Wait for the current export or download to finish')
+      return
+    }
+    ioLockRef.current = true
+    setDownloadBusy(true)
+    setToast('Preparing PNG…')
+    let objectUrl = null
+    try {
+      const canvas = document.createElement('canvas')
+      canvas.width = enhancedLayer.width || enhancedLayer.image.naturalWidth
+      canvas.height = enhancedLayer.height || enhancedLayer.image.naturalHeight
+      canvas.getContext('2d').drawImage(enhancedLayer.image, 0, 0)
+      const blob = await new Promise((resolve, reject) => {
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not encode PNG'))), 'image/png')
+      })
+      objectUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = objectUrl
+      const baseName = (source?.name || 'image').replace(/\.[^.]+$/, '')
+      link.download = `${baseName}-enhanced-${enhancedLayer.scale || 2}x.png`
+      link.click()
+      setToast(`Enhanced PNG · ${fmtBytes(blob.size)}`)
+    } catch (err) {
+      setToast(err?.message || 'PNG download failed')
+    } finally {
+      if (objectUrl) setTimeout(() => revokeBlobUrl(objectUrl), 1500)
+      ioLockRef.current = false
+      setDownloadBusy(false)
+    }
+  }
+
   const activeEffects = effectTarget === 'Selected element'
     ? (elements.find((element) => element.id === selectedElement)?.effects || EFFECT_DEFAULTS)
     : effectTarget === 'Selected overlay'
@@ -2323,6 +2720,7 @@ export function StudioProvider({ children }) {
     setSelectedElements([])
     setBaseImageSelected(false)
     setArtboardSelected(false)
+    setEnhancedSelected(false)
     setSelectedText(null)
     setEffectTarget('Selected overlay')
     setPlaying(false)
@@ -2499,8 +2897,9 @@ export function StudioProvider({ children }) {
   }
 
   const exportGif = async () => {
-    if (!image || exporting) return
+    if (!image || exporting || ioLockRef.current || downloadBusy || scaleBusy) return
     if (frames > 240) { setToast('Reduce duration or FPS below 240 frames for browser export'); return }
+    ioLockRef.current = true
     setExporting(true); setToast(''); setPlaying(false)
     await new Promise((r) => setTimeout(r, 30))
     try {
@@ -2610,6 +3009,7 @@ export function StudioProvider({ children }) {
       }
     }
     finally {
+      ioLockRef.current = false
       setExporting(false)
       setPlaying(false)
       const frameIndex = Math.min(frames - 1, Math.floor(progressRef.current * frames))
@@ -2633,6 +3033,7 @@ export function StudioProvider({ children }) {
     canvasRef, pixiCanvasRef, stageRef, fileRef, fontFileRef, overlayFileRef, compressGifRef,
     // state
     settings, setSettings, image, source, playing, setPlaying, progress, setProgress, exporting,
+    downloadBusy, scaleBusy,
     dropActive, setDropActive, mobilePanel, setMobilePanel, toast, setToast, activeTab, goToWorkspace, zoom, setZoom, canvasZoom,
     lockAspect, setLockAspect, setCanvasWidth, setCanvasHeight, useSourceSize, sourceAspect,
     elements, setElements, selectedElement, setSelectedElement, selectedElements, setSelectedElements,
@@ -2640,6 +3041,10 @@ export function StudioProvider({ children }) {
     selectLayer, clearLayerSelection, updateElementById, moveElement, moveOverlay,
     reorderElement, reorderOverlay, reorderText,
     baseImageSelected, setBaseImageSelected,
+    imageVisible, setImageVisible,
+    enhancedLayer, enhancedSelected, enhancedTransformBox,
+    selectEnhancedLayer, updateEnhancedLayer, removeEnhancedLayer,
+    runUpscaleToEnhanced, downloadEnhancedPng, matchEnhancedSize,
     artboardSelected, setArtboardSelected, selectArtboard,
     canvasLocked, setCanvasLocked, toggleCanvasLock,
     imageLocked, setImageLocked, imageTransformBox,
@@ -2667,6 +3072,7 @@ export function StudioProvider({ children }) {
     beginJointDrag, moveJointDrag, endJointDrag,
     addMotionEffect, updateMotionEffect, removeMotionEffect, moveMotionEffectTrack,
     addElementFromMask, runSam2Segment, runHumanSegment, runPoseDetect, runTextDetect,
+    runMatteCutout, runDepthForParallax,
     applyInterpolatedFrames, runRifeInterpolate,
     exportGif, textBounds,
   }

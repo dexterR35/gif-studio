@@ -6,6 +6,7 @@ import MotionPage from './pages/motion-page'
 import TextPage from './pages/text-page'
 import EditPage from './pages/edit-page'
 import TimelinePage from './pages/timeline-page'
+import ScalePage from './pages/scale-page'
 import OutputPage from './pages/output-page'
 import { ROUTES } from './lib/routes'
 
@@ -22,6 +23,7 @@ function GifApp() {
           <Route path="frames" element={<Navigate to="../motion" replace />} />
           <Route path="edit" element={<EditPage />} />
           <Route path="timeline" element={<TimelinePage />} />
+          <Route path="scale" element={<ScalePage />} />
           <Route path="output" element={<OutputPage />} />
           <Route path="preview" element={<Navigate to="../ai" replace />} />
         </Route>

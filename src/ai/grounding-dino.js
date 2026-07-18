@@ -1,9 +1,10 @@
 /**
- * Grounding DINO — IDEA-Research open-set detection.
- * https://github.com/IDEA-Research/GroundingDINO
+ * Text / class detect — SAM3 (text→mask), Grounding DINO + SAM2 refine, or YOLO.
  *
- * Prompt tip: separate categories with "." e.g. "chair . person . dog ."
- * Server: official load_model/predict + optional SAM2 refine (Grounded-SAM).
+ * Roles (not a stack):
+ * - sam3: replaces DINO + SAM2 refine
+ * - grounding_dino: open-vocab box → SAM2 contour
+ * - yolo: cheap COCO → optional SAM2 contour
  */
 import { getOnnxSession, imageDataToFloatTensor } from './onnx'
 
@@ -20,6 +21,7 @@ async function viaServer(imageBlob, prompt, {
   dinoModel,
   sam2Model,
   yoloModel,
+  sam3Model,
 } = {}) {
   const form = new FormData()
   form.append('image', imageBlob, 'frame.png')
@@ -30,13 +32,13 @@ async function viaServer(imageBlob, prompt, {
   if (dinoModel) form.append('dino_model', dinoModel)
   if (sam2Model) form.append('sam2_model', sam2Model)
   if (yoloModel) form.append('yolo_model', yoloModel)
+  if (sam3Model) form.append('sam3_model', sam3Model)
   const res = await fetch('/api/ai/detect', { method: 'POST', body: form })
   if (!res.ok) throw new Error(await res.text())
   return res.json()
 }
 
 /**
- * Text / class detect — Grounding DINO (open-vocab) or Ultralytics YOLO (COCO).
  * @returns {{ boxes: Array<{x,y,w,h,score,label}>, engine: string, mask_png_base64?: string }}
  */
 export async function detectWithGroundingDino({
@@ -49,15 +51,22 @@ export async function detectWithGroundingDino({
   dinoModel,
   sam2Model,
   yoloModel,
+  sam3Model,
 }) {
   const blob = imageBlob || await new Promise((resolve, reject) => {
     imageCanvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not read canvas'))), 'image/png')
   })
 
-  // Server path is primary (DINO + YOLO + optional SAM2 refine).
-  if (!groundingDinoConfigured() || engine === 'yolo' || engine === 'ultralytics') {
+  const serverEngines = new Set(['yolo', 'ultralytics', 'sam3', 'auto', 'grounding_dino', 'dino'])
+  if (!groundingDinoConfigured() || serverEngines.has(engine)) {
     return viaServer(blob, prompt, {
-      confidence, refineSam2, engine, dinoModel, sam2Model, yoloModel,
+      confidence,
+      refineSam2: engine === 'sam3' ? false : refineSam2,
+      engine,
+      dinoModel,
+      sam2Model,
+      yoloModel,
+      sam3Model,
     })
   }
 
@@ -65,7 +74,6 @@ export async function detectWithGroundingDino({
   const imageData = ctx.getImageData(0, 0, imageCanvas.width, imageCanvas.height)
   const session = await getOnnxSession(MODEL_URL)
   const tensor = imageDataToFloatTensor(imageData, { size: 800 })
-  // Full tokenizer wiring depends on exported ONNX graph; server path is primary.
   const out = await session.run({ images: tensor })
   return {
     boxes: [],
@@ -75,7 +83,7 @@ export async function detectWithGroundingDino({
   }
 }
 
-/** Alias — same API; engine selects DINO vs Ultralytics YOLO. */
+/** Alias — same API; engine selects SAM3 / DINO / YOLO. */
 export const detectObjects = detectWithGroundingDino
 
 export async function probeGroundingDino() {
@@ -96,6 +104,17 @@ export async function probeYolo() {
     if (!res.ok) return false
     const info = await res.json()
     return Boolean(info.yolo)
+  } catch {
+    return false
+  }
+}
+
+export async function probeSam3() {
+  try {
+    const res = await fetch('/api/health', { signal: AbortSignal.timeout(1500) })
+    if (!res.ok) return false
+    const info = await res.json()
+    return Boolean(info.sam3)
   } catch {
     return false
   }

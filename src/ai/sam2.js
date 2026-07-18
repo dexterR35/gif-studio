@@ -20,7 +20,8 @@ async function viaServer(imageBlob, point, model) {
     form.append('point_x', String(point.x))
     form.append('point_y', String(point.y))
   }
-  form.append('engine', 'sam2')
+  const mid = String(model || 'sam2')
+  form.append('engine', mid.startsWith('sam3') ? 'sam3' : 'sam2')
   if (model) form.append('model', model)
   const res = await fetch('/api/ai/segment', { method: 'POST', body: form })
   if (!res.ok) throw new Error(await res.text())

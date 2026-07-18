@@ -1,4 +1,4 @@
-import { Film, Settings2, SlidersHorizontal, Sparkles, Type, Wand2 } from 'lucide-react'
+import { Film, Maximize2, Settings2, SlidersHorizontal, Sparkles, Type, Wand2 } from 'lucide-react'
 import { WorkspaceTabs } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
 import { GIF_WORKSPACES } from '../lib/routes'
@@ -9,6 +9,7 @@ const TAB_META = {
   edit: { icon: SlidersHorizontal, label: 'Effects' },
   text: { icon: Type, label: 'Text' },
   timeline: { icon: Film, label: 'Timeline' },
+  scale: { icon: Maximize2, label: 'Scale' },
   output: { icon: Settings2, label: 'Export' },
 }
 

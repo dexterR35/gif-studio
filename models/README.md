@@ -7,38 +7,33 @@ Runtime inference uses files under this folder — **not** the Hugging Face Hub
 
 ```
 models/
-  realesrgan/
-    RealESRGAN_x4plus.pth
-    RealESRGAN_x2plus.pth
-    ESRGAN_SRx4_DF2KOST_official-ff704c30.pth
-    RealESRGAN_x4plus_anime_6B.pth
-  sam2/
-    sam2.1_hiera_tiny.pt
-    sam2.1_hiera_small.pt
-    sam2.1_hiera_base_plus.pt
-    sam2.1_hiera_large.pt
-  groundingdino/
-    groundingdino_swint_ogc.pth          # official GitHub .pth (primary)
-    GroundingDINO_SwinT_OGC.py
-    groundingdino_swinb_cogcoor.pth
-    GroundingDINO_SwinB_cfg.py
-    bert-base-uncased/                   # text encoder (local)
-    hf-tiny/  hf-base/                   # optional Transformers snapshots
-  yolo/                                  # Ultralytics — https://github.com/ultralytics/ultralytics
-    yolov8n.pt
-    yolov8s.pt
-    yolov8m.pt
-    yolo11n.pt
-  rife/train_log/flownet.pkl
+  realesrgan/          # Real-ESRGAN / ESRGAN / anime
+  sam2/                # SAM 2.1 checkpoints
+  sam3/                # SAM 3 / 3.1 (gated HF — optional)
+  groundingdino/       # Grounding DINO + BERT / HF snapshots
+  yolo/                # Ultralytics YOLOv8 / YOLO11
+  matte/               # optional BiRefNet / RMBG ONNX (rembg also caches)
+  depth/
+    v2-small-hf/       # Depth Anything V2 Small (Transformers snapshot)
+  lama/                # big-lama.pt (optional; OpenCV Telea always works)
+  rife/train_log/      # RIFE flownet
+  film/                # FILM interpolate slot (not wired yet)
+  gfpgan/              # GFPGANv1.4.pth face polish slot
 ```
 
 ```bash
 pip install -r requirements-ai.txt
 pip install 'git+https://github.com/facebookresearch/sam2.git'
-pip install ultralytics
-python scripts/setup_ai_models.py
+pip install ultralytics rembg
+python scripts/setup_ai_models.py --tiny-only
+# SAM3 (optional, gated Hub — request access + hf auth login first):
+# https://huggingface.co/facebook/sam3
+python scripts/setup_ai_models.py --with-sam3
 ```
+
+`--with-sam3` clones `third_party/sam3`, `pip install -e`, and downloads `sam3.pt` into `models/sam3/`. Until that succeeds, the AI panel shows SAM 3 as missing — use SAM 2.
 
 Device auto-selects **CUDA → MPS → CPU**. Override with `GIF_STUDIO_TORCH_DEVICE=cpu|cuda|mps`.
 
+Product matrix: [`docs/AI_GIF_STACK.md`](../docs/AI_GIF_STACK.md).  
 Check `/api/health` for `device` and `models.*.ready`.

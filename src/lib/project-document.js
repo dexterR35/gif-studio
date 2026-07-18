@@ -33,6 +33,8 @@ export function createEmptyProject() {
     elements: [],
     overlays: [],
     textLayers: [],
+    /** Upscaled underlay — never replaces source; drawn under Background. */
+    enhancedLayer: null,
     gifEffects: { ...EFFECT_DEFAULTS },
     imageEdits: { ...IMAGE_EDITS_DEFAULT },
     censor: { ...CENSOR_DEFAULT },
@@ -59,6 +61,9 @@ export function serializeProject(project, { includeBlobs = false } = {}) {
     for (const overlay of clone.overlays || []) {
       if (overlay.url?.startsWith('blob:')) overlay.url = null
     }
+    if (clone.enhancedLayer?.url?.startsWith('blob:')) {
+      clone.enhancedLayer = { ...clone.enhancedLayer, url: null, pendingUpload: true }
+    }
   }
   return clone
 }
@@ -77,6 +82,7 @@ export function projectFromJson(raw) {
     elements: Array.isArray(raw.elements) ? raw.elements : [],
     overlays: Array.isArray(raw.overlays) ? raw.overlays : [],
     textLayers: Array.isArray(raw.textLayers) ? raw.textLayers : [],
+    enhancedLayer: raw.enhancedLayer && typeof raw.enhancedLayer === 'object' ? raw.enhancedLayer : null,
     keyframes: Array.isArray(raw.keyframes) ? raw.keyframes : [],
     fontOptions: Array.isArray(raw.fontOptions) ? raw.fontOptions : empty.fontOptions,
   }

@@ -1,6 +1,7 @@
 import { Bone, Crosshair, Eye, EyeOff, ImagePlus, Pause, Play } from 'lucide-react'
 import { useMemo } from 'react'
 import { Button, CanvasViewport, StageHint, Switch, ZoomControls } from '../components/ui'
+import { ContextualTaskBar } from '../components/studio/contextual-task-bar'
 import { EffectTimeline } from '../components/studio/effect-timeline'
 import { StudioKonvaStage } from '../engine/konva-editor'
 import { fmtBytes, MAX_CANVAS, nice, clampNice } from '../lib/format'
@@ -17,6 +18,7 @@ export function PreviewStage() {
     setPlaying, progress, setProgress, actualDuration, frames, draw, frameDelays, actualFps,
     settings, setSettings, update, source, memory, canvasZoom, imageEdits,
     baseImageSelected, imageLocked, imageTransformBox, selectBaseImage, selectStageElement,
+    imageVisible, enhancedLayer, enhancedSelected, enhancedTransformBox, selectEnhancedLayer,
     clearLayerSelection, selectedElements, setSelectedText,
     beginAnchorDrag, moveAnchorDrag, endAnchorDrag,
     beginJointDrag, moveJointDrag, endJointDrag,
@@ -38,9 +40,10 @@ export function PreviewStage() {
     if (selectedText != null) return 'text'
     if (selectedOverlay != null) return 'overlay'
     if (selectedElements.length) return 'element'
+    if (enhancedSelected) return 'enhanced'
     if (baseImageSelected) return 'image'
     return null
-  }, [selectedText, selectedOverlay, selectedElements, baseImageSelected])
+  }, [selectedText, selectedOverlay, selectedElements, enhancedSelected, baseImageSelected])
 
   const selectedId = selectedText ?? selectedOverlay ?? selectedElement ?? null
 
@@ -95,6 +98,10 @@ export function PreviewStage() {
     if (interacting || playing) return
     if (kind === 'image') {
       selectBaseImage()
+      return
+    }
+    if (kind === 'enhanced') {
+      selectEnhancedLayer()
       return
     }
     if (kind === 'element') {
@@ -244,31 +251,34 @@ export function PreviewStage() {
         </div>
       </div>
 
-      <CanvasViewport
-        zoomApi={canvasZoom}
-        contentWidth={settings.width}
-        contentHeight={settings.height}
-        panEnabled
-        className="min-h-[360px] p-0"
-        onBackgroundPointerDown={() => {
-          if (!interacting) clearSelection()
-        }}
-      >
-        <div
-          ref={stageRef}
-          style={stageStyle}
-          onPointerDown={onStagePointerDown}
-          onPointerMove={(e) => { moveAnchorDrag(e); moveSelection(e) }}
-          onPointerUp={(e) => { endAnchorDrag(e); finishSelection(e) }}
-          onDoubleClick={() => {
-            if (selectMode && (selectionTool === 'Polygonal Lasso' || selectionTool === 'Pen Path')) completePathSelection()
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {/* Photoshop-style contextual bar — centered 50% under Konva / preview top bar */}
+        <ContextualTaskBar />
+        <CanvasViewport
+          zoomApi={canvasZoom}
+          contentWidth={settings.width}
+          contentHeight={settings.height}
+          panEnabled
+          className="min-h-[360px] p-0"
+          onBackgroundPointerDown={() => {
+            if (!interacting) clearSelection()
           }}
-          className={cn(
-            'card-shadow relative h-full w-full rounded-[4px] ring-1 ring-white/10 overflow-hidden',
-            interacting && 'cursor-crosshair ring-2 ring-acid',
-            canvasZoom.spaceDown && 'cursor-grab',
-          )}
         >
+          <div
+            ref={stageRef}
+            style={stageStyle}
+            onPointerDown={onStagePointerDown}
+            onPointerMove={(e) => { moveAnchorDrag(e); moveSelection(e) }}
+            onPointerUp={(e) => { endAnchorDrag(e); finishSelection(e) }}
+            onDoubleClick={() => {
+              if (selectMode && (selectionTool === 'Polygonal Lasso' || selectionTool === 'Pen Path')) completePathSelection()
+            }}
+            className={cn(
+              'card-shadow relative h-full w-full rounded-[4px] ring-1 ring-white/10 overflow-hidden',
+              interacting && 'cursor-crosshair ring-2 ring-acid',
+              canvasZoom.spaceDown && 'cursor-grab',
+            )}
+          >
           {/* Offscreen / play renderer — export & GSAP playback still use canvas 2D + effects */}
           <canvas
             ref={canvasRef}
@@ -296,10 +306,14 @@ export function PreviewStage() {
                 width={settings.width}
                 height={settings.height}
                 sourceUrl={source?.url}
+                imageVisible={imageVisible}
                 imageTransformBox={imageTransformBox}
                 imageAnchor={{ x: settings.anchorX ?? 50, y: settings.anchorY ?? 50 }}
                 imageLocked={imageLocked}
                 imageEdits={imageEdits}
+                enhancedUrl={enhancedLayer?.url}
+                enhancedVisible={enhancedLayer?.visible !== false}
+                enhancedTransformBox={enhancedTransformBox}
                 background={settings.background}
                 transparent={settings.transparent}
                 elements={elements}
@@ -407,6 +421,7 @@ export function PreviewStage() {
           })}
         </div>
       </CanvasViewport>
+      </div>
 
       <div className="max-h-[38vh] shrink-0 overflow-y-auto border-t border-white/[.07] bg-panel px-4 pb-4 pt-3 scrollbar md:px-6">
         <div className="mb-3 flex items-center gap-3">

@@ -50,16 +50,20 @@ function anchorNodeProps(box, width, height, anchorX = 50, anchorY = 50) {
  *   width: number,
  *   height: number,
  *   sourceUrl?: string|null,
+ *   imageVisible?: boolean,
  *   imageTransformBox: {x:number,y:number,w:number,h:number,rotation:number},
  *   imageAnchor?: {x:number,y:number},
  *   imageLocked?: boolean,
  *   imageEdits?: {flipX?:boolean,flipY?:boolean},
+ *   enhancedUrl?: string|null,
+ *   enhancedVisible?: boolean,
+ *   enhancedTransformBox?: {x:number,y:number,w:number,h:number,rotation:number}|null,
  *   background?: string,
  *   transparent?: boolean,
  *   elements?: Array,
  *   overlays?: Array,
  *   textLayers?: Array,
- *   selectedKind?: 'image'|'element'|'overlay'|'text'|null,
+ *   selectedKind?: 'image'|'element'|'overlay'|'text'|'enhanced'|null,
  *   selectedId?: string|null,
  *   selectedIds?: string[],
  *   interactive?: boolean,
@@ -82,10 +86,14 @@ export function StudioKonvaStage({
   width,
   height,
   sourceUrl,
+  imageVisible = true,
   imageTransformBox,
   imageAnchor = { x: 50, y: 50 },
   imageLocked = false,
   imageEdits = {},
+  enhancedUrl = null,
+  enhancedVisible = true,
+  enhancedTransformBox = null,
   background = '#111114',
   transparent = false,
   elements = [],
@@ -109,6 +117,7 @@ export function StudioKonvaStage({
   className,
 }) {
   const [sourceImage] = useHtmlImage(sourceUrl)
+  const [enhancedImage] = useHtmlImage(enhancedUrl)
   const trRef = useRef(null)
   const stageRef = useRef(null)
   const nodeRefs = useRef({})
@@ -249,7 +258,38 @@ export function StudioKonvaStage({
           listening={false}
         />
 
-        {sourceImage && (() => {
+        {enhancedImage && enhancedVisible !== false && enhancedTransformBox && (() => {
+          const ebox = enhancedTransformBox
+          const pivotX = ((imageAnchor?.x ?? 50) / 100) * width
+          const pivotY = ((imageAnchor?.y ?? 50) / 100) * height
+          const ox = pivotX - ebox.x * width
+          const oy = pivotY - ebox.y * height
+          return (
+            <KonvaImage
+              ref={(n) => setNodeRef('enhanced', n)}
+              name="enhanced-underlay"
+              image={enhancedImage}
+              x={pivotX}
+              y={pivotY}
+              width={ebox.w * width}
+              height={ebox.h * height}
+              offsetX={ox}
+              offsetY={oy}
+              rotation={ebox.rotation || 0}
+              listening={interactive}
+              onClick={(e) => {
+                e.cancelBubble = true
+                onSelect?.({ kind: 'enhanced' })
+              }}
+              onTap={(e) => {
+                e.cancelBubble = true
+                onSelect?.({ kind: 'enhanced' })
+              }}
+            />
+          )
+        })()}
+
+        {sourceImage && imageVisible !== false && (() => {
           // Base-image anchor is canvas %; convert to local offset within the fitted box.
           const pivotX = ((imageAnchor?.x ?? 50) / 100) * width
           const pivotY = ((imageAnchor?.y ?? 50) / 100) * height

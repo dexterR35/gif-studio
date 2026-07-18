@@ -156,11 +156,24 @@ def health() -> dict[str, object]:
         "ai_model": default_rembg_model() if rembg else None,
         "rembg": rembg,
         "sam2": caps["sam2"],
+        "sam3": caps.get("sam3", False),
         "grounding_dino": caps["grounding_dino"],
         "yolo": caps["yolo"],
+        "matte": caps.get("matte", False),
+        "depth": caps.get("depth", False),
+        "lama": caps.get("lama", False),
+        "inpaint": caps.get("inpaint", True),
+        "film": caps.get("film", False),
+        "gfpgan": caps.get("gfpgan", False),
         "realesrgan": caps["realesrgan"],
         "rife": caps["rife"],
         "device": device,
+        "nvidia": bool(device.get("nvidia")) if isinstance(device, dict) else False,
+        "upload": {
+            "formats": ["png", "jpg", "jpeg", "webp"],
+            "max_bytes": MAX_UPLOAD_BYTES,
+            "max_dimension": 5000,
+        },
         "allow_huggingface": caps.get("allow_huggingface", False),
         "models": caps.get("models") or {},
         "database": db_available(),
@@ -499,15 +512,16 @@ async def ai_segment(
     engine: Annotated[str, Form()] = "sam2",
     model: Annotated[str, Form()] = "",
 ) -> dict[str, object]:
-    del engine
     payload = await image.read()
     _require_upload_image(payload, image.filename)
     point = (point_x, point_y) if point_x is not None and point_y is not None else None
+    # Prefer explicit model id; engine=sam3 selects SAM3 family when model empty.
+    mid = model or (engine if engine.startswith("sam") else "") or None
     try:
         from .ai_pipeline import segment_sam2
 
         return await run_in_threadpool(
-            segment_sam2, payload, point, None, model or None,
+            segment_sam2, payload, point, None, mid,
         )
     except Exception as exc:
         raise _ai_http_error(exc, default_message="AI segment failed") from exc
@@ -537,8 +551,9 @@ async def ai_detect(
     dino_model: Annotated[str, Form()] = "",
     sam2_model: Annotated[str, Form()] = "",
     yolo_model: Annotated[str, Form()] = "",
+    sam3_model: Annotated[str, Form()] = "",
 ) -> dict[str, object]:
-    """Detect with ``engine=grounding_dino|yolo|auto``, optional SAM2 mask refine."""
+    """Detect: ``sam3`` (text→mask), ``grounding_dino`` + SAM2 refine, or ``yolo`` + SAM2."""
     payload = await image.read()
     _require_upload_image(payload, image.filename)
     try:
@@ -554,9 +569,67 @@ async def ai_detect(
             sam2_model or None,
             engine or "auto",
             yolo_model or None,
+            sam3_model or None,
         )
     except Exception as exc:
         raise _ai_http_error(exc, default_message="AI detect failed") from exc
+
+
+@app.post("/api/ai/matte")
+async def ai_matte(
+    image: Annotated[UploadFile, File()],
+    model: Annotated[str, Form()] = "rembg-isnet",
+) -> dict[str, object]:
+    """Soft alpha matte (BiRefNet / RMBG / rembg) for transparent GIF layers."""
+    payload = await image.read()
+    _require_upload_image(payload, image.filename)
+    try:
+        from .ai_pipeline import matte_image
+
+        return await run_in_threadpool(matte_image, payload, model or None)
+    except Exception as exc:
+        raise _ai_http_error(exc, default_message="Matte failed") from exc
+
+
+@app.post("/api/ai/depth")
+async def ai_depth(
+    image: Annotated[UploadFile, File()],
+    model: Annotated[str, Form()] = "depth-anything-v2-small",
+) -> dict[str, object]:
+    """Depth Anything V2 map for parallax / Ken Burns."""
+    payload = await image.read()
+    _require_upload_image(payload, image.filename)
+    try:
+        from .ai_pipeline import depth_image
+
+        return await run_in_threadpool(depth_image, payload, model or None)
+    except Exception as exc:
+        raise _ai_http_error(exc, default_message="Depth failed") from exc
+
+
+@app.post("/api/ai/inpaint")
+async def ai_inpaint(
+    image: Annotated[UploadFile, File()],
+    mask: Annotated[UploadFile | None, File()] = None,
+    mask_png_base64: Annotated[str, Form()] = "",
+    model: Annotated[str, Form()] = "auto",
+) -> dict[str, object]:
+    """Fill erased region — LaMa when ready, else OpenCV Telea/NS."""
+    payload = await image.read()
+    _require_upload_image(payload, image.filename)
+    mask_bytes = await mask.read() if mask is not None else None
+    try:
+        from .ai_pipeline import inpaint_image
+
+        return await run_in_threadpool(
+            inpaint_image,
+            payload,
+            mask_bytes,
+            mask_png_base64 or None,
+            model or "auto",
+        )
+    except Exception as exc:
+        raise _ai_http_error(exc, default_message="Inpaint failed") from exc
 
 
 @app.post("/api/ai/upscale")
@@ -597,6 +670,7 @@ async def ai_upscale(
 async def ai_interpolate(
     frames: Annotated[list[UploadFile], File()],
     factor: Annotated[int, Form()] = 2,
+    model: Annotated[str, Form()] = "rife",
     async_job: Annotated[bool, Form()] = False,
 ) -> dict[str, object]:
     if len(frames) < 2:
@@ -617,7 +691,7 @@ async def ai_interpolate(
         def build_inline(data: dict) -> dict[str, object]:
             outs = [get_bytes(k) for k in data.get("frame_keys") or []]
             return {
-                "engine": data.get("engine") or "rife",
+                "engine": data.get("engine") or model or "rife",
                 "frames": [
                     "data:image/png;base64," + base64.b64encode(b).decode("ascii") for b in outs
                 ],
@@ -628,7 +702,9 @@ async def ai_interpolate(
     try:
         from .ai_pipeline import interpolate_frames
 
-        outs, engine = await run_in_threadpool(interpolate_frames, payloads, factor)
+        outs, engine = await run_in_threadpool(
+            interpolate_frames, payloads, factor, model or "rife",
+        )
         return {
             "engine": engine,
             "frames": [

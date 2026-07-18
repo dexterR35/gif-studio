@@ -1,7 +1,7 @@
 """Local-on-disk model inventory — no Hugging Face at runtime by default.
 
-Weights live under ``models/``. Device is auto-selected (CUDA → MPS → CPU)
-unless ``GIF_STUDIO_TORCH_DEVICE`` is set.
+Weights live under ``models/``. Device: NVIDIA CUDA if present, else CPU/RAM
+(``GIF_STUDIO_TORCH_DEVICE`` can force cpu|cuda|mps).
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .paths import models_dir, torch_device
+from .paths import device_runtime_info, model_device_policy, models_dir, torch_device
 
 
 def allow_huggingface() -> bool:
@@ -19,21 +19,9 @@ def allow_huggingface() -> bool:
 
 
 def device_info() -> dict[str, Any]:
-    import torch
-
-    device = torch_device()
-    info: dict[str, Any] = {
-        "device": str(device),
-        "cuda": bool(torch.cuda.is_available()),
-        "mps": bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()),
-        "cpu": True,
-    }
-    if device.type == "cuda" and torch.cuda.is_available():
-        try:
-            info["gpu_name"] = torch.cuda.get_device_name(0)
-            info["gpu_count"] = torch.cuda.device_count()
-        except Exception:  # noqa: BLE001
-            pass
+    """NVIDIA → CPU/RAM fallback + per-engine policy."""
+    info = device_runtime_info()
+    info["engines"] = model_device_policy()
     return info
 
 
@@ -262,7 +250,287 @@ def resolve_yolo(model_id: str | None = None) -> tuple[Path, str] | None:
     return None
 
 
-# --- Upscale --------------------------------------------------------------
+# --- SAM3 -----------------------------------------------------------------
+
+SAM3_VARIANTS = [
+    {
+        "id": "sam3",
+        "label": "SAM 3 (concept / text)",
+        "file": "sam3.pt",
+        "alt_files": ("sam3.pt",),
+        "hf_repo": "facebook/sam3",
+        "hf_filename": "sam3.pt",
+    },
+    {
+        "id": "sam3.1",
+        "label": "SAM 3.1 (faster video)",
+        "file": "sam3.1.pt",
+        "alt_files": ("sam3.1.pt", "sam3.1_multiplex.pt"),
+        "hf_repo": "facebook/sam3.1",
+        "hf_filename": "sam3.1_multiplex.pt",
+    },
+]
+
+
+def _sam3_checkpoint_ready(root: Path, spec: dict[str, Any]) -> Path | None:
+    """Return path to a usable local SAM3 checkpoint, or None."""
+    for name in (spec["file"], *spec.get("alt_files", ())):
+        path = root / name
+        if path.exists() and path.stat().st_size > 1024 * 1024:  # >1MB
+            return path
+    snap = root / spec["id"]
+    if snap.is_dir():
+        for path in sorted(snap.glob("*.pt")):
+            if path.stat().st_size > 1024 * 1024:
+                return path
+        if (snap / "config.json").exists():
+            return snap
+    return None
+
+
+def list_sam3_models() -> list[dict[str, Any]]:
+    root = models_dir() / "sam3"
+    out = []
+    for spec in SAM3_VARIANTS:
+        found = _sam3_checkpoint_ready(root, spec)
+        out.append({
+            "id": spec["id"],
+            "label": spec["label"] if found else f"{spec['label']} (needs HF access)",
+            "file": spec["file"],
+            "path": str(found or (root / spec["file"])),
+            "ready": found is not None,
+            "job": "select_segment",
+            "note": None if found else (
+                "Request access at huggingface.co/facebook/sam3 then: "
+                "python scripts/setup_ai_models.py --with-sam3"
+            ),
+        })
+    return out
+
+
+def resolve_sam3(model_id: str | None = None) -> Path | None:
+    wanted = (model_id or os.environ.get("SAM3_MODEL") or "sam3").strip()
+    root = models_dir() / "sam3"
+    env = os.environ.get("SAM3_CHECKPOINT") or os.environ.get("GIF_STUDIO_SAM3")
+    if env:
+        p = Path(env).expanduser()
+        if p.exists():
+            return p
+    for spec in SAM3_VARIANTS:
+        if wanted in {spec["id"], spec["file"], Path(spec["file"]).stem, *spec.get("alt_files", ())}:
+            found = _sam3_checkpoint_ready(root, spec)
+            if found is not None:
+                return found
+    for spec in SAM3_VARIANTS:
+        found = _sam3_checkpoint_ready(root, spec)
+        if found is not None:
+            return found
+    # Any large .pt dropped into models/sam3/
+    if root.is_dir():
+        for path in sorted(root.glob("*.pt")):
+            if path.stat().st_size > 1024 * 1024:
+                return path
+    return None
+
+
+# --- Matte (BiRefNet / RMBG / rembg) ---------------------------------------
+
+MATTE_VARIANTS = [
+    {
+        "id": "birefnet",
+        "label": "BiRefNet (soft edges)",
+        "rembg": "birefnet-general",
+        "file": "birefnet-general.onnx",
+    },
+    {
+        "id": "rmbg-2.0",
+        "label": "RMBG-2.0",
+        "rembg": "bria-rmbg",
+        "file": "rmbg-2.0.onnx",
+        "hf_dir": "rmbg-2.0",
+    },
+    {
+        "id": "rembg-isnet",
+        "label": "rembg isnet-general-use",
+        "rembg": "isnet-general-use",
+        "file": None,
+    },
+]
+
+
+def list_matte_models() -> list[dict[str, Any]]:
+    import importlib.util
+
+    rembg_ok = importlib.util.find_spec("rembg") is not None
+    root = models_dir() / "matte"
+    out = []
+    for spec in MATTE_VARIANTS:
+        path = root / spec["file"] if spec.get("file") else None
+        hf = root / spec["hf_dir"] if spec.get("hf_dir") else None
+        file_ready = bool(path and path.exists() and path.stat().st_size > 1024)
+        hf_ready = bool(hf and (hf / "config.json").exists())
+        # rembg can download/cache its own weights — mark ready if package present
+        ready = rembg_ok and (spec["id"] == "rembg-isnet" or file_ready or hf_ready or rembg_ok)
+        if spec["id"] in {"birefnet", "rmbg-2.0"} and not (file_ready or hf_ready):
+            # Still usable via rembg session name when package installed
+            ready = rembg_ok
+        out.append({
+            "id": spec["id"],
+            "label": spec["label"],
+            "rembg": spec.get("rembg"),
+            "path": str(path) if path else None,
+            "ready": ready,
+            "job": "matte",
+        })
+    return out
+
+
+def resolve_matte(model_id: str | None = None) -> dict[str, Any] | None:
+    wanted = (model_id or os.environ.get("MATTE_MODEL") or "rembg-isnet").strip().lower()
+    aliases = {
+        "isnet": "rembg-isnet",
+        "isnet-general-use": "rembg-isnet",
+        "rmbg": "rmbg-2.0",
+        "bria-rmbg": "rmbg-2.0",
+        "birefnet-general": "birefnet",
+    }
+    wanted = aliases.get(wanted, wanted)
+    for spec in MATTE_VARIANTS:
+        if wanted == spec["id"]:
+            return spec
+    return MATTE_VARIANTS[-1]
+
+
+# --- Depth Anything V2 ----------------------------------------------------
+
+DEPTH_VARIANTS = [
+    {
+        "id": "depth-anything-v2-small",
+        "label": "Depth Anything V2 Small",
+        "file": "depth_anything_v2_vits.pth",
+        "hf_repo": "depth-anything/Depth-Anything-V2-Small-hf",
+        "hf_dir": "v2-small-hf",
+    },
+]
+
+
+def list_depth_models() -> list[dict[str, Any]]:
+    root = models_dir() / "depth"
+    out = []
+    for spec in DEPTH_VARIANTS:
+        path = root / spec["file"]
+        hf = root / spec["hf_dir"]
+        ready = (
+            (path.exists() and path.stat().st_size > 1024)
+            or (hf / "config.json").exists()
+        )
+        out.append({
+            "id": spec["id"],
+            "label": spec["label"],
+            "file": spec["file"],
+            "path": str(path),
+            "hf_dir": str(hf),
+            "ready": ready,
+            "job": "depth",
+        })
+    return out
+
+
+def resolve_depth(model_id: str | None = None) -> dict[str, Any] | None:
+    wanted = (model_id or os.environ.get("DEPTH_MODEL") or "depth-anything-v2-small").strip()
+    root = models_dir() / "depth"
+    for spec in DEPTH_VARIANTS:
+        if wanted not in {spec["id"], spec["file"], Path(spec["file"]).stem}:
+            continue
+        path = root / spec["file"]
+        hf = root / spec["hf_dir"]
+        if path.exists() or (hf / "config.json").exists():
+            return {**spec, "path": path, "hf_path": hf}
+    for spec in DEPTH_VARIANTS:
+        path = root / spec["file"]
+        hf = root / spec["hf_dir"]
+        if path.exists() or (hf / "config.json").exists():
+            return {**spec, "path": path, "hf_path": hf}
+    return None
+
+
+# --- Inpaint (LaMa / OpenCV) ----------------------------------------------
+
+INPAINT_VARIANTS = [
+    {
+        "id": "lama",
+        "label": "LaMa",
+        "file": "big-lama.pt",
+    },
+    {
+        "id": "opencv-telea",
+        "label": "OpenCV Telea (classical)",
+        "file": None,
+    },
+]
+
+
+def list_inpaint_models() -> list[dict[str, Any]]:
+    root = models_dir() / "lama"
+    out = []
+    for spec in INPAINT_VARIANTS:
+        if spec["id"] == "opencv-telea":
+            out.append({**spec, "ready": True, "path": None, "job": "inpaint"})
+            continue
+        path = root / spec["file"]
+        out.append({
+            **spec,
+            "path": str(path),
+            "ready": path.exists() and path.stat().st_size > 1024,
+            "job": "inpaint",
+        })
+    return out
+
+
+def resolve_lama() -> Path | None:
+    env = os.environ.get("LAMA_MODEL") or os.environ.get("GIF_STUDIO_LAMA")
+    if env:
+        p = Path(env).expanduser()
+        if p.is_file():
+            return p
+    path = models_dir() / "lama" / "big-lama.pt"
+    if path.exists() and path.stat().st_size > 1024:
+        return path
+    root = models_dir() / "lama"
+    if root.is_dir():
+        for p in sorted(root.glob("*.pt")):
+            if p.stat().st_size > 1024:
+                return p
+    return None
+
+
+# --- Interpolate (RIFE / FILM) --------------------------------------------
+
+INTERPOLATE_VARIANTS = [
+    {"id": "rife", "label": "RIFE", "dir": "rife/train_log"},
+    {"id": "film", "label": "FILM (slot)", "dir": "film"},
+]
+
+
+def list_interpolate_models() -> list[dict[str, Any]]:
+    out = []
+    for spec in INTERPOLATE_VARIANTS:
+        root = models_dir() / spec["dir"]
+        if spec["id"] == "rife":
+            ready = root.is_dir() and any(root.glob("*.pkl"))
+        else:
+            ready = root.is_dir() and any(root.glob("*"))
+        out.append({
+            "id": spec["id"],
+            "label": spec["label"],
+            "path": str(root),
+            "ready": ready,
+            "job": "interpolate",
+        })
+    return out
+
+
+# --- Upscale (+ GFPGAN slot) ----------------------------------------------
 
 UPSCALE_VARIANTS = [
     {"id": "bicubic", "label": "Bicubic", "file": None},
@@ -274,6 +542,7 @@ UPSCALE_VARIANTS = [
     {"id": "realesrgan", "label": "Real-ESRGAN", "file": "RealESRGAN_x4plus.pth"},
     {"id": "realesrgan-x2", "label": "Real-ESRGAN x2", "file": "RealESRGAN_x2plus.pth"},
     {"id": "a-esrgan", "label": "A-ESRGAN (anime)", "file": "RealESRGAN_x4plus_anime_6B.pth"},
+    {"id": "gfpgan", "label": "GFPGAN (face polish slot)", "file": "GFPGANv1.4.pth", "dir": "gfpgan"},
 ]
 
 
@@ -282,15 +551,53 @@ def list_upscale_models() -> list[dict[str, Any]]:
     out = []
     for spec in UPSCALE_VARIANTS:
         if spec["id"] == "bicubic":
-            out.append({**spec, "ready": True, "path": None})
+            out.append({**spec, "ready": True, "path": None, "job": "upscale"})
             continue
-        path = root / spec["file"]
+        base = models_dir() / spec["dir"] if spec.get("dir") else root
+        path = base / spec["file"]
         out.append({
             **spec,
             "path": str(path),
             "ready": path.exists() and path.stat().st_size > 1024,
+            "job": "upscale",
         })
     return out
+
+
+def list_select_segment_models() -> list[dict[str, Any]]:
+    """Interactive click/box select — SAM2 now; SAM3 Tracker later (not SAM3 image)."""
+    out = []
+    for m in list_sam2_models():
+        out.append({**m, "family": "sam2", "job": "select_segment"})
+    return out
+
+
+def list_select_detect_engines() -> list[dict[str, Any]]:
+    """Text/class find engines — roles, not a stack."""
+    sam3_ready = any(m.get("ready") for m in list_sam3_models())
+    return [
+        {
+            "id": "sam3",
+            "label": "SAM 3 (text → mask)",
+            "ready": sam3_ready,
+            "job": "select_detect",
+            "note": "Replaces Grounding DINO + SAM2 refine when ready",
+        },
+        {
+            "id": "grounding_dino",
+            "label": "Grounding DINO + SAM2 refine",
+            "ready": any(m.get("ready") for m in list_grounding_dino_models()),
+            "job": "select_detect",
+            "note": "Open-vocab box, then SAM2 contour",
+        },
+        {
+            "id": "yolo",
+            "label": "YOLO (COCO, cheap)",
+            "ready": any(m.get("ready") for m in list_yolo_models()),
+            "job": "select_detect",
+            "note": "Closed-set classes; optional SAM2 refine",
+        },
+    ]
 
 
 def catalog() -> dict[str, Any]:
@@ -298,8 +605,24 @@ def catalog() -> dict[str, Any]:
         "device": device_info(),
         "allow_huggingface": allow_huggingface(),
         "sam2": list_sam2_models(),
+        "sam3": list_sam3_models(),
+        "select_segment": list_select_segment_models(),
+        "select_detect": list_select_detect_engines(),
         "grounding_dino": list_grounding_dino_models(),
         "yolo": list_yolo_models(),
+        "matte": list_matte_models(),
+        "depth": list_depth_models(),
+        "inpaint": list_inpaint_models(),
+        "interpolate": list_interpolate_models(),
         "upscale": list_upscale_models(),
         "models_dir": str(models_dir()),
+        "jobs": {
+            "select_segment": ["sam2"],  # SAM3 Tracker later
+            "select_detect": ["sam3", "grounding_dino", "yolo"],
+            "matte": ["matte"],
+            "depth": ["depth"],
+            "inpaint": ["inpaint"],
+            "interpolate": ["interpolate"],
+            "upscale": ["upscale"],
+        },
     }

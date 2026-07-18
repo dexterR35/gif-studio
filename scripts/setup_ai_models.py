@@ -133,6 +133,97 @@ def setup_yolo(tiny_only: bool) -> None:
     print("  install package: pip install ultralytics")
 
 
+def setup_matte_dirs() -> None:
+    print("\n[Matte] BiRefNet / RMBG via rembg — models/matte/")
+    (MODELS / "matte").mkdir(parents=True, exist_ok=True)
+    print("  rembg downloads session weights on first use (birefnet-general, isnet, …)")
+    print("  optional: drop ONNX under models/matte/; pip install rembg")
+
+
+def setup_depth(tiny_only: bool = True) -> None:
+    print("\n[Depth] Depth Anything V2 Small → models/depth/v2-small-hf/")
+    dest = MODELS / "depth" / "v2-small-hf"
+    if (dest / "config.json").exists():
+        print(f"  skip (exists): {dest.relative_to(ROOT)}")
+        return
+    try:
+        from huggingface_hub import snapshot_download
+
+        print("  downloading depth-anything/Depth-Anything-V2-Small-hf (one-time local snapshot)")
+        snapshot_download(
+            repo_id="depth-anything/Depth-Anything-V2-Small-hf",
+            local_dir=str(dest),
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"  WARNING: depth download failed ({exc})")
+        print("  Place Transformers snapshot under models/depth/v2-small-hf/")
+    del tiny_only
+
+
+def setup_lama_dirs() -> None:
+    print("\n[Inpaint] LaMa slot → models/lama/")
+    (MODELS / "lama").mkdir(parents=True, exist_ok=True)
+    print("  Place big-lama.pt here; OpenCV Telea always works without it")
+    print("  optional: pip install simple-lama-inpainting")
+
+
+def setup_slots() -> None:
+    print("\n[Slots] FILM / GFPGAN / SAM3 dirs")
+    for name in ("film", "gfpgan", "sam3"):
+        (MODELS / name).mkdir(parents=True, exist_ok=True)
+    print("  film/     — FILM interpolate weights (not wired yet)")
+    print("  gfpgan/   — GFPGANv1.4.pth face polish slot")
+    print("  sam3/     — use --with-sam3 after HF access is granted")
+
+
+def setup_sam3() -> None:
+    """Clone facebookresearch/sam3, pip install -e, download gated Hub weights."""
+    print("\n[SAM3] https://github.com/facebookresearch/sam3 (gated Hugging Face)")
+    dest_pkg = THIRD / "sam3"
+    dest_w = MODELS / "sam3"
+    dest_w.mkdir(parents=True, exist_ok=True)
+
+    clone_repo("https://github.com/facebookresearch/sam3.git", dest_pkg)
+    try:
+        run([sys.executable, "-m", "pip", "install", "-e", str(dest_pkg)])
+    except subprocess.CalledProcessError as exc:
+        print(f"  WARNING: pip install sam3 failed ({exc})")
+        print("  Retry: pip install -e third_party/sam3")
+
+    # Official Hub layout: facebook/sam3 → sam3.pt
+    ckpt = dest_w / "sam3.pt"
+    if ckpt.exists() and ckpt.stat().st_size > 1024 * 1024:
+        print(f"  skip (exists): {ckpt.relative_to(ROOT)}")
+        return
+
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        print("  WARNING: huggingface_hub missing — cannot download sam3.pt")
+        print("  pip install huggingface_hub && hf auth login")
+        return
+
+    print("  downloading facebook/sam3 → models/sam3/sam3.pt (requires HF access + login)")
+    try:
+        path = hf_hub_download(
+            repo_id="facebook/sam3",
+            filename="sam3.pt",
+            local_dir=str(dest_w),
+        )
+        # Ensure canonical name if hub laid out differently
+        downloaded = Path(path)
+        if downloaded.resolve() != ckpt.resolve() and downloaded.exists():
+            if not ckpt.exists():
+                downloaded.replace(ckpt)
+        print(f"  ready: {ckpt.relative_to(ROOT)}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  WARNING: sam3.pt download failed ({exc})")
+        print("  1. Request access: https://huggingface.co/facebook/sam3")
+        print("  2. hf auth login")
+        print("  3. Re-run: python scripts/setup_ai_models.py --with-sam3")
+        print("  Or copy sam3.pt manually into models/sam3/")
+
+
 def setup_bert_local() -> None:
     """Optional BERT for official .pth path — stored under models/ once."""
     dest = MODELS / "groundingdino" / "bert-base-uncased"
@@ -259,15 +350,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-rife", action="store_true")
     parser.add_argument("--skip-yolo", action="store_true")
+    parser.add_argument("--skip-depth", action="store_true")
     parser.add_argument(
         "--tiny-only",
         action="store_true",
-        help="Only SAM2 tiny + Grounding DINO Swin-T + YOLOv8n (faster download)",
+        help="Smaller set: SAM2 tiny + DINO Swin-T + YOLOv8n + depth small",
     )
     parser.add_argument(
         "--no-install-dino",
         action="store_true",
         help="Skip pip install -e third_party/GroundingDINO",
+    )
+    parser.add_argument(
+        "--with-sam3",
+        action="store_true",
+        help="Install sam3 package + download facebook/sam3 weights (gated HF)",
     )
     parser.add_argument(
         "--rife-hf",
@@ -290,13 +387,21 @@ def main() -> int:
     )
     if not args.skip_yolo:
         setup_yolo(tiny_only=args.tiny_only)
+    setup_matte_dirs()
+    if not args.skip_depth:
+        setup_depth(tiny_only=args.tiny_only)
+    setup_lama_dirs()
+    setup_slots()
+    if args.with_sam3:
+        setup_sam3()
     if not args.skip_rife:
         setup_rife(None if args.no_rife_hf else args.rife_hf)
 
     print("\nDone. Local-only inference (GIF_STUDIO_ALLOW_HF unset).")
     print("  pip install -r requirements-ai.txt")
     print("  pip install 'git+https://github.com/facebookresearch/sam2.git'")
-    print("  pip install ultralytics   # YOLO detect engine")
+    print("  pip install ultralytics rembg")
+    print("  See docs/AI_GIF_STACK.md for the reality-check matrix.")
     print("Device auto-selects CUDA → MPS → CPU (override: GIF_STUDIO_TORCH_DEVICE).")
     print("Check /api/health for device + models.*.ready flags.")
     return 0

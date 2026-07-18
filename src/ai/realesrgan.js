@@ -1,5 +1,6 @@
 /**
  * Upscale — Bicubic (local) or ESRGAN / Real-ESRGAN / A-ESRGAN via local API weights.
+ * Size / RAM caps (5k, 20 GiB) are enforced on the Python server only.
  */
 import { getOnnxSession, imageDataToFloatTensor, ort } from './onnx'
 

@@ -7,14 +7,16 @@ import { InspectorAside } from './inspector-aside'
 import { LayersAside } from './layers-aside'
 import { ProjectAside } from './project-aside'
 import { PreviewStage } from './preview-stage'
+import { SelectDetectAside } from './select-detect-aside'
 import { StudioHeader } from './studio-header'
 import { ToolsRail } from './tools-rail'
 import { WorkspaceNav } from './workspace-nav'
 
-const FOCUS_TABS = new Set(['timeline', 'output'])
+const FOCUS_TABS = new Set(['timeline', 'scale', 'output'])
 
 const FOCUS_TITLES = {
   timeline: 'Timeline',
+  scale: 'Scale',
   output: 'Export',
 }
 
@@ -25,7 +27,7 @@ export function StudioLayout() {
     selectedOverlay, setSelectedOverlay,
     maskEditing, setMaskEditing, selectMode, setSelectMode, cancelSelection,
     censorSelecting, setCensorSelecting,
-    activeTab, setPlaying, poseRig,
+    activeTab, setPlaying, poseRig, image,
   } = useStudio()
 
   const isFocus = FOCUS_TABS.has(activeTab)
@@ -33,6 +35,7 @@ export function StudioLayout() {
   const hasLayers = LAYER_WORKSPACES.has(activeTab)
   const effectsTab = activeTab === 'edit'
   const showTools = activeTab === 'ai' || activeTab === 'motion'
+  const showSelectDetect = !isFocus && Boolean(image)
   const jointsOpen = Boolean(poseRig?.panelOpen && poseRig?.joints?.length)
   // Effects tab: processing settings stay pinned on the right; Background / Transform on other tabs.
   const inspectorOpen = hasLayers && (
@@ -91,6 +94,7 @@ export function StudioLayout() {
         {!isFocus && (
           <>
             <ProjectAside />
+            {showSelectDetect && <SelectDetectAside />}
             {showTools && <ToolsRail />}
             {(mobilePanel || inspectorOpen) && (
               <button

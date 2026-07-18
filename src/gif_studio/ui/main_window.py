@@ -57,8 +57,8 @@ from ..worker import RenderWorker
 from .widgets import ColorButton, ImagePreviewLabel
 
 IMAGE_FILTER = (
-    "Images (*.png *.jpg *.jpeg);;"
-    "PNG (*.png);;JPEG (*.jpg *.jpeg)"
+    "Images (*.png *.jpg *.jpeg *.webp);;"
+    "PNG (*.png);;JPEG (*.jpg *.jpeg);;WEBP (*.webp)"
 )
 
 
