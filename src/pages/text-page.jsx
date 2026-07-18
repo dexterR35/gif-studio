@@ -1,5 +1,6 @@
 import { AlignCenter, AlignLeft, AlignRight, ArrowDown, ArrowUp, ChevronsDown, ChevronsUp, Plus, Trash2, Type, Upload } from 'lucide-react'
 import { Button, ColorField, Field, FormGrid, Hint, LayerRow, Section, SelectField, Switch, Textarea, ToggleGroup } from '../components/ui'
+import { MAX_TEXT_LAYERS } from '../lib/presets'
 import { useStudio } from '../context/studio-provider'
 
 export default function TextPage() {
@@ -8,23 +9,45 @@ export default function TextPage() {
     fontOptions, fontFileRef, uploadFont,
   } = useStudio()
 
+  const atCap = textLayers.length >= MAX_TEXT_LAYERS
+
   return (
     <>
-<Section title="Text layers">
-            <Button variant="primary" size="xl" full onClick={addTextLayer} className="font-bold"><Plus className="h-4 w-4" />Add text</Button>
-            <div className="mt-3 space-y-2">{textLayers.map((layer) => (
-              <LayerRow
-                key={layer.id}
-                selected={selectedText === layer.id}
-                onClick={() => { setSelectedText(layer.id); setPlaying(false) }}
-                icon={Type}
-                title={layer.text || 'Empty text'}
-                subtitle={`${layer.font} · ${layer.size}px`}
-                visible={layer.visible}
-              />
-            ))}</div>
-            {!textLayers.length && <p className="mt-3 text-center text-[10px] text-zinc-600">Add headlines, captions, labels, or animated titles.</p>}
-          </Section>
+      <Section title="Text layers" info={`Up to ${MAX_TEXT_LAYERS} text layers — each gets an editable track on the Timeline.`}>
+        <Button
+          variant="primary"
+          size="xl"
+          full
+          onClick={addTextLayer}
+          disabled={atCap}
+          className="font-bold"
+        >
+          <Plus className="h-4 w-4" />
+          Add text
+        </Button>
+        <p className="mt-2 font-mono text-[10px] text-zinc-500">
+          {textLayers.length}/{MAX_TEXT_LAYERS} layers
+        </p>
+        <div className="mt-3 space-y-2">{textLayers.map((layer) => (
+          <LayerRow
+            key={layer.id}
+            selected={selectedText === layer.id}
+            onClick={() => { setSelectedText(layer.id); setPlaying(false) }}
+            icon={Type}
+            title={layer.text || 'Empty text'}
+            subtitle={`${layer.font} · ${layer.size}px · ${(layer.in ?? 0).toFixed(1)}s–${(layer.out ?? 0).toFixed(1)}s`}
+            visible={layer.visible}
+          />
+        ))}</div>
+        {!textLayers.length && (
+          <p className="mt-3 text-center text-[10px] text-zinc-600">
+            Add headlines, captions, labels, or animated titles.
+          </p>
+        )}
+        {atCap && (
+          <Hint className="mt-3">Maximum {MAX_TEXT_LAYERS} text layers. Remove one to add another.</Hint>
+        )}
+      </Section>
 
           {selectedText && (() => { const layer = textLayers.find((item) => item.id === selectedText); return layer ? <>
             <Section title="Content & font">

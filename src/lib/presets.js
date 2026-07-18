@@ -95,6 +95,23 @@ export const TEXT_DEFAULT = {
   decoration: 'None', casing: 'As typed', blendMode: 'source-over',
   entrance: 'None', entranceDuration: 20, motion: 'None', exit: 'None', exitDuration: 20,
   amplitude: 5, speed: 1, visible: true, locked: false,
+  /** Timeline window (seconds) — editable on the Timeline tab */
+  in: 0, out: 1,
+}
+
+/** Max text layers that can appear as editable timeline tracks. */
+export const MAX_TEXT_LAYERS = 5
+
+/** Clamp a text layer's in/out window to the GIF duration. */
+export function clampTextInOut(layer, duration) {
+  const max = Math.max(0.1, Number(duration) || 1)
+  let start = Number.isFinite(Number(layer?.in)) ? Number(layer.in) : 0
+  let end = Number.isFinite(Number(layer?.out)) ? Number(layer.out) : max
+  start = Math.max(0, Math.min(max, start))
+  end = Math.max(0, Math.min(max, end))
+  if (end < start) [start, end] = [end, start]
+  if (end - start < 0.05) end = Math.min(max, start + 0.05)
+  return { ...layer, in: +start.toFixed(2), out: +end.toFixed(2) }
 }
 
 export const SYSTEM_FONTS = [

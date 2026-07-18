@@ -243,7 +243,7 @@ input[type='number']::-webkit-inner-spin-button { opacity: .35; }
     @apply flex gap-2;
   }
   .gs-timeline-labels {
-    @apply flex w-5 shrink-0 flex-col gap-1;
+    @apply flex w-7 shrink-0 flex-col gap-1;
   }
   .gs-timeline-lane-label {
     @apply flex h-7 items-center justify-center font-mono text-[9px] font-bold text-zinc-600;
@@ -269,7 +269,11 @@ input[type='number']::-webkit-inner-spin-button { opacity: .35; }
   .gs-timeline-clip.is-active {
     @apply opacity-100 ring-1 ring-white/50;
   }
-  /* Base motion (lane M) — visible, locked; only changes via Motion dropdown */
+  .gs-timeline-clip-readonly {
+    @apply cursor-pointer;
+  }
+  .gs-timeline-clip-readonly:active { @apply cursor-pointer; }
+  /* Base motion (lane M) + content layers — locked; edited via Motion */
   .gs-timeline-clip-base {
     @apply cursor-default opacity-70;
     background: repeating-linear-gradient(
@@ -284,6 +288,12 @@ input[type='number']::-webkit-inner-spin-button { opacity: .35; }
   .gs-timeline-clip-base:active { @apply cursor-default; }
   .gs-timeline-clip-base.is-active {
     @apply opacity-95 ring-1 ring-acid/50;
+  }
+  .gs-timeline-clip-layer {
+    @apply opacity-60;
+  }
+  .gs-timeline-clip-layer.is-hidden {
+    @apply opacity-30;
   }
   .gs-timeline-lock {
     @apply pointer-events-none shrink-0 pr-0.5 text-[8px] font-semibold uppercase not-italic tracking-wider text-zinc-400;

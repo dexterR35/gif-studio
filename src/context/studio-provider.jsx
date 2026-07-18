@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { GIFEncoder, applyPalette, quantize } from 'gifenc'
-import { PRESETS, INITIAL, TEXT_DEFAULT, SYSTEM_FONTS, EFFECT_DEFAULTS, transformsFromAmount } from '../lib/presets'
+import { PRESETS, INITIAL, TEXT_DEFAULT, SYSTEM_FONTS, EFFECT_DEFAULTS, transformsFromAmount, MAX_TEXT_LAYERS, clampTextInOut } from '../lib/presets'
 import { clamp, clampNice, fmtBytes, ease, MAX_CANVAS, MAX_UPLOAD_DIMENSION, nice, uploadImageError } from '../lib/format'
 import { applyPixelEffects, applyDistortion, ditherToPalette, presetFilter } from '../lib/effects'
 import { sampleDistortions, sampleZoomScale, clampMotionEffects, createMotionEffect, MAX_MOTION_EFFECTS, isBaseMotionClip } from '../lib/motion-effects'
@@ -131,16 +131,19 @@ export function StudioProvider({ children }) {
   const [gifEffects, setGifEffects] = useState(EFFECT_DEFAULTS)
   const [selectedMotionEffect, setSelectedMotionEffect] = useState(null)
 
-  const update = (key, value) => setSettings((s) => {
-    const next = {
-      ...s,
-      [key]: typeof value === 'number' ? nice(value, Number.isInteger(value) ? 0 : 1) : value,
-    }
+  const update = (key, value) => {
+    const nextValue = typeof value === 'number' ? nice(value, Number.isInteger(value) ? 0 : 1) : value
+    setSettings((s) => {
+      const next = { ...s, [key]: nextValue }
+      if (key === 'duration') {
+        next.motionEffects = clampMotionEffects(s.motionEffects, next.duration)
+      }
+      return next
+    })
     if (key === 'duration') {
-      next.motionEffects = clampMotionEffects(s.motionEffects, next.duration)
+      setTextLayers((current) => current.map((layer) => clampTextInOut(layer, nextValue)))
     }
-    return next
-  })
+  }
 
   const addMotionEffect = (type) => {
     const current = settings.motionEffects || []
@@ -421,7 +424,12 @@ export function StudioProvider({ children }) {
     }
 
     textLayers.filter((layer) => layer.visible).forEach((layer) => {
-      const phase = rawT * Math.PI * 2 * layer.speed
+      const clipIn = Number.isFinite(Number(layer.in)) ? Number(layer.in) : 0
+      const clipOut = Number.isFinite(Number(layer.out)) ? Number(layer.out) : Math.max(0.1, settings.duration || 1)
+      if (timeSec < clipIn || timeSec > clipOut) return
+      const clipSpan = Math.max(0.05, clipOut - clipIn)
+      const localT = Math.min(1, Math.max(0, (timeSec - clipIn) / clipSpan))
+      const phase = localT * Math.PI * 2 * layer.speed
       const amountX = layer.amplitude / 100 * W, amountY = layer.amplitude / 100 * H
       let tx = 0, ty = 0, motionRotation = 0, motionScale = 1, motionOpacity = 1
       if (layer.motion === 'Float') ty = -Math.sin(phase) * amountY
@@ -432,7 +440,7 @@ export function StudioProvider({ children }) {
       if (layer.motion === 'Wobble') motionRotation = Math.sin(phase) * layer.amplitude * Math.PI / 180
       if (layer.motion === 'Fade') motionOpacity = .2 + .8 * (1 - Math.cos(phase)) / 2
       const enterLength = Math.max(.01, layer.entranceDuration / 100)
-      const enterProgress = Math.min(1, rawT / enterLength), enterEase = enterProgress * enterProgress * (3 - 2 * enterProgress)
+      const enterProgress = Math.min(1, localT / enterLength), enterEase = enterProgress * enterProgress * (3 - 2 * enterProgress)
       if (layer.entrance === 'Fade in') motionOpacity *= enterEase
       if (layer.entrance === 'Slide in left') tx -= (1 - enterEase) * W * .35
       if (layer.entrance === 'Slide in right') tx += (1 - enterEase) * W * .35
@@ -441,7 +449,7 @@ export function StudioProvider({ children }) {
       if (layer.entrance === 'Zoom in') { motionScale *= .25 + .75 * enterEase; motionOpacity *= enterEase }
       if (layer.entrance === 'Spin in') { motionRotation -= (1 - enterEase) * Math.PI; motionOpacity *= enterEase }
       const exitLength = Math.max(.01, layer.exitDuration / 100)
-      const exitProgress = Math.max(0, (rawT - (1 - exitLength)) / exitLength), exitEase = exitProgress * exitProgress * (3 - 2 * exitProgress)
+      const exitProgress = Math.max(0, (localT - (1 - exitLength)) / exitLength), exitEase = exitProgress * exitProgress * (3 - 2 * exitProgress)
       if (layer.exit === 'Fade out') motionOpacity *= 1 - exitEase
       if (layer.exit === 'Slide out left') tx -= exitEase * W * .35
       if (layer.exit === 'Slide out right') tx += exitEase * W * .35
@@ -449,7 +457,7 @@ export function StudioProvider({ children }) {
       if (layer.exit === 'Slide out down') ty += exitEase * H * .35
       if (layer.exit === 'Zoom out') { motionScale *= 1 - .75 * exitEase; motionOpacity *= 1 - exitEase }
       if (layer.exit === 'Spin out') { motionRotation += exitEase * Math.PI; motionOpacity *= 1 - exitEase }
-      let content = layer.motion === 'Typewriter' ? layer.text.slice(0, Math.ceil(layer.text.length * Math.min(1, rawT * layer.speed))) : layer.text
+      let content = layer.motion === 'Typewriter' ? layer.text.slice(0, Math.ceil(layer.text.length * Math.min(1, localT * layer.speed))) : layer.text
       if (layer.casing === 'UPPERCASE') content = content.toUpperCase()
       if (layer.casing === 'lowercase') content = content.toLowerCase()
       const fontScale = W / settings.width
@@ -808,6 +816,7 @@ export function StudioProvider({ children }) {
     setPlaying(false)
     setSelectMode(false)
     setEffectTarget('Selected element')
+    goToWorkspace('motion')
     const additive = Boolean(event?.metaKey || event?.ctrlKey)
     const range = Boolean(event?.shiftKey)
     setSelectedElements((prev) => {
@@ -1191,16 +1200,39 @@ export function StudioProvider({ children }) {
     })
   }
 
-  const addTextLayer = () => {
-    const id = Date.now(), layer = { id, name: `Text ${textLayers.length + 1}`, ...TEXT_DEFAULT }
-    setTextLayers((current) => [...current, layer]); setSelectedText(id); goToWorkspace('text'); setPlaying(false)
+  const addTextLayer = (opts = {}) => {
+    if (textLayers.length >= MAX_TEXT_LAYERS) {
+      setToast(`Max ${MAX_TEXT_LAYERS} text layers`)
+      return null
+    }
+    const duration = Math.max(0.1, settings.duration || 1)
+    const id = Date.now()
+    const layer = clampTextInOut(
+      { id, name: `Text ${textLayers.length + 1}`, ...TEXT_DEFAULT, in: 0, out: duration },
+      duration,
+    )
+    setTextLayers((current) => {
+      if (current.length >= MAX_TEXT_LAYERS) return current
+      return [...current, layer]
+    })
+    setSelectedText(id)
+    setPlaying(false)
+    if (!opts.stay) goToWorkspace('text')
     setToast('Text layer added')
+    return id
   }
   const updateText = (key, value) => setTextLayers((current) => current.map((layer) => {
     if (layer.id !== selectedText) return layer
     if (typeof value !== 'number') return { ...layer, [key]: value }
     return { ...layer, [key]: nice(value, key === 'x' || key === 'y' ? 2 : 1) }
   }))
+  const updateTextById = (id, patch) => {
+    setTextLayers((current) => current.map((layer) => {
+      if (layer.id !== id) return layer
+      const next = { ...layer, ...patch }
+      return clampTextInOut(next, settings.duration)
+    }))
+  }
   const removeText = (id) => {
     const layer = textLayers.find((item) => item.id === id)
     if (layer?.locked) { setToast('Unlock the text layer before removing it'); return }
@@ -1482,7 +1514,7 @@ export function StudioProvider({ children }) {
     startSelection, moveSelection, finishSelection, smoothSelectionPath, updateElement, removeElement,
     toggleElementLock, toggleElementVisible, toggleImageLock, toggleFlip, rotateSelection, selectionFlip, toggleTextLock, selectBaseImage, selectStageElement,
     beginTransform, moveTransform, endTransform,
-    resetElementMask, invertElementMask, featherElementMask, addTextLayer, updateText, removeText, moveText,
+    resetElementMask, invertElementMask, featherElementMask, addTextLayer, updateText, updateTextById, removeText, moveText,
     uploadFont, updateEffect,
     addOverlay, updateOverlay, selectOverlay, selectStageOverlay, overlayBounds, toggleOverlayVisible, removeOverlay, saveCurrentPng, compressExistingGif, beginTextDrag, dragTextLayer, endTextDrag,
     beginAnchorDrag, moveAnchorDrag, endAnchorDrag, resetMotionAnchor,

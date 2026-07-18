@@ -10,10 +10,11 @@ import { StudioHeader } from './studio-header'
 import { ToolsRail } from './tools-rail'
 import { WorkspaceNav } from './workspace-nav'
 
-const FOCUS_TABS = new Set(['edit', 'output'])
+const FOCUS_TABS = new Set(['edit', 'timeline', 'output'])
 
 const FOCUS_TITLES = {
   edit: 'Effects',
+  timeline: 'Timeline',
   output: 'Export',
 }
 
@@ -29,6 +30,7 @@ export function StudioLayout() {
 
   const isFocus = FOCUS_TABS.has(activeTab)
   const isOutput = activeTab === 'output'
+  const canSelectLayers = activeTab === 'motion'
   const inspectorOpen = !isFocus && (baseImageSelected || selectedElements.length > 0 || Boolean(selectedOverlay) || maskEditing || selectMode || censorSelecting)
 
   const closeInspector = () => {
@@ -59,6 +61,19 @@ export function StudioLayout() {
     }
   }, [isFocus, isOutput]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Image / element / overlay selection is Motion-only.
+  useEffect(() => {
+    if (canSelectLayers) return
+    clearLayerSelection()
+    setSelectedOverlay(null)
+    setMaskEditing(false)
+    setCensorSelecting(false)
+    if (selectMode) {
+      cancelSelection()
+      setSelectMode(false)
+    }
+  }, [canSelectLayers]) // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div className="flex h-screen max-h-screen flex-col overflow-hidden bg-ink text-zinc-100">
       <StudioHeader />
@@ -68,7 +83,7 @@ export function StudioLayout() {
         {!isFocus && (
           <>
             <ProjectAside />
-            <ToolsRail />
+            {canSelectLayers && <ToolsRail />}
             {(mobilePanel || inspectorOpen) && (
               <button
                 type="button"

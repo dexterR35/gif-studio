@@ -4,6 +4,7 @@ import { StudioLayout } from './layout/studio-layout'
 import MotionPage from './pages/motion-page'
 import TextPage from './pages/text-page'
 import EditPage from './pages/edit-page'
+import TimelinePage from './pages/timeline-page'
 import OutputPage from './pages/output-page'
 import { ROUTES } from './lib/routes'
 
@@ -18,6 +19,7 @@ function GifApp() {
           <Route path="text" element={<TextPage />} />
           <Route path="frames" element={<Navigate to="../motion" replace />} />
           <Route path="edit" element={<EditPage />} />
+          <Route path="timeline" element={<TimelinePage />} />
           <Route path="output" element={<OutputPage />} />
           <Route path="preview" element={<Navigate to="../motion" replace />} />
         </Route>

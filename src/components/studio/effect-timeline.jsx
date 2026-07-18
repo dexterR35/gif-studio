@@ -1,5 +1,5 @@
 import { useRef } from 'react'
-import { Plus } from 'lucide-react'
+import { Plus, Type } from 'lucide-react'
 import {
   BASE_MOTION_ID,
   MAX_MOTION_EFFECTS,
@@ -7,18 +7,27 @@ import {
   MOTION_EFFECT_TYPES,
   getBaseMotionClip,
   isBaseMotionClip,
+  layerTrackId,
   moveClipWindow,
 } from '../../lib/motion-effects'
+import { MAX_TEXT_LAYERS } from '../../lib/presets'
 import { useStudio } from '../../context/studio-provider'
 import { Collapsible } from '../ui'
 import { cn } from '../../lib/cn'
 
-/** Premiere-style lanes under the play bar — M = base motion; V* = editable effects. */
+const LAYER_LANE_COLORS = {
+  element: '#94a3b8',
+  overlay: '#a78bfa',
+  text: '#fbbf24',
+}
+
+/** Premiere-style lanes — M locked, V* effects, T* text (editable), L/O locked. */
 export function EffectTimeline({ defaultOpen = true }) {
   const {
     settings, progress, setProgress, actualDuration, setPlaying, draw,
     addMotionEffect, updateMotionEffect, moveMotionEffectTrack,
     selectedMotionEffect, setSelectedMotionEffect, goToWorkspace,
+    elements, overlays, textLayers, addTextLayer, updateTextById, activeTab,
   } = useStudio()
 
   const clips = settings.motionEffects || []
@@ -27,16 +36,52 @@ export function EffectTimeline({ defaultOpen = true }) {
   const playheadPct = Math.min(100, Math.max(0, progress * 100))
   const displayDuration = actualDuration || duration
   const atCap = clips.length >= MAX_MOTION_EFFECTS
+  const textAtCap = textLayers.length >= MAX_TEXT_LAYERS
   const railsRef = useRef(null)
   const dragRef = useRef(null)
+  const editable = activeTab === 'timeline'
+
+  const textLanes = [...textLayers].reverse().map((layer, index) => {
+    const clipIn = Number.isFinite(Number(layer.in)) ? Number(layer.in) : 0
+    const clipOut = Number.isFinite(Number(layer.out)) ? Number(layer.out) : duration
+    return {
+      id: layerTrackId('text', layer.id),
+      layerId: layer.id,
+      label: `T${textLayers.length - index}`,
+      title: layer.text || 'Empty text',
+      in: clipIn,
+      out: clipOut,
+      color: LAYER_LANE_COLORS.text,
+      visible: layer.visible !== false,
+    }
+  })
+
+  const lockedLanes = [
+    ...[...elements].reverse().map((el, index) => ({
+      id: layerTrackId('element', el.id),
+      label: `L${elements.length - index}`,
+      title: el.name || 'Layer',
+      subtitle: el.motion || 'Float',
+      color: LAYER_LANE_COLORS.element,
+      visible: el.visible !== false,
+    })),
+    ...[...overlays].reverse().map((ov, index) => ({
+      id: layerTrackId('overlay', ov.id),
+      label: `O${overlays.length - index}`,
+      title: ov.name || 'Overlay',
+      subtitle: 'Image',
+      color: LAYER_LANE_COLORS.overlay,
+      visible: ov.visible !== false,
+    })),
+  ]
 
   const selectClip = (id) => {
     setSelectedMotionEffect(id)
-    goToWorkspace?.('motion')
+    goToWorkspace?.('timeline')
   }
 
-  const beginDrag = (event, clip, mode) => {
-    if (isBaseMotionClip(clip)) return
+  const beginDrag = (event, clip, mode, kind = 'effect') => {
+    if (isBaseMotionClip(clip) || !editable) return
     event.preventDefault()
     event.stopPropagation()
     const rect = railsRef.current?.getBoundingClientRect()
@@ -44,7 +89,9 @@ export function EffectTimeline({ defaultOpen = true }) {
     selectClip(clip.id)
     setPlaying(false)
     dragRef.current = {
-      id: clip.id,
+      kind,
+      id: kind === 'text' ? clip.layerId : clip.id,
+      trackId: clip.id,
       mode,
       startX: event.clientX,
       startY: event.clientY,
@@ -62,6 +109,23 @@ export function EffectTimeline({ defaultOpen = true }) {
     if (!drag) return
     const deltaSec = ((event.clientX - drag.startX) / drag.width) * duration
     const minSpan = 0.1
+
+    if (drag.kind === 'text') {
+      if (drag.mode === 'move') {
+        updateTextById(drag.id, moveClipWindow({ in: drag.originIn, out: drag.originOut }, deltaSec, duration))
+        return
+      }
+      if (drag.mode === 'in') {
+        const nextIn = Math.max(0, Math.min(drag.originOut - minSpan, drag.originIn + deltaSec))
+        updateTextById(drag.id, { in: +nextIn.toFixed(2) })
+        return
+      }
+      if (drag.mode === 'out') {
+        const nextOut = Math.max(drag.originIn + minSpan, Math.min(duration, drag.originOut + deltaSec))
+        updateTextById(drag.id, { out: +nextOut.toFixed(2) })
+      }
+      return
+    }
 
     if (drag.mode === 'move') {
       updateMotionEffect(
@@ -110,9 +174,9 @@ export function EffectTimeline({ defaultOpen = true }) {
       className="!border-b-0 border-t border-white/[.05] !py-3"
       title={(
         <>
-          Effect timeline
+          Timeline
           <span className="ml-2 font-mono normal-case tracking-normal text-zinc-600">
-            M + {clips.length}/{MAX_MOTION_EFFECTS}
+            M · {textLanes.length}/{MAX_TEXT_LAYERS}T · {clips.length}/{MAX_MOTION_EFFECTS}
           </span>
         </>
       )}
@@ -122,9 +186,19 @@ export function EffectTimeline({ defaultOpen = true }) {
     >
       <div className="gs-timeline-lanes">
         <div className="gs-timeline-labels">
-          <span className="gs-timeline-lane-label" title="Base motion from Motion dropdown">M</span>
+          <span className="gs-timeline-lane-label" title="Base motion from Motion tab">M</span>
           {Array.from({ length: MAX_MOTION_EFFECTS }, (_, track) => (
             <span key={track} className="gs-timeline-lane-label">V{track + 1}</span>
+          ))}
+          {textLanes.map((lane) => (
+            <span key={lane.id} className="gs-timeline-lane-label" title={lane.title}>
+              {lane.label}
+            </span>
+          ))}
+          {lockedLanes.map((lane) => (
+            <span key={lane.id} className="gs-timeline-lane-label" title={lane.title}>
+              {lane.label}
+            </span>
           ))}
         </div>
         <div
@@ -140,7 +214,7 @@ export function EffectTimeline({ defaultOpen = true }) {
             <div
               role="button"
               tabIndex={0}
-              title={`${baseClip.type} · base motion (change via Motion dropdown)`}
+              title={`${baseClip.type} · base motion (change via Motion tab)`}
               className={cn(
                 'gs-timeline-clip gs-timeline-clip-base',
                 selectedMotionEffect === BASE_MOTION_ID && 'is-active',
@@ -170,9 +244,10 @@ export function EffectTimeline({ defaultOpen = true }) {
                   <div
                     role="button"
                     tabIndex={0}
-                    title={`${clip.type} ${clip.in.toFixed(1)}s → ${clip.out.toFixed(1)}s · drag to move`}
+                    title={`${clip.type} ${clip.in.toFixed(1)}s → ${clip.out.toFixed(1)}s · ${editable ? 'drag to move' : 'open Timeline to edit'}`}
                     className={cn(
                       'gs-timeline-clip',
+                      !editable && 'gs-timeline-clip-readonly',
                       selectedMotionEffect === clip.id && 'is-active',
                     )}
                     style={{
@@ -180,54 +255,175 @@ export function EffectTimeline({ defaultOpen = true }) {
                       width: `${Math.max(1.5, ((clip.out - clip.in) / duration) * 100)}%`,
                       background: MOTION_EFFECT_COLORS[clip.type] || '#a1a1aa',
                     }}
-                    onPointerDown={(e) => beginDrag(e, clip, 'move')}
+                    onPointerDown={(e) => {
+                      if (!editable) {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        selectClip(clip.id)
+                        setPlaying(false)
+                        return
+                      }
+                      beginDrag(e, clip, 'move')
+                    }}
                     onPointerMove={onPointerMove}
                     onPointerUp={endDrag}
                     onPointerCancel={endDrag}
                   >
-                    <button
-                      type="button"
-                      aria-label="Trim in"
-                      className="gs-timeline-handle gs-timeline-handle-in"
-                      onPointerDown={(e) => beginDrag(e, clip, 'in')}
-                      onPointerMove={onPointerMove}
-                      onPointerUp={endDrag}
-                      onPointerCancel={endDrag}
-                    />
+                    {editable && (
+                      <button
+                        type="button"
+                        aria-label="Trim in"
+                        className="gs-timeline-handle gs-timeline-handle-in"
+                        onPointerDown={(e) => beginDrag(e, clip, 'in')}
+                        onPointerMove={onPointerMove}
+                        onPointerUp={endDrag}
+                        onPointerCancel={endDrag}
+                      />
+                    )}
                     <span>{clip.type}</span>
-                    <button
-                      type="button"
-                      aria-label="Trim out"
-                      className="gs-timeline-handle gs-timeline-handle-out"
-                      onPointerDown={(e) => beginDrag(e, clip, 'out')}
-                      onPointerMove={onPointerMove}
-                      onPointerUp={endDrag}
-                      onPointerCancel={endDrag}
-                    />
+                    {editable && (
+                      <button
+                        type="button"
+                        aria-label="Trim out"
+                        className="gs-timeline-handle gs-timeline-handle-out"
+                        onPointerDown={(e) => beginDrag(e, clip, 'out')}
+                        onPointerMove={onPointerMove}
+                        onPointerUp={endDrag}
+                        onPointerCancel={endDrag}
+                      />
+                    )}
                   </div>
                 )}
               </div>
             )
           })}
+
+          {textLanes.map((lane) => (
+            <div key={lane.id} className="gs-timeline-lane-rail" data-track={lane.id}>
+              <div
+                role="button"
+                tabIndex={0}
+                title={`${lane.title} ${lane.in.toFixed(1)}s → ${lane.out.toFixed(1)}s · ${editable ? 'drag to trim' : 'open Timeline to edit'}`}
+                className={cn(
+                  'gs-timeline-clip',
+                  !editable && 'gs-timeline-clip-readonly',
+                  !lane.visible && 'is-hidden',
+                  selectedMotionEffect === lane.id && 'is-active',
+                )}
+                style={{
+                  left: `${(lane.in / duration) * 100}%`,
+                  width: `${Math.max(1.5, ((lane.out - lane.in) / duration) * 100)}%`,
+                  background: lane.color,
+                }}
+                onPointerDown={(e) => {
+                  if (!editable) {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    selectClip(lane.id)
+                    setPlaying(false)
+                    return
+                  }
+                  beginDrag(e, lane, 'move', 'text')
+                }}
+                onPointerMove={onPointerMove}
+                onPointerUp={endDrag}
+                onPointerCancel={endDrag}
+              >
+                {editable && (
+                  <button
+                    type="button"
+                    aria-label="Trim in"
+                    className="gs-timeline-handle gs-timeline-handle-in"
+                    onPointerDown={(e) => beginDrag(e, lane, 'in', 'text')}
+                    onPointerMove={onPointerMove}
+                    onPointerUp={endDrag}
+                    onPointerCancel={endDrag}
+                  />
+                )}
+                <span>{lane.title}</span>
+                {editable && (
+                  <button
+                    type="button"
+                    aria-label="Trim out"
+                    className="gs-timeline-handle gs-timeline-handle-out"
+                    onPointerDown={(e) => beginDrag(e, lane, 'out', 'text')}
+                    onPointerMove={onPointerMove}
+                    onPointerUp={endDrag}
+                    onPointerCancel={endDrag}
+                  />
+                )}
+              </div>
+            </div>
+          ))}
+
+          {lockedLanes.map((lane) => (
+            <div key={lane.id} className="gs-timeline-lane-rail" data-track={lane.id}>
+              <div
+                role="button"
+                tabIndex={0}
+                title={`${lane.title} · ${lane.subtitle} (locked — edit on Motion)`}
+                className={cn(
+                  'gs-timeline-clip gs-timeline-clip-base gs-timeline-clip-layer',
+                  !lane.visible && 'is-hidden',
+                  selectedMotionEffect === lane.id && 'is-active',
+                )}
+                style={{
+                  left: '0%',
+                  width: '100%',
+                  background: lane.color,
+                }}
+                onPointerDown={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  selectClip(lane.id)
+                  setPlaying(false)
+                }}
+              >
+                <span>{lane.title}</span>
+                <em className="gs-timeline-lock">{lane.subtitle}</em>
+              </div>
+            </div>
+          ))}
+
           <div className="gs-timeline-playhead" style={{ left: `${playheadPct}%` }} />
         </div>
       </div>
 
-      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-        {MOTION_EFFECT_TYPES.map((type) => (
+      {editable && (
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
           <button
-            key={type}
             type="button"
             className="gs-chip"
-            disabled={atCap}
-            title={atCap ? `Maximum ${MAX_MOTION_EFFECTS} effects` : `Add ${type}`}
-            onClick={() => addMotionEffect(type)}
+            disabled={textAtCap}
+            title={textAtCap ? `Maximum ${MAX_TEXT_LAYERS} text layers` : 'Add text track'}
+            onClick={() => {
+              const id = addTextLayer({ stay: true })
+              if (id != null) {
+                selectClip(layerTrackId('text', id))
+              }
+            }}
           >
-            <Plus className="h-3 w-3" />
-            {type}
+            <Type className="h-3 w-3" />
+            Text
           </button>
-        ))}
-      </div>
+          {MOTION_EFFECT_TYPES.map((type) => (
+            <button
+              key={type}
+              type="button"
+              className="gs-chip"
+              disabled={atCap}
+              title={atCap ? `Maximum ${MAX_MOTION_EFFECTS} effects` : `Add ${type}`}
+              onClick={() => {
+                const id = addMotionEffect(type)
+                if (id != null) selectClip(id)
+              }}
+            >
+              <Plus className="h-3 w-3" />
+              {type}
+            </button>
+          ))}
+        </div>
+      )}
     </Collapsible>
   )
 }

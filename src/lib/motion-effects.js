@@ -40,6 +40,22 @@ export const MOTION_EFFECT_COLORS = {
   Base: '#a1a1aa',
 }
 
+/** Soft cinematic defaults — subtle strength, long fades, gentle travel. */
+const CLIP_PRESETS = {
+  Bloat: { amount: 16, radius: 30, fadeIn: 32, fadeOut: 32, cycles: 1, animate: 'Pulse' },
+  Pucker: { amount: 14, radius: 28, fadeIn: 32, fadeOut: 32, cycles: 1, animate: 'Pulse' },
+  Twirl: { amount: 12, radius: 26, fadeIn: 30, fadeOut: 30, cycles: 0.75, animate: 'Spin' },
+  Push: { amount: 14, radius: 32, fadeIn: 30, fadeOut: 30, cycles: 1, animate: 'Hold' },
+  Swirl: { amount: 10, radius: 34, fadeIn: 34, fadeOut: 34, cycles: 0.75, animate: 'Spin' },
+  Wave: { amount: 12, radius: 50, fadeIn: 36, fadeOut: 36, cycles: 1.25, animate: 'Hold' },
+  Zoom: { amount: 7, radius: 50, fadeIn: 38, fadeOut: 38, cycles: 1, animate: 'Pulse' },
+}
+
+function smoothstep(t) {
+  const x = Math.max(0, Math.min(1, t))
+  return x * x * (3 - 2 * x)
+}
+
 /** Virtual locked clip for the Motion dropdown — display only; not in motionEffects. */
 export function getBaseMotionClip(settings) {
   const duration = Math.max(0.1, Number(settings?.duration) || 1)
@@ -65,39 +81,57 @@ export function isBaseMotionClip(clipOrId) {
   return clipOrId.id === BASE_MOTION_ID || clipOrId.kind === 'base'
 }
 
+/** Locked content-layer track ids on the timeline (`layer:element:123`). */
+export function layerTrackId(kind, id) {
+  return `layer:${kind}:${id}`
+}
+
+export function parseLayerTrackId(value) {
+  if (typeof value !== 'string' || !value.startsWith('layer:')) return null
+  const parts = value.split(':')
+  if (parts.length < 3) return null
+  const kind = parts[1]
+  const id = parts.slice(2).join(':')
+  if (!kind || !id) return null
+  const numeric = Number(id)
+  return { kind, id: Number.isFinite(numeric) && String(numeric) === id ? numeric : id }
+}
+
+export function isLayerTrackId(value) {
+  return Boolean(parseLayerTrackId(value))
+}
+
 export function defaultAnimateForType(type) {
-  if (type === 'Wave') return 'Left → Right'
-  if (type === 'Zoom') return 'Pulse'
-  if (type === 'Twirl' || type === 'Swirl') return 'Spin'
-  return 'Left → Right'
+  return CLIP_PRESETS[type]?.animate || 'Hold'
 }
 
 export function createMotionEffect(type = 'Bloat', duration = 10, track = 0) {
   const span = Math.max(0.4, Number(duration) || 10)
   const mid = span / 2
+  // Slightly longer window so motion reads as a soft beat, not a punch.
+  const half = span * 0.28
+  const preset = CLIP_PRESETS[type] || CLIP_PRESETS.Bloat
   return {
     id: Date.now() + Math.floor(Math.random() * 1000),
     type,
     track: Math.max(0, Math.min(MAX_MOTION_EFFECTS - 1, track)),
-    in: Math.max(0, +(mid - span * 0.25).toFixed(2)),
-    out: Math.min(span, +(mid + span * 0.25).toFixed(2)),
-    amount: type === 'Zoom' ? 18 : 42,
-    radius: 42,
+    in: Math.max(0, +(mid - half).toFixed(2)),
+    out: Math.min(span, +(mid + half).toFixed(2)),
+    amount: preset.amount,
+    radius: preset.radius,
     x: 50,
     y: 50,
     angle: 0,
-    fadeIn: 15,
-    fadeOut: 15,
-    /** Continuous motion across in→out */
-    animate: defaultAnimateForType(type),
-    /** How many animation cycles inside the clip window */
-    cycles: type === 'Wave' ? 3 : type === 'Zoom' ? 2 : 1,
+    fadeIn: preset.fadeIn,
+    fadeOut: preset.fadeOut,
+    animate: preset.animate,
+    cycles: preset.cycles,
   }
 }
 
 /**
  * Smooth envelope for a clip at time `t` (seconds).
- * Returns 0 outside [in, out]; peaks at `amount` with fade in/out % of the clip span.
+ * Uses smoothstep fades so strength eases in/out instead of snapping.
  */
 export function sampleClipStrength(clip, t) {
   const start = Number(clip.in) || 0
@@ -108,9 +142,11 @@ export function sampleClipStrength(clip, t) {
   const fadeIn = Math.max(0, Math.min(50, Number(clip.fadeIn) || 0)) / 100
   const fadeOut = Math.max(0, Math.min(50, Number(clip.fadeOut) || 0)) / 100
   let weight = 1
-  if (fadeIn > 0 && local < fadeIn) weight = local / fadeIn
-  else if (fadeOut > 0 && local > 1 - fadeOut) weight = (1 - local) / fadeOut
-  return weight * (Math.max(0, Number(clip.amount) || 0) / 100)
+  if (fadeIn > 0 && local < fadeIn) weight = smoothstep(local / fadeIn)
+  else if (fadeOut > 0 && local > 1 - fadeOut) weight = smoothstep((1 - local) / fadeOut)
+  // Soft ceiling — UI amount 100 maps to a composed, not extreme, effect.
+  const softAmount = (Math.max(0, Number(clip.amount) || 0) / 100) * 0.72
+  return weight * softAmount
 }
 
 /** Progress 0→1 inside the clip window, or null if inactive. */
@@ -142,11 +178,14 @@ export function sampleAnimatedParams(clip, t) {
   if (strength <= 0) return null
 
   const mode = clip.animate || defaultAnimateForType(clip.type)
-  const cycles = Math.max(0.25, Number(clip.cycles) || (clip.type === 'Wave' ? 3 : 1))
+  const cycles = Math.max(0.25, Number(clip.cycles) || (clip.type === 'Wave' ? 1.25 : 1))
   const phase = local * cycles
   const turn = phase * Math.PI * 2
+  const eased = smoothstep(local)
   const cx0 = Number(clip.x) || 50
   const cy0 = Number(clip.y) || 50
+  // Keep travel near the anchor — subtle pan, not full-frame sweeps.
+  const travel = 16
   let x = cx0
   let y = cy0
   let amount = strength * 100
@@ -155,46 +194,48 @@ export function sampleAnimatedParams(clip, t) {
 
   switch (mode) {
     case 'Left → Right':
-      x = lerp(8, 92, local)
+      x = lerp(cx0 - travel, cx0 + travel, eased)
       y = cy0
       break
     case 'Right → Left':
-      x = lerp(92, 8, local)
+      x = lerp(cx0 + travel, cx0 - travel, eased)
       y = cy0
       break
     case 'Top → Bottom':
       x = cx0
-      y = lerp(8, 92, local)
+      y = lerp(cy0 - travel, cy0 + travel, eased)
       break
     case 'Bottom → Top':
       x = cx0
-      y = lerp(92, 8, local)
+      y = lerp(cy0 + travel, cy0 - travel, eased)
       break
     case 'Orbit': {
-      const r = Math.max(8, Math.min(40, (Number(clip.radius) || 42) * 0.55))
+      const r = Math.max(4, Math.min(14, (Number(clip.radius) || 30) * 0.28))
       x = cx0 + Math.cos(turn) * r
       y = cy0 + Math.sin(turn) * r
       break
     }
     case 'Pulse':
-      amount = strength * 100 * (0.3 + 0.7 * (0.5 + 0.5 * Math.sin(turn)))
+      // Gentle breath — never fully collapses to zero.
+      amount = strength * 100 * (0.55 + 0.45 * (0.5 + 0.5 * Math.sin(turn)))
       break
     case 'Random': {
-      const steps = Math.max(2, Math.ceil(cycles * 4))
+      const steps = Math.max(2, Math.ceil(cycles * 3))
       const seg = local * steps
       const i = Math.min(steps - 1, Math.floor(seg))
-      const f = seg - i
-      const x0 = 12 + clipNoise(clip, i * 2) * 76
-      const y0 = 12 + clipNoise(clip, i * 2 + 1) * 76
-      const x1 = 12 + clipNoise(clip, (i + 1) * 2) * 76
-      const y1 = 12 + clipNoise(clip, (i + 1) * 2 + 1) * 76
-      const ease = f * f * (3 - 2 * f)
-      x = lerp(x0, x1, ease)
-      y = lerp(y0, y1, ease)
+      const f = smoothstep(seg - i)
+      const jitter = 12
+      const x0 = cx0 + (clipNoise(clip, i * 2) - 0.5) * 2 * jitter
+      const y0 = cy0 + (clipNoise(clip, i * 2 + 1) - 0.5) * 2 * jitter
+      const x1 = cx0 + (clipNoise(clip, (i + 1) * 2) - 0.5) * 2 * jitter
+      const y1 = cy0 + (clipNoise(clip, (i + 1) * 2 + 1) - 0.5) * 2 * jitter
+      x = lerp(x0, x1, f)
+      y = lerp(y0, y1, f)
       break
     }
     case 'Spin':
-      angle = (Number(clip.angle) || 0) + phase * 360
+      // One soft turn per cycle instead of a full frantic spin.
+      angle = (Number(clip.angle) || 0) + phase * 180
       break
     case 'Hold':
     default:
@@ -211,11 +252,11 @@ export function sampleAnimatedParams(clip, t) {
   let zoomScale = 1
   if (clip.type === 'Zoom') {
     if (mode === 'Pulse') {
-      zoomScale = 1 + (strength * (0.35 + 0.65 * (0.5 + 0.5 * Math.sin(turn))))
+      zoomScale = 1 + (strength * (0.2 + 0.35 * (0.5 + 0.5 * Math.sin(turn))))
     } else if (mode === 'Hold') {
-      zoomScale = 1 + strength
+      zoomScale = 1 + strength * 0.55
     } else {
-      zoomScale = 1 + strength * (0.25 + 0.75 * local)
+      zoomScale = 1 + strength * (0.15 + 0.4 * eased)
     }
   }
 
@@ -283,13 +324,14 @@ export function clampMotionEffects(clips, duration) {
         while (used.has(track) && track < MAX_MOTION_EFFECTS) track += 1
       }
       used.add(track)
+      const preset = CLIP_PRESETS[clip.type] || CLIP_PRESETS.Bloat
       return {
         ...clip,
         track,
         in: +start.toFixed(2),
         out: +end.toFixed(2),
-        animate: clip.animate || defaultAnimateForType(clip.type),
-        cycles: Math.max(0.25, Number(clip.cycles) || 1),
+        animate: clip.animate || preset.animate,
+        cycles: Math.max(0.25, Number(clip.cycles) || preset.cycles),
       }
     })
 }

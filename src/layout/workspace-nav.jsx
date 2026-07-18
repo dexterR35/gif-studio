@@ -1,16 +1,21 @@
-import { Settings2, SlidersHorizontal, Sparkles, Type } from 'lucide-react'
+import { Film, Settings2, SlidersHorizontal, Sparkles, Type } from 'lucide-react'
 import { WorkspaceTabs } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
 import { GIF_WORKSPACES } from '../lib/routes'
 
 const TAB_META = {
-  motion: Sparkles,
-  text: Type,
-  edit: SlidersHorizontal,
-  output: Settings2,
+  motion: { icon: Sparkles, label: 'Motion' },
+  text: { icon: Type, label: 'Text' },
+  edit: { icon: SlidersHorizontal, label: 'Effects' },
+  timeline: { icon: Film, label: 'Timeline' },
+  output: { icon: Settings2, label: 'Export' },
 }
 
-const TABS = GIF_WORKSPACES.map((id) => ({ id, icon: TAB_META[id] }))
+const TABS = GIF_WORKSPACES.map((id) => ({
+  id,
+  icon: TAB_META[id]?.icon,
+  label: TAB_META[id]?.label ?? id,
+}))
 
 export function WorkspaceNav() {
   const { activeTab, goToWorkspace } = useStudio()

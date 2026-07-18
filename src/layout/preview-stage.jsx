@@ -19,16 +19,18 @@ export function PreviewStage() {
     clearLayerSelection, selectedElements, setSelectedText,
     beginAnchorDrag, moveAnchorDrag, endAnchorDrag,
     overlays, selectedOverlay, selectStageOverlay, overlayBounds,
+    activeTab,
   } = useStudio()
 
+  const canSelectLayers = activeTab === 'motion'
   const interacting = selectMode || maskEditing || censorSelecting
   const selectedEl = elements.find((el) => el.id === selectedElement)
   const selectedOv = overlays.find((ov) => ov.id === selectedOverlay)
   const multiSelect = selectedElements.length >= 2
-  const showOffCanvasGhost = baseImageSelected && Boolean(image) && !playing && !selectMode && !maskEditing
+  const showOffCanvasGhost = canSelectLayers && baseImageSelected && Boolean(image) && !playing && !selectMode && !maskEditing
 
   // Anchor only when a single layer is selected (base image, element, or overlay).
-  const showMotionAnchor = !playing && !selectMode && !maskEditing && !censorSelecting && (
+  const showMotionAnchor = canSelectLayers && !playing && !selectMode && !maskEditing && !censorSelecting && (
     baseImageSelected
     || (Boolean(selectedOv) && !multiSelect)
     || (Boolean(selectedEl) && !multiSelect && selectedElements.length === 1)
@@ -91,6 +93,7 @@ export function PreviewStage() {
   }
 
   const onStagePointerDown = (event) => {
+    if (!canSelectLayers) return
     if (interacting) {
       startSelection(event)
       return
@@ -201,8 +204,8 @@ export function PreviewStage() {
             <SelectionPath points={selectionPoints} tool={selectionTool} smoothPath={smoothSelectionPath} />
           )}
 
-          {/* Overlays — click to select (under elements in stacking) */}
-          {!selectMode && !maskEditing && !playing && overlays.filter((ov) => ov.visible).map((overlay, stackIndex) => {
+          {/* Overlays — click to select only on Motion */}
+          {canSelectLayers && !selectMode && !maskEditing && !playing && overlays.filter((ov) => ov.visible).map((overlay, stackIndex) => {
             const box = overlayBounds(overlay)
             const selected = selectedOverlay === overlay.id
             return (
@@ -238,7 +241,7 @@ export function PreviewStage() {
             )
           })}
 
-          {!selectMode && !maskEditing && !playing && elements.map((el, stackIndex) => {
+          {canSelectLayers && !selectMode && !maskEditing && !playing && elements.map((el, stackIndex) => {
             const selected = selectedElements.includes(el.id)
             const multi = selectedElements.length >= 2
             const isPrimary = selected && el.id === selectedElement
@@ -283,7 +286,7 @@ export function PreviewStage() {
             )
           })}
 
-          {!selectMode && !maskEditing && !playing && textLayers.filter((layer) => layer.visible).map((layer) => {
+          {activeTab === 'text' && !selectMode && !maskEditing && !playing && textLayers.filter((layer) => layer.visible).map((layer) => {
             const box = textBounds(layer)
             return (
               <button
@@ -303,7 +306,7 @@ export function PreviewStage() {
             )
           })}
 
-          {!selectMode && !maskEditing && !playing && baseImageSelected && image && (
+          {canSelectLayers && !selectMode && !maskEditing && !playing && baseImageSelected && image && (
             <TransformBox
               x={imageTransformBox.x}
               y={imageTransformBox.y}
@@ -347,7 +350,7 @@ export function PreviewStage() {
             />
           )}
 
-          {!selectMode && !maskEditing && !playing && !multiSelect && selectedEl && (
+          {canSelectLayers && !selectMode && !maskEditing && !playing && !multiSelect && selectedEl && (
             <TransformBox
               x={selectedEl.x}
               y={selectedEl.y}
@@ -384,7 +387,7 @@ export function PreviewStage() {
             />
           )}
 
-          {!selectMode && !maskEditing && !playing && selectedOv && (
+          {canSelectLayers && !selectMode && !maskEditing && !playing && selectedOv && (
             <TransformBox
               x={overlayBounds(selectedOv).x}
               y={overlayBounds(selectedOv).y}
@@ -494,7 +497,7 @@ export function PreviewStage() {
           <span className="w-11 font-mono text-[10px] text-zinc-500">{actualDuration.toFixed(1)}s</span>
         </div>
 
-        <EffectTimeline />
+        {activeTab === 'timeline' && <EffectTimeline />}
 
         <div className="mt-3 flex items-center justify-between gap-4 border-t border-white/[.05] pt-3 text-[10px] text-zinc-600">
           <div className="flex gap-4">
