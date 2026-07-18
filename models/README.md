@@ -24,12 +24,18 @@ models/
     GroundingDINO_SwinB_cfg.py
     bert-base-uncased/                   # text encoder (local)
     hf-tiny/  hf-base/                   # optional Transformers snapshots
+  yolo/                                  # Ultralytics — https://github.com/ultralytics/ultralytics
+    yolov8n.pt
+    yolov8s.pt
+    yolov8m.pt
+    yolo11n.pt
   rife/train_log/flownet.pkl
 ```
 
 ```bash
 pip install -r requirements-ai.txt
 pip install 'git+https://github.com/facebookresearch/sam2.git'
+pip install ultralytics
 python scripts/setup_ai_models.py
 ```
 

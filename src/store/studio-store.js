@@ -15,6 +15,7 @@ export const useStudioStore = create((set, get) => ({
     mediapipe: false,
     sam2: false,
     groundingDino: false,
+    yolo: false,
     realesrgan: false,
     rife: false,
     rembg: false,

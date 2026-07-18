@@ -54,6 +54,14 @@ SAM2_URLS = {
     ),
 }
 
+# Ultralytics release assets — https://github.com/ultralytics/ultralytics
+YOLO_URLS = {
+    "yolov8n.pt": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt",
+    "yolov8s.pt": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8s.pt",
+    "yolov8m.pt": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8m.pt",
+    "yolo11n.pt": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt",
+}
+
 GROUNDING_DINO = [
     {
         "file": "groundingdino_swint_ogc.pth",
@@ -113,6 +121,16 @@ def setup_sam2(tiny_only: bool) -> None:
     for name, url in items:
         download(url, MODELS / "sam2" / name)
     print("  install package: pip install 'git+https://github.com/facebookresearch/sam2.git'")
+
+
+def setup_yolo(tiny_only: bool) -> None:
+    print("\n[YOLO] Ultralytics → models/yolo/  (https://github.com/ultralytics/ultralytics)")
+    items = list(YOLO_URLS.items())
+    if tiny_only:
+        items = [("yolov8n.pt", YOLO_URLS["yolov8n.pt"])]
+    for name, url in items:
+        download(url, MODELS / "yolo" / name)
+    print("  install package: pip install ultralytics")
 
 
 def setup_bert_local() -> None:
@@ -240,10 +258,11 @@ def setup_rife(hf_repo: str | None) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-rife", action="store_true")
+    parser.add_argument("--skip-yolo", action="store_true")
     parser.add_argument(
         "--tiny-only",
         action="store_true",
-        help="Only SAM2 tiny + Grounding DINO Swin-T (faster download)",
+        help="Only SAM2 tiny + Grounding DINO Swin-T + YOLOv8n (faster download)",
     )
     parser.add_argument(
         "--no-install-dino",
@@ -269,12 +288,15 @@ def main() -> int:
         tiny_only=args.tiny_only,
         install_pkg=not args.no_install_dino,
     )
+    if not args.skip_yolo:
+        setup_yolo(tiny_only=args.tiny_only)
     if not args.skip_rife:
         setup_rife(None if args.no_rife_hf else args.rife_hf)
 
     print("\nDone. Local-only inference (GIF_STUDIO_ALLOW_HF unset).")
     print("  pip install -r requirements-ai.txt")
     print("  pip install 'git+https://github.com/facebookresearch/sam2.git'")
+    print("  pip install ultralytics   # YOLO detect engine")
     print("Device auto-selects CUDA → MPS → CPU (override: GIF_STUDIO_TORCH_DEVICE).")
     print("Check /api/health for device + models.*.ready flags.")
     return 0

@@ -180,6 +180,88 @@ def resolve_grounding_dino(model_id: str | None = None) -> tuple[Path, Path] | N
     return None
 
 
+# --- YOLO (Ultralytics) ---------------------------------------------------
+
+# Official weights: https://github.com/ultralytics/ultralytics
+YOLO_VARIANTS = [
+    {
+        "id": "yolov8n",
+        "label": "YOLOv8n (nano)",
+        "file": "yolov8n.pt",
+        "url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt",
+    },
+    {
+        "id": "yolov8s",
+        "label": "YOLOv8s (small)",
+        "file": "yolov8s.pt",
+        "url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8s.pt",
+    },
+    {
+        "id": "yolov8m",
+        "label": "YOLOv8m (medium)",
+        "file": "yolov8m.pt",
+        "url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8m.pt",
+    },
+    {
+        "id": "yolo11n",
+        "label": "YOLO11n (nano)",
+        "file": "yolo11n.pt",
+        "url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt",
+    },
+]
+
+
+def list_yolo_models() -> list[dict[str, Any]]:
+    root = models_dir() / "yolo"
+    out = []
+    for spec in YOLO_VARIANTS:
+        path = root / spec["file"]
+        out.append({
+            "id": spec["id"],
+            "label": spec["label"],
+            "file": spec["file"],
+            "path": str(path),
+            "ready": path.exists() and path.stat().st_size > 1024,
+        })
+    return out
+
+
+def resolve_yolo(model_id: str | None = None) -> tuple[Path, str] | None:
+    """Return (checkpoint_path, engine_label) for a local Ultralytics .pt."""
+    wanted = (model_id or "").strip()
+    if not wanted:
+        env = (
+            os.environ.get("YOLO_MODEL")
+            or os.environ.get("GIF_STUDIO_YOLO")
+            or os.environ.get("YOLO_MODEL_ID")
+            or "yolov8n"
+        )
+        path = Path(env).expanduser()
+        if path.is_file():
+            return path, f"yolo-local:{path.stem}"
+        wanted = env.strip()
+    root = models_dir() / "yolo"
+    by_id = {s["id"]: s for s in YOLO_VARIANTS}
+    for spec in YOLO_VARIANTS:
+        path = root / spec["file"]
+        if wanted in {spec["id"], spec["file"], Path(spec["file"]).stem} and path.exists():
+            return path, f"yolo-local:{path.stem}"
+    if wanted in by_id:
+        path = root / by_id[wanted]["file"]
+        if path.exists():
+            return path, f"yolo-local:{path.stem}"
+    for spec in YOLO_VARIANTS:
+        path = root / spec["file"]
+        if path.exists() and path.stat().st_size > 1024:
+            return path, f"yolo-local:{path.stem}"
+    # Any .pt dropped into models/yolo/
+    if root.is_dir():
+        for path in sorted(root.glob("*.pt")):
+            if path.stat().st_size > 1024:
+                return path, f"yolo-local:{path.stem}"
+    return None
+
+
 # --- Upscale --------------------------------------------------------------
 
 UPSCALE_VARIANTS = [
@@ -217,6 +299,7 @@ def catalog() -> dict[str, Any]:
         "allow_huggingface": allow_huggingface(),
         "sam2": list_sam2_models(),
         "grounding_dino": list_grounding_dino_models(),
+        "yolo": list_yolo_models(),
         "upscale": list_upscale_models(),
         "models_dir": str(models_dir()),
     }

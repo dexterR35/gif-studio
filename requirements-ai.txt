@@ -29,7 +29,8 @@ transformers>=4.45
 # SAM 2 — install separately (CUDA extension optional):
 #   pip install "git+https://github.com/facebookresearch/sam2.git"
 
-# Optional YOLO (separate detect engine, not a DINO substitute):
-# ultralytics>=8.0
+# Ultralytics YOLO — selectable detect engine (COCO; local weights in models/yolo/)
+# https://github.com/ultralytics/ultralytics
+ultralytics>=8.3.0
 
 # RIFE uses third_party/Practical-RIFE (cloned by setup_ai_models.py).

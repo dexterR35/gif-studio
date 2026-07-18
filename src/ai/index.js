@@ -1,7 +1,11 @@
 export { getOnnxSession, probeOnnx, imageDataToFloatTensor, ort } from './onnx'
 export { segmentWithSam2, probeSam2, sam2Configured } from './sam2'
 export {
-  detectWithGroundingDino, probeGroundingDino, groundingDinoConfigured,
+  detectWithGroundingDino,
+  detectObjects,
+  probeGroundingDino,
+  probeYolo,
+  groundingDinoConfigured,
 } from './grounding-dino'
 export {
   segmentHuman,

@@ -397,6 +397,7 @@ export function StudioProvider({ children }) {
       api: apiAvailable,
       sam2: Boolean(apiInfo?.sam2),
       groundingDino: Boolean(apiInfo?.grounding_dino),
+      yolo: Boolean(apiInfo?.yolo),
       realesrgan: Boolean(apiInfo?.realesrgan),
       rife: Boolean(apiInfo?.rife),
       rembg: Boolean(apiInfo?.rembg || apiInfo?.ai),
@@ -1602,27 +1603,91 @@ export function StudioProvider({ children }) {
     }
   }
 
-  const runTextDetect = async (prompt, { dinoModel, sam2Model } = {}) => {
+  /** After detect/segment: keep mask contour visible and select the Konva transform cube. */
+  const selectDetectedCutout = (elementId = selectedElement) => {
+    const id = elementId || selectedElement
+    if (!id) return false
+    setSelectedElements([id])
+    setBaseImageSelected(false)
+    setArtboardSelected(false)
+    setSelectedOverlay(null)
+    setSelectedText(null)
+    setSelectMode(false)
+    setCensorSelecting(false)
+    setMaskEditing(false)
+    setPlaying(false)
+    return true
+  }
+
+  const pickBestDetectBox = (boxes, promptText) => {
+    const tokens = String(promptText || '')
+      .toLowerCase()
+      .split(/[\s.,;|]+/)
+      .filter((t) => t.length > 1)
+    const negatives = {
+      dice: ['chip', 'poker', 'token', 'coin', 'roulette'],
+      die: ['chip', 'poker', 'token', 'coin', 'roulette'],
+    }
+    const scored = (boxes || []).map((box) => {
+      const label = String(box.label || '').toLowerCase()
+      let match = 0
+      for (const tok of tokens) {
+        if (label.includes(tok) || tok.includes(label)) match = 2
+        else if (tok.length >= 3 && (label.startsWith(tok.slice(0, 3)) || tok.startsWith(label.slice(0, 3)))) {
+          match = Math.max(match, 1)
+        }
+      }
+      let penalty = 0
+      for (const tok of tokens) {
+        for (const bad of negatives[tok] || []) {
+          if (label.includes(bad) && !label.includes(tok)) penalty = 1
+        }
+      }
+      const area = (box.w || 0) * (box.h || 0)
+      return { box, match, penalty, score: box.score || 0, area }
+    })
+    const preferSmall = tokens.some((t) => ['dice', 'die', 'coin', 'ring', 'button'].includes(t))
+    scored.sort((a, b) => (
+      (b.match - a.match)
+      || (a.penalty - b.penalty)
+      || (preferSmall ? (a.area - b.area) : 0)
+      || (b.score - a.score)
+      || (a.area - b.area)
+    ))
+    return scored[0]?.box || null
+  }
+
+  const runTextDetect = async (prompt, {
+    dinoModel, sam2Model, yoloModel, engine = 'grounding_dino',
+  } = {}) => {
     const canvas = canvasRef.current
     if (!canvas || !image) { setToast('Open an image first'); return }
-    if (!prompt?.trim()) { setToast('Enter a text prompt'); return }
+    const detectEngine = engine || 'grounding_dino'
+    const needsPrompt = detectEngine !== 'yolo' && detectEngine !== 'ultralytics'
+    if (needsPrompt && !prompt?.trim()) { setToast('Enter a text prompt'); return }
     setSegmenting(true)
     try {
-      // IDEA-Research/GroundingDINO → boxes; SAM2 refines to object mask (Grounded-SAM).
+      // DINO (open-vocab) or Ultralytics YOLO (COCO) → boxes; SAM2 refines to mask.
       const { detectWithGroundingDino } = await import('../ai/grounding-dino')
       const result = await detectWithGroundingDino({
         imageCanvas: canvas,
-        prompt: prompt.trim(),
+        prompt: (prompt || '').trim(),
         refineSam2: true,
+        engine: detectEngine,
         dinoModel,
         sam2Model,
+        yoloModel,
       })
       const boxes = result.boxes || []
       if (!boxes.length) {
         setToast(`Detect · ${result.engine || 'ok'} · no boxes`)
         return
       }
-      useStudioStore.getState().setCapabilities({ groundingDino: true })
+      if (result.detect_engine === 'yolo' || /yolo/i.test(result.engine || '')) {
+        useStudioStore.getState().setCapabilities({ yolo: true })
+      } else {
+        useStudioStore.getState().setCapabilities({ groundingDino: true })
+      }
 
       if (result.mask_png_base64) {
         const maskCanvas = document.createElement('canvas')
@@ -1636,17 +1701,20 @@ export function StudioProvider({ children }) {
         maskCanvas.height = img.naturalHeight
         maskCanvas.getContext('2d').drawImage(img, 0, 0)
         useStudioStore.getState().setCapabilities({ sam2: true })
+        const label = result.selected_label || prompt.trim()
         const layerId = addElementFromMask(maskCanvas, {
-          name: prompt.trim().slice(0, 28) || 'Detected',
+          name: String(label).slice(0, 28) || 'Detected',
           engine: result.engine || 'grounding-dino+sam2',
         })
-        if (layerId) beginMaskErase(layerId)
-        setToast(`Grounding DINO + SAM2 · object mask · refine with erase if needed`)
+        // Cutout keeps mask contour; select transform cube (do not auto-enter erase).
+        if (layerId) selectDetectedCutout(layerId)
+        setToast(`Grounding DINO + SAM2 · “${label}” contour · cube selected`)
         return
       }
 
-      // Fallback: box only (no SAM2) — cube crop + erase brush.
-      const top = [...boxes].sort((a, b) => (b.score || 0) - (a.score || 0))[0]
+      // Fallback: box only — rectangular crop (no object contour). Surface why.
+      const top = result.selected_box || pickBestDetectBox(boxes, prompt.trim())
+        || [...boxes].sort((a, b) => (b.score || 0) - (a.score || 0))[0]
       const rect = {
         x: top.x / canvas.width,
         y: top.y / canvas.height,
@@ -1654,10 +1722,10 @@ export function StudioProvider({ children }) {
         h: top.h / canvas.height,
       }
       const layerId = await extractElement(rect)
-      if (layerId) beginMaskErase(layerId)
-      setToast(
-        `Detect · ${result.engine} · box only (install SAM2 for object mask) · erase stray edges`,
-      )
+      if (layerId) selectDetectedCutout(layerId)
+      const why = result.refine_error
+        || 'SAM2 mask missing — square box only, not object contour'
+      setToast(`Detect · ${top.label || 'box'} · ${why}`)
     } catch (err) {
       setToast(err?.message || 'Text detect failed')
     } finally {
@@ -2168,16 +2236,9 @@ export function StudioProvider({ children }) {
       setToast('Select a cutout layer first')
       return false
     }
-    setSelectedElements([id])
-    setBaseImageSelected(false)
-    setArtboardSelected(false)
-    setSelectedOverlay(null)
-    setSelectedText(null)
-    setSelectMode(false)
-    setCensorSelecting(false)
+    selectDetectedCutout(id)
     setMaskBrush((current) => ({ ...current, mode: 'Hide' }))
     setMaskEditing(true)
-    setPlaying(false)
     return true
   }
 

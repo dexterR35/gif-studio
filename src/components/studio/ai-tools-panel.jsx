@@ -23,6 +23,18 @@ const DINO_FALLBACK = [
   { id: 'swinb_cogcoor', label: 'GroundingDINO-B (Swin-B)' },
 ]
 
+const YOLO_FALLBACK = [
+  { id: 'yolov8n', label: 'YOLOv8n (nano)' },
+  { id: 'yolov8s', label: 'YOLOv8s (small)' },
+  { id: 'yolov8m', label: 'YOLOv8m (medium)' },
+  { id: 'yolo11n', label: 'YOLO11n (nano)' },
+]
+
+const DETECT_ENGINES = [
+  { id: 'grounding_dino', label: 'Grounding DINO (open-vocab text)' },
+  { id: 'yolo', label: 'YOLO / Ultralytics (COCO classes)' },
+]
+
 function optionLabel(m) {
   if (m.ready === false) return `${m.label} (missing)`
   return m.label
@@ -51,6 +63,8 @@ export function AiToolsPanel() {
   const [upscaleScale, setUpscaleScale] = useState(2)
   const [sam2Model, setSam2Model] = useState('sam2.1_hiera_tiny')
   const [dinoModel, setDinoModel] = useState('swint_ogc')
+  const [yoloModel, setYoloModel] = useState('yolov8n')
+  const [detectEngine, setDetectEngine] = useState('grounding_dino')
 
   const sam2Options = useMemo(
     () => (caps.models?.sam2?.length ? caps.models.sam2 : SAM2_FALLBACK),
@@ -58,6 +72,10 @@ export function AiToolsPanel() {
   )
   const dinoOptions = useMemo(
     () => (caps.models?.grounding_dino?.length ? caps.models.grounding_dino : DINO_FALLBACK),
+    [caps.models],
+  )
+  const yoloOptions = useMemo(
+    () => (caps.models?.yolo?.length ? caps.models.yolo : YOLO_FALLBACK),
     [caps.models],
   )
   const upscaleOptions = useMemo(
@@ -78,6 +96,13 @@ export function AiToolsPanel() {
       setDinoModel(readyDino.id)
     }
   }, [dinoOptions, dinoModel])
+
+  useEffect(() => {
+    const readyYolo = yoloOptions.find((m) => m.ready !== false)
+    if (readyYolo && !yoloOptions.some((m) => m.id === yoloModel && m.ready !== false)) {
+      setYoloModel(readyYolo.id)
+    }
+  }, [yoloOptions, yoloModel])
 
   useEffect(() => {
     const readyUp = upscaleOptions.find((m) => m.ready !== false && m.id !== 'bicubic')
@@ -138,44 +163,95 @@ export function AiToolsPanel() {
             {busy === 'SAM2' ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
             SAM2 segment → layer
           </Button>
+          <p className="text-[10px] leading-snug text-zinc-600">
+            <span className="font-medium text-zinc-400">SAM 2</span>
+            {' '}— pixel-accurate outlines (and video tracking). Best for interactive cutouts,
+            rotoscoping, or following an object frame to frame. Does not understand text alone.
+          </p>
 
           <SelectField
-            label="Grounding DINO model"
-            value={dinoModel}
-            onChange={setDinoModel}
+            label="Detect engine"
+            value={detectEngine}
+            onChange={setDetectEngine}
           >
-            {dinoOptions.map((m) => (
-              <option key={m.id} value={m.id} disabled={m.ready === false}>
-                {optionLabel(m)}
-              </option>
+            {DETECT_ENGINES.map((e) => (
+              <option key={e.id} value={e.id}>{e.label}</option>
             ))}
           </SelectField>
+
+          {detectEngine === 'grounding_dino' ? (
+            <SelectField
+              label="Grounding DINO model"
+              value={dinoModel}
+              onChange={setDinoModel}
+            >
+              {dinoOptions.map((m) => (
+                <option key={m.id} value={m.id} disabled={m.ready === false}>
+                  {optionLabel(m)}
+                </option>
+              ))}
+            </SelectField>
+          ) : (
+            <SelectField
+              label="YOLO model (local)"
+              value={yoloModel}
+              onChange={setYoloModel}
+            >
+              {yoloOptions.map((m) => (
+                <option key={m.id} value={m.id} disabled={m.ready === false}>
+                  {optionLabel(m)}
+                </option>
+              ))}
+            </SelectField>
+          )}
+
           <label className="block text-[10px] font-semibold uppercase tracking-[.12em] text-zinc-500">
-            Text prompt
+            {detectEngine === 'yolo' ? 'Class filter (optional)' : 'Text prompt'}
             <input
               className="gs-input mt-1.5 w-full normal-case tracking-normal"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="chair . person . dog ."
+              placeholder={detectEngine === 'yolo' ? 'person . dog . cup' : 'chair . person . dog .'}
             />
           </label>
           <Button
             variant="ghost"
             size="sm"
             full
-            disabled={Boolean(busy) || !prompt.trim()}
-            onClick={() => run('DINO', () => runTextDetect(prompt, {
+            disabled={Boolean(busy) || (detectEngine === 'grounding_dino' && !prompt.trim())}
+            onClick={() => run('Detect', () => runTextDetect(prompt, {
+              engine: detectEngine,
               dinoModel,
+              yoloModel,
               sam2Model,
             }))}
           >
-            {busy === 'DINO' ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ScanSearch className="h-3.5 w-3.5" />}
-            Text-guided detect → layer
+            {busy === 'Detect' ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ScanSearch className="h-3.5 w-3.5" />}
+            {detectEngine === 'yolo' ? 'YOLO detect → layer' : 'Text-guided detect → layer'}
           </Button>
           <p className="text-[10px] leading-snug text-zinc-600">
-            IDEA-Research Grounding DINO (open-set). Separate categories with{' '}
-            <span className="font-mono text-zinc-400">.</span>
-            {' '}— then SAM2 refines the top box into a mask (Grounded-SAM style).
+            {detectEngine === 'yolo' ? (
+              <>
+                <span className="font-medium text-zinc-400">Ultralytics YOLO</span>
+                {' '}— local COCO-class detection (
+                <a
+                  className="text-zinc-400 underline decoration-white/15 hover:text-zinc-300"
+                  href="https://github.com/ultralytics/ultralytics"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  ultralytics
+                </a>
+                ). Fast for common classes; not open-vocab. SAM 2 still refines the box to a contour.
+              </>
+            ) : (
+              <>
+                <span className="font-medium text-zinc-400">Grounding DINO</span>
+                {' '}— open-vocabulary text search. Then local SAM 2 refines the box into a mask contour.
+                Separate categories with{' '}
+                <span className="font-mono text-zinc-400">.</span>
+              </>
+            )}
           </p>
 
           <Button

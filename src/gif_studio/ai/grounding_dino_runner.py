@@ -95,6 +95,19 @@ def grounding_dino_ready() -> bool:
     return groundingdino_package_ready() or transformers_local_ready() or transformers_hub_ready()
 
 
+# Common open-vocab confusions (casino art: chip ≈ dice). Used only for box ranking.
+_LABEL_NEGATIVES: dict[str, tuple[str, ...]] = {
+    "dice": ("chip", "poker", "token", "coin", "roulette"),
+    "die": ("chip", "poker", "token", "coin", "roulette"),
+}
+
+# Synonyms appended to short single-word prompts so DINO sees both forms.
+_CAPTION_SYNONYMS: dict[str, str] = {
+    "dice": "dice . die",
+    "die": "die . dice",
+}
+
+
 def normalize_dino_caption(prompt: str) -> str:
     """Upstream preprocess: lowercase, strip, ensure trailing ``.``.
 
@@ -110,9 +123,66 @@ def normalize_dino_caption(prompt: str) -> str:
             parts = [p.strip() for p in text.split(sep) if p.strip()]
             text = " . ".join(parts)
             break
+    # Single-token prompts: add synonyms (dice ↔ die) before trailing "."
+    bare = text[:-1].strip() if text.endswith(".") else text
+    if bare and "." not in bare and " " not in bare and bare in _CAPTION_SYNONYMS:
+        text = _CAPTION_SYNONYMS[bare]
     if not text.endswith("."):
         text += "."
     return text
+
+
+def prompt_tokens(prompt: str) -> list[str]:
+    """Tokens from the user prompt (before synonym expansion) for ranking."""
+    text = (prompt or "").lower().strip()
+    for sep in (".", ",", ";", "|"):
+        text = text.replace(sep, " ")
+    return [t for t in text.split() if len(t) > 1]
+
+
+def rank_detection_boxes(
+    boxes: list[dict[str, Any]],
+    prompt: str,
+) -> list[dict[str, Any]]:
+    """Prefer boxes whose phrase matches the prompt; demote known confusions.
+
+    Grounding DINO often returns a high-score *chip* for prompt ``dice``. Ranking
+    by score alone then picks the wrong object and the UI shows a square crop.
+    """
+    tokens = prompt_tokens(prompt)
+    if not boxes:
+        return []
+
+    def key(box: dict[str, Any]) -> tuple:
+        label = str(box.get("label") or "").lower()
+        score = float(box.get("score") or 0)
+        match = 0
+        for tok in tokens:
+            if tok in label or label in tok:
+                match = 2
+                break
+            # soft: shared stem (dic*)
+            if len(tok) >= 3 and (label.startswith(tok[:3]) or tok.startswith(label[:3])):
+                match = max(match, 1)
+        penalty = 0
+        for tok in tokens:
+            for bad in _LABEL_NEGATIVES.get(tok, ()):
+                if bad in label and tok not in label:
+                    penalty = 1
+                    break
+        area = float(box.get("w") or 0) * float(box.get("h") or 0)
+        # Small objects (dice) are often out-scored by larger chips with the same phrase.
+        prefer_small = any(t in ("dice", "die", "coin", "ring", "button") for t in tokens)
+        if prefer_small:
+            return (match, -penalty, -area, score)
+        return (match, -penalty, score, -area)
+
+    return sorted(boxes, key=key, reverse=True)
+
+
+def pick_best_box(boxes: list[dict[str, Any]], prompt: str) -> dict[str, Any] | None:
+    ranked = rank_detection_boxes(boxes, prompt)
+    return ranked[0] if ranked else None
 
 
 def _patch_transformers_for_groundingdino() -> None:

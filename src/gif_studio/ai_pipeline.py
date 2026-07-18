@@ -40,9 +40,10 @@ def grounding_dino_available() -> bool:
 
 def yolo_available() -> bool:
     try:
-        import ultralytics  # noqa: F401
-        return True
-    except ImportError:
+        from .ai.yolo_runner import yolo_ready
+
+        return yolo_ready()
+    except Exception:
         return False
 
 
@@ -88,6 +89,29 @@ def segment_sam2(
     return segment_with_sam2(payload, point=point, box=box, model=model)
 
 
+def _resolve_detect_engine(engine: str | None) -> str:
+    """Return ``grounding_dino`` or ``yolo``. ``auto`` prefers DINO, then YOLO."""
+    wanted = (engine or "auto").strip().lower().replace("-", "_")
+    aliases = {
+        "dino": "grounding_dino",
+        "groundingdino": "grounding_dino",
+        "ultralytics": "yolo",
+        "yolov8": "yolo",
+        "yolo11": "yolo",
+    }
+    wanted = aliases.get(wanted, wanted)
+    if wanted in {"grounding_dino", "yolo"}:
+        return wanted
+    if grounding_dino_available():
+        return "grounding_dino"
+    if yolo_available():
+        return "yolo"
+    raise RuntimeError(
+        "No detect engine ready. Install Grounding DINO and/or Ultralytics YOLO "
+        "with local weights (python scripts/setup_ai_models.py)."
+    )
+
+
 def detect_objects(
     payload: bytes,
     prompt: str = "",
@@ -95,30 +119,64 @@ def detect_objects(
     refine_sam2: bool = True,
     dino_model: str | None = None,
     sam2_model: str | None = None,
+    engine: str | None = "auto",
+    yolo_model: str | None = None,
 ) -> dict[str, Any]:
-    """Grounding DINO detection (IDEA-Research), optionally refined with SAM2 mask.
+    """Detect with Grounding DINO (open-vocab) or Ultralytics YOLO (COCO), optional SAM2 refine.
 
-    When ``refine_sam2`` is True and SAM2 is available, the top box is passed to
+    When ``refine_sam2`` is True and SAM2 is available, the selected box is passed to
     SAM2 (Grounded-SAM style) so the cutout follows the object, not the cube.
     """
-    if not grounding_dino_available():
-        raise RuntimeError(
-            "Grounding DINO is not available. Install the official package + local "
-            "weights (python scripts/setup_ai_models.py)."
+    from .ai.grounding_dino_runner import pick_best_box
+
+    chosen = _resolve_detect_engine(engine)
+
+    if chosen == "yolo":
+        if not yolo_available():
+            raise RuntimeError(
+                "YOLO is not available. pip install ultralytics and place weights "
+                "under models/yolo/ (python scripts/setup_ai_models.py). "
+                "See https://github.com/ultralytics/ultralytics"
+            )
+        from .ai.yolo_runner import detect_with_yolo
+
+        result = detect_with_yolo(
+            payload, prompt=prompt, confidence=confidence, model=yolo_model,
         )
-    if not prompt:
-        raise ValueError("A text prompt is required for Grounding DINO detection.")
+    else:
+        if not grounding_dino_available():
+            raise RuntimeError(
+                "Grounding DINO is not available. Install the official package + local "
+                "weights (python scripts/setup_ai_models.py)."
+            )
+        if not prompt:
+            raise ValueError("A text prompt is required for Grounding DINO detection.")
+        from .ai.grounding_dino_runner import detect_with_grounding_dino
 
-    from .ai.grounding_dino_runner import detect_with_grounding_dino
+        result = detect_with_grounding_dino(
+            payload, prompt, confidence=confidence, model=dino_model,
+        )
 
-    result = detect_with_grounding_dino(
-        payload, prompt, confidence=confidence, model=dino_model,
-    )
+    result = {**result, "detect_engine": chosen}
     boxes = result.get("boxes") or []
-    if not refine_sam2 or not boxes or not sam2_available():
-        return result
+    top = pick_best_box(boxes, prompt) if prompt else (
+        max(boxes, key=lambda b: float(b.get("score") or 0)) if boxes else None
+    )
+    if top is not None:
+        result = {**result, "selected_box": top, "selected_label": top.get("label")}
 
-    top = max(boxes, key=lambda b: float(b.get("score") or 0))
+    if not refine_sam2 or not boxes or top is None:
+        return result
+    if not sam2_available():
+        return {
+            **result,
+            "refined": None,
+            "refine_error": (
+                "SAM2 not available — returned box only (square crop). "
+                "Install SAM2 weights under models/sam2 for object contour."
+            ),
+        }
+
     x1 = float(top["x"])
     y1 = float(top["y"])
     x2 = x1 + float(top["w"])
@@ -128,7 +186,7 @@ def detect_objects(
 
         seg = segment_with_sam2(
             payload,
-            point=( (x1 + x2) / 2.0, (y1 + y2) / 2.0 ),
+            point=((x1 + x2) / 2.0, (y1 + y2) / 2.0),
             box=(x1, y1, x2, y2),
             model=sam2_model,
         )
@@ -200,6 +258,7 @@ def capability_flags() -> dict[str, Any]:
         "models": {
             "sam2": models["sam2"],
             "grounding_dino": models["grounding_dino"],
+            "yolo": models["yolo"],
             "upscale": models["upscale"],
             "models_dir": models["models_dir"],
         },

@@ -513,17 +513,32 @@ async def ai_segment(
         raise _ai_http_error(exc, default_message="AI segment failed") from exc
 
 
+def _form_bool(value: object, default: bool = True) -> bool:
+    """Parse multipart bools reliably (FormData often sends 'true'/'false' strings)."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
 @app.post("/api/ai/detect")
 async def ai_detect(
     image: Annotated[UploadFile, File()],
     prompt: Annotated[str, Form()] = "",
     confidence: Annotated[float, Form()] = 0.35,
-    refine_sam2: Annotated[bool, Form()] = True,
+    refine_sam2: Annotated[str, Form()] = "true",
     engine: Annotated[str, Form()] = "auto",
     dino_model: Annotated[str, Form()] = "",
     sam2_model: Annotated[str, Form()] = "",
+    yolo_model: Annotated[str, Form()] = "",
 ) -> dict[str, object]:
-    del engine  # selected inside pipeline
+    """Detect with ``engine=grounding_dino|yolo|auto``, optional SAM2 mask refine."""
     payload = await image.read()
     _require_upload_image(payload, image.filename)
     try:
@@ -534,9 +549,11 @@ async def ai_detect(
             payload,
             prompt,
             confidence,
-            refine_sam2,
+            _form_bool(refine_sam2, True),
             dino_model or None,
             sam2_model or None,
+            engine or "auto",
+            yolo_model or None,
         )
     except Exception as exc:
         raise _ai_http_error(exc, default_message="AI detect failed") from exc
