@@ -1,0 +1,9 @@
+# Local AI weights (large binaries — do not commit)
+models/**
+!models/.gitkeep
+!models/README.md
+
+# Cloned upstream repos
+third_party/**
+!third_party/.gitkeep
+!third_party/README.md

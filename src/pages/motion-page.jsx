@@ -1,6 +1,7 @@
 import { Cpu, Crosshair, ImagePlus } from 'lucide-react'
 import { Button, Field, FormGrid, Hint, Section, SelectField, Slider } from '../components/ui'
 import { PRESETS } from '../lib/presets'
+import { EASING_OPTIONS } from '../lib/catalogs'
 import { BASE_MOTION_ID } from '../lib/motion-effects'
 import { useStudio } from '../context/studio-provider'
 
@@ -72,7 +73,7 @@ export default function MotionPage() {
             value={settings.easing}
             onChange={(v) => update('easing', v)}
           >
-            {['Linear', 'Ease in', 'Ease out', 'Ease in-out', 'Smoothstep'].map((x) => (
+            {EASING_OPTIONS.map((x) => (
               <option key={x}>{x}</option>
             ))}
           </SelectField>

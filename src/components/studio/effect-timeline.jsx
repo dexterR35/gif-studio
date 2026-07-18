@@ -1,10 +1,8 @@
 import { useRef } from 'react'
-import { Plus, Type } from 'lucide-react'
 import {
   BASE_MOTION_ID,
   MAX_MOTION_EFFECTS,
   MOTION_EFFECT_COLORS,
-  MOTION_EFFECT_TYPES,
   getBaseMotionClip,
   isBaseMotionClip,
   layerTrackId,
@@ -13,6 +11,7 @@ import {
 import { MAX_TEXT_LAYERS } from '../../lib/presets'
 import { useStudio } from '../../context/studio-provider'
 import { Collapsible } from '../ui'
+import { TimelineAddChips } from './timeline-add-chips'
 import { cn } from '../../lib/cn'
 
 const LAYER_LANE_COLORS = {
@@ -35,8 +34,6 @@ export function EffectTimeline({ defaultOpen = true }) {
   const duration = Math.max(0.1, settings.duration || 1)
   const playheadPct = Math.min(100, Math.max(0, progress * 100))
   const displayDuration = actualDuration || duration
-  const atCap = clips.length >= MAX_MOTION_EFFECTS
-  const textAtCap = textLayers.length >= MAX_TEXT_LAYERS
   const railsRef = useRef(null)
   const dragRef = useRef(null)
   const editable = activeTab === 'timeline'
@@ -165,7 +162,7 @@ export function EffectTimeline({ defaultOpen = true }) {
     if (!rect) return
     const t = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
     setPlaying(false)
-    setProgress(t)
+    setProgress(t, { force: true })
     draw(t)
   }
 
@@ -390,39 +387,19 @@ export function EffectTimeline({ defaultOpen = true }) {
       </div>
 
       {editable && (
-        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-          <button
-            type="button"
-            className="gs-chip"
-            disabled={textAtCap}
-            title={textAtCap ? `Maximum ${MAX_TEXT_LAYERS} text layers` : 'Add text track'}
-            onClick={() => {
-              const id = addTextLayer({ stay: true })
-              if (id != null) {
-                selectClip(layerTrackId('text', id))
-              }
-            }}
-          >
-            <Type className="h-3 w-3" />
-            Text
-          </button>
-          {MOTION_EFFECT_TYPES.map((type) => (
-            <button
-              key={type}
-              type="button"
-              className="gs-chip"
-              disabled={atCap}
-              title={atCap ? `Maximum ${MAX_MOTION_EFFECTS} effects` : `Add ${type}`}
-              onClick={() => {
-                const id = addMotionEffect(type)
-                if (id != null) selectClip(id)
-              }}
-            >
-              <Plus className="h-3 w-3" />
-              {type}
-            </button>
-          ))}
-        </div>
+        <TimelineAddChips
+          className="mt-2.5"
+          textCount={textLayers.length}
+          effectCount={clips.length}
+          onAddText={() => {
+            const id = addTextLayer({ stay: true })
+            if (id != null) selectClip(layerTrackId('text', id))
+          }}
+          onAddEffect={(type) => {
+            const id = addMotionEffect(type)
+            if (id != null) selectClip(id)
+          }}
+        />
       )}
     </Collapsible>
   )

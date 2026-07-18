@@ -19,6 +19,7 @@ import {
   Field,
   FormGrid,
   Hint,
+  RangeEnds,
   RotateControls,
   Section,
   SelectField,
@@ -29,6 +30,7 @@ import {
   ToggleGroup,
 } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
+import { LAYER_MOTION_OPTIONS } from '../lib/catalogs'
 import { cn } from '../lib/cn'
 import { SecondaryAside } from './secondary-aside'
 
@@ -36,6 +38,25 @@ const POSITION_AXES = {
   X: { startKey: 'xStart', endKey: 'xEnd', min: -100, max: 100, suffix: '%', label: 'X position' },
   Y: { startKey: 'yStart', endKey: 'yEnd', min: -100, max: 100, suffix: '%', label: 'Y position' },
   Rotate: { startKey: 'rotateStart', endKey: 'rotateEnd', min: -180, max: 180, suffix: '°', label: 'Rotation' },
+}
+
+function ArrangeButtons({ canForward, canBackward, onMove }) {
+  return (
+    <FormGrid gap={2}>
+      <Button disabled={!canForward} onClick={() => onMove('front')}>
+        <ChevronsUp className="h-3.5 w-3.5" />To front
+      </Button>
+      <Button disabled={!canForward} onClick={() => onMove(1)}>
+        <ArrowUp className="h-3.5 w-3.5" />Forward
+      </Button>
+      <Button disabled={!canBackward} onClick={() => onMove(-1)}>
+        <ArrowDown className="h-3.5 w-3.5" />Backward
+      </Button>
+      <Button disabled={!canBackward} onClick={() => onMove('back')}>
+        <ChevronsDown className="h-3.5 w-3.5" />To back
+      </Button>
+    </FormGrid>
+  )
 }
 
 function BaseTransformPanel() {
@@ -82,8 +103,8 @@ function BaseTransformPanel() {
           width={settings.width}
           height={settings.height}
           fit={settings.fit}
-          sourceWidth={source.width}
-          sourceHeight={source.height}
+          sourceWidth={source?.width || 0}
+          sourceHeight={source?.height || 0}
           memoryBytes={memory}
           onWidthChange={setCanvasWidth}
           onHeightChange={setCanvasHeight}
@@ -131,12 +152,12 @@ function MaskPaintPanel() {
           { value: 'Reveal', label: 'Reveal' },
         ]}
       />
-      <div className="mt-3 grid grid-cols-2 gap-2">
+      <FormGrid className="mt-3" gap={2}>
         <Field label="Size" value={maskBrush.size} onChange={(v) => setMaskBrush((current) => ({ ...current, size: v }))} min={2} max={500} suffix="px" />
         <Field label="Hardness" value={maskBrush.hardness} onChange={(v) => setMaskBrush((current) => ({ ...current, hardness: v }))} min={0} max={100} suffix="%" />
         <Field label="Opacity" value={maskBrush.opacity} onChange={(v) => setMaskBrush((current) => ({ ...current, opacity: v }))} min={1} max={100} suffix="%" />
         <Field label="Feather" value={maskBrush.feather} onChange={(v) => setMaskBrush((current) => ({ ...current, feather: v }))} min={0} max={80} suffix="px" />
-      </div>
+      </FormGrid>
       <FormGrid gap={2} className="mt-3">
         <Button className="text-[10px]" onClick={() => resetElementMask('Rectangle')}>Rect</Button>
         <Button className="text-[10px]" onClick={() => resetElementMask('Ellipse')}>Ellipse</Button>
@@ -222,43 +243,31 @@ function ElementTransformPanel({ el }) {
           value={el.rotation}
           onChange={(v) => updateElement('rotation', v)}
         />
-        <div className={`mt-3 grid grid-cols-2 gap-3 ${el.locked ? 'pointer-events-none opacity-40' : ''}`}>
+        <FormGrid className={`mt-3 ${el.locked ? 'pointer-events-none opacity-40' : ''}`} gap={3}>
           <Switch label="Flip H" checked={el.flipX} onChange={(v) => updateElement('flipX', v)} />
           <Switch label="Flip V" checked={el.flipY} onChange={(v) => updateElement('flipY', v)} />
-        </div>
+        </FormGrid>
       </Section>
 
       <Section title="Arrange" info="Stack order within extracted layers. Front draws on top." open>
-        <FormGrid gap={2}>
-          <Button disabled={!canForward} onClick={() => moveElement(el.id, 'front')}>
-            <ChevronsUp className="h-3.5 w-3.5" />To front
-          </Button>
-          <Button disabled={!canForward} onClick={() => moveElement(el.id, 1)}>
-            <ArrowUp className="h-3.5 w-3.5" />Forward
-          </Button>
-          <Button disabled={!canBackward} onClick={() => moveElement(el.id, -1)}>
-            <ArrowDown className="h-3.5 w-3.5" />Backward
-          </Button>
-          <Button disabled={!canBackward} onClick={() => moveElement(el.id, 'back')}>
-            <ChevronsDown className="h-3.5 w-3.5" />To back
-          </Button>
-        </FormGrid>
+        <ArrangeButtons
+          canForward={canForward}
+          canBackward={canBackward}
+          onMove={(dir) => moveElement(el.id, dir)}
+        />
       </Section>
 
       <Section title="Motion" open>
         <div className={el.locked ? 'pointer-events-none opacity-40' : ''}>
           <SelectField label="Animation" value={el.motion} onChange={(v) => updateElement('motion', v)}>
-            {['Float', 'Drift', 'Bounce', 'Pulse', 'Spin', 'Wobble'].map((x) => (
+            {LAYER_MOTION_OPTIONS.map((x) => (
               <option key={x}>{x}</option>
             ))}
           </SelectField>
           <Slider className="mt-3 gs-row" label="Amount" suffix="%" min={0} max={40} value={el.amplitude} onChange={(v) => updateElement('amplitude', v)} />
           <Slider className="gs-row" label="Speed" suffix="×" min={0.1} max={8} step={0.1} value={el.speed} onChange={(v) => updateElement('speed', v)} />
           <Slider className="gs-row" label="Parallax depth" suffix="%" min={0} max={100} value={el.depth ?? 50} onChange={(v) => updateElement('depth', v)} />
-          <div className="mt-1 flex justify-between text-[9px] font-semibold uppercase tracking-wider text-zinc-700">
-            <span>Far</span>
-            <span>Near</span>
-          </div>
+          <RangeEnds className="mt-1" left="Far" right="Near" />
         </div>
       </Section>
     </>
@@ -334,27 +343,18 @@ function OverlayTransformPanel({ overlay }) {
           value={overlay.rotation}
           onChange={(v) => updateOverlay('rotation', v)}
         />
-        <div className="mt-3 grid grid-cols-2 gap-3">
+        <FormGrid className="mt-3" gap={3}>
           <Switch label="Flip H" checked={overlay.flipX} onChange={(v) => updateOverlay('flipX', v)} />
           <Switch label="Flip V" checked={overlay.flipY} onChange={(v) => updateOverlay('flipY', v)} />
-        </div>
+        </FormGrid>
       </Section>
 
       <Section title="Arrange" info="Stack order within image overlays. Front draws on top." open>
-        <FormGrid gap={2}>
-          <Button disabled={!canForward} onClick={() => moveOverlay(overlay.id, 'front')}>
-            <ChevronsUp className="h-3.5 w-3.5" />To front
-          </Button>
-          <Button disabled={!canForward} onClick={() => moveOverlay(overlay.id, 1)}>
-            <ArrowUp className="h-3.5 w-3.5" />Forward
-          </Button>
-          <Button disabled={!canBackward} onClick={() => moveOverlay(overlay.id, -1)}>
-            <ArrowDown className="h-3.5 w-3.5" />Backward
-          </Button>
-          <Button disabled={!canBackward} onClick={() => moveOverlay(overlay.id, 'back')}>
-            <ChevronsDown className="h-3.5 w-3.5" />To back
-          </Button>
-        </FormGrid>
+        <ArrangeButtons
+          canForward={canForward}
+          canBackward={canBackward}
+          onMove={(dir) => moveOverlay(overlay.id, dir)}
+        />
       </Section>
 
       <Section title="Layer" open>
@@ -394,21 +394,21 @@ function TextPropertiesPanel({ layer }) {
           <Upload className="h-3.5 w-3.5" />Upload local font
         </Button>
         <input ref={fontFileRef} type="file" accept=".ttf,.otf,.woff,.woff2" className="hidden" onChange={(e) => uploadFont(e.target.files[0])} />
-        <div className="mt-3 grid grid-cols-2 gap-2">
+        <FormGrid className="mt-3" gap={2}>
           <Field label="Size" value={layer.size} onChange={(v) => updateText('size', v)} min={4} max={1000} suffix="px" />
           <SelectField label="Weight" value={layer.weight} onChange={(v) => updateText('weight', Number(v))}>
             {[100, 200, 300, 400, 500, 600, 700, 800, 900].map((x) => <option key={x} value={x}>{x}</option>)}
           </SelectField>
-        </div>
+        </FormGrid>
         <div className="mt-3"><Switch label="Italic" checked={layer.italic} onChange={(v) => updateText('italic', v)} /></div>
-        <div className="mt-3 grid grid-cols-2 gap-2">
+        <FormGrid className="mt-3" gap={2}>
           <SelectField label="Case" value={layer.casing} onChange={(v) => updateText('casing', v)}>
             {['As typed', 'UPPERCASE', 'lowercase'].map((x) => <option key={x}>{x}</option>)}
           </SelectField>
           <SelectField label="Decoration" value={layer.decoration} onChange={(v) => updateText('decoration', v)}>
             {['None', 'Underline', 'Strikethrough'].map((x) => <option key={x}>{x}</option>)}
           </SelectField>
-        </div>
+        </FormGrid>
         <ToggleGroup
           className="mt-3"
           value={layer.align}
@@ -419,19 +419,19 @@ function TextPropertiesPanel({ layer }) {
             { value: 'right', icon: AlignRight },
           ]}
         />
-        <div className="mt-3 grid grid-cols-2 gap-2">
+        <FormGrid className="mt-3" gap={2}>
           <Field label="Tracking" value={layer.letterSpacing} onChange={(v) => updateText('letterSpacing', v)} min={-20} max={100} suffix="px" />
           <Field label="Line height" value={layer.lineHeight} onChange={(v) => updateText('lineHeight', v)} min={0.5} max={4} step={0.1} suffix="×" />
-        </div>
+        </FormGrid>
       </Section>
 
       <Section title="Fill & outline" open>
         <ColorField label="Text color" value={layer.color} onChange={(v) => updateText('color', v)} />
         <ColorField className="mt-3" label="Outline color" value={layer.strokeColor} onChange={(v) => updateText('strokeColor', v)} />
-        <div className="mt-3 grid grid-cols-2 gap-2">
+        <FormGrid className="mt-3" gap={2}>
           <Field label="Outline" value={layer.strokeWidth} onChange={(v) => updateText('strokeWidth', v)} min={0} max={30} suffix="px" />
           <Field label="Opacity" value={layer.opacity} onChange={(v) => updateText('opacity', v)} min={0} max={100} suffix="%" />
-        </div>
+        </FormGrid>
         <div className="mt-3">
           <SelectField label="Blend mode" value={layer.blendMode} onChange={(v) => updateText('blendMode', v)}>
             {[['source-over', 'Normal'], ['multiply', 'Multiply'], ['screen', 'Screen'], ['overlay', 'Overlay'], ['darken', 'Darken'], ['lighten', 'Lighten'], ['difference', 'Difference']].map(([value, label]) => (
@@ -443,11 +443,11 @@ function TextPropertiesPanel({ layer }) {
 
       <Section title="Shadow" open>
         <ColorField label="Shadow color" value={layer.shadowColor} onChange={(v) => updateText('shadowColor', v)} showHex={false} />
-        <div className="mt-3 grid grid-cols-2 gap-2">
+        <FormGrid className="mt-3" gap={2}>
           <Field label="Blur" value={layer.shadowBlur} onChange={(v) => updateText('shadowBlur', v)} min={0} max={100} suffix="px" />
           <Field label="X offset" value={layer.shadowX} onChange={(v) => updateText('shadowX', v)} min={-100} max={100} suffix="px" />
           <Field label="Y offset" value={layer.shadowY} onChange={(v) => updateText('shadowY', v)} min={-100} max={100} suffix="px" />
-        </div>
+        </FormGrid>
       </Section>
     </>
   )

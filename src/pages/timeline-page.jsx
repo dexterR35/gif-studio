@@ -1,5 +1,6 @@
-import { Lock, Plus, Trash2, Type } from 'lucide-react'
+import { Lock, Trash2 } from 'lucide-react'
 import { Button, DualRange, Hint, Section, SelectField, Slider } from '../components/ui'
+import { TimelineAddChips } from '../components/studio/timeline-add-chips'
 import {
   ANIMATE_MODES,
   BASE_MOTION_ID,
@@ -15,7 +16,20 @@ import {
 } from '../lib/motion-effects'
 import { MAX_TEXT_LAYERS } from '../lib/presets'
 import { useStudio } from '../context/studio-provider'
+import { useStudioStore } from '../store/studio-store'
+import { KeyframeTimeline, createKeyframe } from '../timeline/keyframe-timeline'
 import { cn } from '../lib/cn'
+
+function LockedTrackRow({ color, lane, title }) {
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-white/[.06] bg-white/[.02] px-2.5 py-2 text-[11px] text-zinc-300">
+      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
+      {lane && <span className="w-6 shrink-0 font-mono text-[9px] text-zinc-600">{lane}</span>}
+      <span className="min-w-0 flex-1 truncate font-semibold">{title}</span>
+      <Lock className="h-3 w-3 shrink-0 text-zinc-600" />
+    </div>
+  )
+}
 
 export default function TimelinePage() {
   const {
@@ -24,14 +38,17 @@ export default function TimelinePage() {
     selectedMotionEffect, setSelectedMotionEffect,
     addMotionEffect, updateMotionEffect, removeMotionEffect,
     addTextLayer, updateTextById, removeText, setSelectedText,
-    goToWorkspace,
+    goToWorkspace, progress, setProgress, setPlaying, draw, actualDuration,
   } = useStudio()
+
+  const keyframes = useStudioStore((s) => s.project.keyframes)
+  const setKeyframes = useStudioStore((s) => s.setKeyframes)
+  const selectedKeyframe = useStudioStore((s) => s.project._selectedKeyframeId)
+  const patchProject = useStudioStore((s) => s.patchProject)
 
   const clips = settings.motionEffects || []
   const baseClip = getBaseMotionClip(settings)
   const duration = Math.max(0.1, settings.duration || 1)
-  const atCap = clips.length >= MAX_MOTION_EFFECTS
-  const textAtCap = textLayers.length >= MAX_TEXT_LAYERS
   const baseSelected = isBaseMotionClip(selectedMotionEffect)
   const layerRef = parseLayerTrackId(selectedMotionEffect)
   const selectedTextLayer = layerRef?.kind === 'text'
@@ -68,35 +85,51 @@ export default function TimelinePage() {
   return (
     <>
       <Section
+        title="Keyframes"
+        info="Property keyframes for opacity, scale, and position. Double-click a track to add."
+        open
+      >
+        <KeyframeTimeline
+          duration={settings.duration}
+          keyframes={keyframes || []}
+          playhead={(progress || 0) * Math.max(0.1, settings.duration || 1)}
+          selectedId={selectedKeyframe || null}
+          onSelect={(id) => patchProject({ _selectedKeyframeId: id })}
+          onChange={setKeyframes}
+          onScrub={(t) => {
+            setPlaying(false)
+            setProgress(t, { force: true })
+            draw(t)
+          }}
+          onAdd={(track, time) => {
+            const defaults = { opacity: 100, scale: 100, x: 0, y: 0 }
+            setKeyframes([
+              ...(keyframes || []),
+              createKeyframe({
+                time,
+                prop: track.prop,
+                value: defaults[track.prop] ?? 100,
+              }),
+            ])
+          }}
+        />
+        <p className="mt-2 text-[10px] text-zinc-600">
+          Duration {Number(actualDuration || settings.duration).toFixed(2)}s ·{' '}
+          {Math.max(2, Math.round((settings.duration || 1) * (settings.fps || 24)))} frames @ {settings.fps} fps
+        </p>
+      </Section>
+
+      <Section
         title="Timeline"
         info="Timed effects and text tracks live here. Base motion and image layers stay locked mirrors from Motion."
         open
       >
-        <div className="gs-chip-row">
-          <button
-            type="button"
-            className="gs-chip"
-            disabled={textAtCap}
-            title={textAtCap ? `Maximum ${MAX_TEXT_LAYERS} text layers` : 'Add text track'}
-            onClick={addText}
-          >
-            <Type className="h-3 w-3" />
-            Text
-          </button>
-          {MOTION_EFFECT_TYPES.map((type) => (
-            <button
-              key={type}
-              type="button"
-              className="gs-chip"
-              disabled={atCap}
-              title={atCap ? `Maximum ${MAX_MOTION_EFFECTS} effects` : `Add ${type}`}
-              onClick={() => addClip(type)}
-            >
-              <Plus className="h-3 w-3" />
-              {type}
-            </button>
-          ))}
-        </div>
+        <TimelineAddChips
+          textCount={textLayers.length}
+          effectCount={clips.length}
+          onAddText={addText}
+          onAddEffect={addClip}
+        />
         <p className="mt-2 font-mono text-[10px] text-zinc-500">
           {textLayers.length}/{MAX_TEXT_LAYERS} text · {clips.length}/{MAX_MOTION_EFFECTS} effects
         </p>
@@ -104,12 +137,7 @@ export default function TimelinePage() {
 
       {baseSelected && (
         <Section title="Base motion" open>
-          <div className="flex items-center gap-2 rounded-lg border border-white/[.06] bg-white/[.02] px-2.5 py-2 text-[11px] text-zinc-300">
-            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: MOTION_EFFECT_COLORS.Base }} />
-            <span className="w-6 shrink-0 font-mono text-[9px] text-zinc-600">M</span>
-            <span className="min-w-0 flex-1 truncate font-semibold">{baseClip.type}</span>
-            <Lock className="h-3 w-3 shrink-0 text-zinc-600" />
-          </div>
+          <LockedTrackRow color={MOTION_EFFECT_COLORS.Base} lane="M" title={baseClip.type} />
           <Hint className="mt-3">
             Locked lane updated from the Motion tab (preset, amount, speed, duration). Image transform settings are unavailable while editing the timeline.
           </Hint>
@@ -181,11 +209,7 @@ export default function TimelinePage() {
 
       {lockedLayerInfo && (
         <Section title="Layer track" open>
-          <div className="flex items-center gap-2 rounded-lg border border-white/[.06] bg-white/[.02] px-2.5 py-2 text-[11px] text-zinc-300">
-            <Lock className="h-3 w-3 shrink-0 text-zinc-600" />
-            <span className="min-w-0 flex-1 truncate font-semibold">{lockedLayerInfo.name}</span>
-            <span className="shrink-0 font-mono text-[9px] text-zinc-600">{lockedLayerInfo.kind}</span>
-          </div>
+          <LockedTrackRow color="#94a3b8" title={`${lockedLayerInfo.name} · ${lockedLayerInfo.kind}`} />
           <p className="mt-2 text-[11px] text-zinc-500">
             Motion: <b className="text-zinc-300">{lockedLayerInfo.motion}</b>
             {lockedLayerInfo.kind === 'Element' && (

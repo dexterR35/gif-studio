@@ -1,5 +1,5 @@
 import { Outlet } from 'react-router-dom'
-import { FileImage, FolderOpen, X } from 'lucide-react'
+import { FileImage, FolderOpen, ImagePlus, X } from 'lucide-react'
 import { useStudio } from '../context/studio-provider'
 import { cn } from '../lib/cn'
 
@@ -10,8 +10,25 @@ export function ProjectAside() {
   } = useStudio()
 
   const canReplace = activeTab === 'motion'
+  const hasSource = Boolean(source?.url)
 
-  const preview = (
+  const empty = (
+    <>
+      <div className="relative mb-2 flex aspect-[1.55] flex-col items-center justify-center gap-2 overflow-hidden rounded-[10px] bg-surface">
+        <ImagePlus className="h-7 w-7 text-zinc-600" />
+        <span className="text-[11px] font-medium text-zinc-500">Drop or open a source</span>
+      </div>
+      <div className="flex items-start gap-2">
+        <FileImage className="mt-0.5 h-3.5 w-3.5 shrink-0 text-zinc-600" />
+        <div className="min-w-0">
+          <p className="truncate text-[12px] font-medium text-zinc-400">No image selected</p>
+          <p className="mt-0.5 text-[10px] text-zinc-600">PNG, JPG, or GIF</p>
+        </div>
+      </div>
+    </>
+  )
+
+  const preview = hasSource ? (
     <>
       <div className="relative mb-2 aspect-[1.55] overflow-hidden rounded-[10px] bg-surface checker">
         <img src={source.url} alt="Source" className="h-full w-full object-contain" />
@@ -27,11 +44,14 @@ export function ProjectAside() {
         <FileImage className="mt-0.5 h-3.5 w-3.5 shrink-0 text-acid" />
         <div className="min-w-0">
           <p className="truncate text-[12px] font-medium text-zinc-200">{source.name}</p>
-          <p className="mt-0.5 text-[10px] text-zinc-600">{source.width} × {source.height} px</p>
+          <p className="mt-0.5 text-[10px] text-zinc-600">
+            {source.width} × {source.height} px
+            {source.frameCount > 1 ? ` · ${source.frameCount} frames` : ''}
+          </p>
         </div>
       </div>
     </>
-  )
+  ) : empty
 
   return (
     <aside
@@ -68,7 +88,7 @@ export function ProjectAside() {
           ref={fileRef}
           className="hidden"
           type="file"
-          accept="image/png,image/jpeg,.png,.jpg,.jpeg"
+          accept="image/png,image/jpeg,image/gif,video/mp4,video/webm,.png,.jpg,.jpeg,.gif,.mp4,.webm"
           onChange={(e) => loadFile(e.target.files[0])}
         />
       </div>

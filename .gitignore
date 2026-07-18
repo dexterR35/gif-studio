@@ -10,3 +10,15 @@ node_modules/
 *.gif.json
 .DS_Store
 Thumbs.db
+
+# AI weights & cloned upstream (setup via scripts/setup_ai_models.py)
+models/**
+!models/.gitkeep
+!models/README.md
+third_party/**
+!third_party/.gitkeep
+!third_party/README.md
+*.pth
+*.pt
+*.pkl
+*.part

@@ -11,6 +11,8 @@ import {
   PenTool,
   RotateCcw,
   RotateCw,
+  Sparkles,
+  User,
 } from 'lucide-react'
 import { useStudio } from '../context/studio-provider'
 import { cn } from '../lib/cn'
@@ -57,6 +59,7 @@ export function ToolsRail() {
     selectedElement, setToast, setBaseImageSelected,
     toggleFlip, rotateSelection, selectionFlip,
     baseImageSelected, censorSelecting, setCensorSelecting,
+    runSam2Segment, runHumanSegment,
   } = useStudio()
 
   const activeId = censorSelecting
@@ -142,6 +145,31 @@ export function ToolsRail() {
           onClick={() => activateSelection(tool.id)}
         />
       ))}
+
+      <div className="my-1.5 h-px w-6 bg-white/[.08]" />
+
+      <ToolButton
+        label="SAM2 segment"
+        hint="AI object cutout (center point) → new layer"
+        icon={Sparkles}
+        disabled={segmenting}
+        onClick={() => {
+          activateMove()
+          setPlaying(false)
+          runSam2Segment()
+        }}
+      />
+      <ToolButton
+        label="Human segment"
+        hint="MediaPipe selfie segment → new layer"
+        icon={User}
+        disabled={segmenting}
+        onClick={() => {
+          activateMove()
+          setPlaying(false)
+          runHumanSegment()
+        }}
+      />
 
       <div className="my-1.5 h-px w-6 bg-white/[.08]" />
 

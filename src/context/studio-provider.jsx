@@ -1,12 +1,19 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { GIFEncoder, applyPalette, quantize } from 'gifenc'
-import { PRESETS, INITIAL, TEXT_DEFAULT, SYSTEM_FONTS, EFFECT_DEFAULTS, transformsFromAmount, MAX_TEXT_LAYERS, clampTextInOut } from '../lib/presets'
+import { PRESETS, TEXT_DEFAULT, EFFECT_DEFAULTS, transformsFromAmount, MAX_TEXT_LAYERS, clampTextInOut } from '../lib/presets'
+import { createEmptyProject, IMAGE_EDITS_DEFAULT, CENSOR_DEFAULT, PARALLAX_DEFAULT } from '../lib/project-document'
+import { QUALITY_PROFILE_MAP, HEALTH_TIMEOUT_MS } from '../lib/catalogs'
 import { clamp, clampNice, fmtBytes, ease, MAX_CANVAS, MAX_UPLOAD_DIMENSION, nice, uploadImageError } from '../lib/format'
 import { applyPixelEffects, applyDistortion, ditherToPalette, presetFilter } from '../lib/effects'
 import { sampleDistortions, sampleZoomScale, clampMotionEffects, createMotionEffect, MAX_MOTION_EFFECTS, isBaseMotionClip, parseLayerTrackId } from '../lib/motion-effects'
 import { gifWorkspacePath, workspaceFromPath } from '../lib/routes'
 import { useCanvasZoom } from '../hooks/use-canvas-zoom'
+import { useStudioStore } from '../store/studio-store'
+import { sampleKeyframes } from '../lib/keyframes'
+import { loadOpenCV, isOpenCVReady } from '../engine/opencv-filters'
+import { playTimeline, stopTimeline } from '../engine/gsap-playback'
+import { POSE_RIG_DEFAULT, drawPoseSkeleton, samplePoseSway } from '../lib/pose'
 
 const StudioContext = createContext(null)
 
@@ -16,6 +23,22 @@ const FOCUS_WORKSPACES = new Set(['edit', 'timeline', 'output'])
 const revokeBlobUrl = (url) => {
   if (typeof url === 'string' && url.startsWith('blob:')) URL.revokeObjectURL(url)
 }
+
+const newStudioId = () => (
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `id-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+)
+
+const blobUrlFromCanvas = (canvas, type = 'image/png') => new Promise((resolve, reject) => {
+  canvas.toBlob((blob) => {
+    if (!blob) {
+      reject(new Error('Could not encode canvas to blob'))
+      return
+    }
+    resolve(URL.createObjectURL(blob))
+  }, type)
+})
 
 /** Array index 0 = back, last = front. direction: -1 back, +1 front, 'back', 'front'. */
 function moveInStack(list, id, direction) {
@@ -64,11 +87,11 @@ export function useStudio() {
 }
 
 export function StudioProvider({ children }) {
-  const apiErrorMessage = (detail, fallback) => {
-    if (!detail) return fallback
+  const apiErrorMessage = (detail, defaultMessage) => {
+    if (!detail) return defaultMessage
     if (typeof detail === 'string') return detail
     if (Array.isArray(detail)) return detail.map((item) => item.msg || item).join(', ')
-    return detail.message || fallback
+    return detail.message || defaultMessage
   }
 
 
@@ -78,19 +101,29 @@ export function StudioProvider({ children }) {
   const fontFileRef = useRef(null)
   const overlayFileRef = useRef(null)
   const compressGifRef = useRef(null)
-  const rafRef = useRef(null)
   const progressRef = useRef(0)
-  const [settings, setSettings] = useState(INITIAL)
+  const emptyProject = createEmptyProject()
+  const [settings, setSettings] = useState(emptyProject.settings)
   const [image, setImage] = useState(null)
-  const [source, setSource] = useState({ name: 'sample_source.png', width: 480, height: 300, url: '/sample_source.png' })
+  /** No bundled demo — user must open/drop a source (matches desktop). */
+  const [source, setSource] = useState(null)
   const [playing, setPlaying] = useState(false)
   const [progress, setProgressState] = useState(0)
+  const progressUiAt = useRef(0)
   /** Keep a sync ref so paused rAF / idle redraw never reads a stale closure. */
-  const setProgress = (value) => {
+  const setProgress = (value, { force = false } = {}) => {
     const next = typeof value === 'function' ? value(progressRef.current) : value
     progressRef.current = next
-    setProgressState(next)
+    // During play, throttle React updates — full tree re-render every GSAP tick freezes the UI.
+    const now = performance.now()
+    if (force || !playingRef.current || now - progressUiAt.current > 80) {
+      progressUiAt.current = now
+      setProgressState(next)
+    }
   }
+  const playingRef = useRef(false)
+  playingRef.current = playing
+
   const [exporting, setExporting] = useState(false)
   const [dropActive, setDropActive] = useState(false)
   const [mobilePanel, setMobilePanel] = useState(false)
@@ -124,8 +157,6 @@ export function StudioProvider({ children }) {
   const [selection, setSelection] = useState(null)
   const [selectionPoints, setSelectionPoints] = useState([])
   const selectionStart = useRef(null)
-  const textDrag = useRef(null)
-  const transformDrag = useRef(null)
   const anchorDrag = useRef(null)
   const [extractTolerance, setExtractTolerance] = useState(42)
   const [apiAvailable, setApiAvailable] = useState(false)
@@ -133,20 +164,37 @@ export function StudioProvider({ children }) {
   const [segmenting, setSegmenting] = useState(false)
   const [textLayers, setTextLayers] = useState([])
   const [selectedText, setSelectedText] = useState(null)
-  const [fontOptions, setFontOptions] = useState(SYSTEM_FONTS)
-  const [parallax, setParallax] = useState({ enabled: false, direction: 'Horizontal', strength: 6, speed: 1 })
+  const [fontOptions, setFontOptions] = useState(emptyProject.fontOptions)
+  const [parallax, setParallax] = useState(emptyProject.parallax)
   const [lastExport, setLastExport] = useState(null)
   const [maskEditing, setMaskEditing] = useState(false)
   const [maskBrush, setMaskBrush] = useState({ mode: 'Hide', size: 48, hardness: 70, opacity: 100, feather: 8 })
   const maskPainting = useRef(false)
-  const [imageEdits, setImageEdits] = useState({ rotation: 0, flipX: false, flipY: false, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 })
-  const [censor, setCensor] = useState({ enabled: false, x: 25, y: 25, w: 30, h: 20, pixelSize: 14 })
+  const [imageEdits, setImageEdits] = useState(emptyProject.imageEdits)
+  const [censor, setCensor] = useState(emptyProject.censor)
   const [censorSelecting, setCensorSelecting] = useState(false)
   const [overlays, setOverlays] = useState([])
   const [selectedOverlay, setSelectedOverlay] = useState(null)
   const [effectTarget, setEffectTarget] = useState('Entire GIF')
-  const [gifEffects, setGifEffects] = useState(EFFECT_DEFAULTS)
+  const [gifEffects, setGifEffects] = useState(emptyProject.gifEffects)
   const [selectedMotionEffect, setSelectedMotionEffect] = useState(null)
+  const pixiCanvasRef = useRef(null)
+  const gifFramesRef = useRef(null)
+  const loadGenerationRef = useRef(0)
+  const sourceUrlRef = useRef(null)
+  // Pixi overlay is optional — off by default (was freezing play / motion edits).
+  const [gpuPreview, setGpuPreview] = useState(false)
+  const drawRef = useRef(null)
+  const [poseRig, setPoseRig] = useState({ ...POSE_RIG_DEFAULT })
+
+  /** Replace source; revoke previous owned blob URL (never revoke in image-load effect). */
+  const replaceSource = (next) => {
+    const prevUrl = sourceUrlRef.current
+    const nextUrl = next?.url ?? null
+    sourceUrlRef.current = nextUrl
+    setSource(next)
+    if (prevUrl && prevUrl !== nextUrl) revokeBlobUrl(prevUrl)
+  }
 
   const update = (key, value) => {
     const nextValue = typeof value === 'number' ? nice(value, Number.isInteger(value) ? 0 : 1) : value
@@ -242,10 +290,9 @@ export function StudioProvider({ children }) {
     cycles: speed,
   }))
   const applyQuality = (quality) => setSettings((current) => ({
-    ...current, quality,
-    ...(quality === 'Low / small' ? { palette: 64, dither: false, lossy: 80, compressionMethod: 'Lossy LZW' } : {}),
-    ...(quality === 'Balanced' ? { palette: 128, dither: true, lossy: 30, compressionMethod: 'Lossy LZW' } : {}),
-    ...(quality === 'High quality' ? { palette: 256, dither: true, lossy: 0, compressionMethod: 'Lossless' } : {}),
+    ...current,
+    quality,
+    ...(QUALITY_PROFILE_MAP[quality] || {}),
   }))
   const frames = Math.max(2, Math.round(settings.duration * settings.fps))
   const timingFps = settings.fps
@@ -259,28 +306,119 @@ export function StudioProvider({ children }) {
   const memory = settings.width * settings.height * 4 * frames
 
   useEffect(() => {
+    if (!source?.url) {
+      setImage(null)
+      return undefined
+    }
+    let cancelled = false
     const img = new Image()
     img.onload = () => {
+      if (cancelled) return
       setImage(img)
       const width = clamp(img.naturalWidth, 1, MAX_CANVAS)
       const height = clamp(img.naturalHeight, 1, MAX_CANVAS)
-      setSource((current) => ({
+      setSource((current) => (current ? {
         ...current,
         width: img.naturalWidth,
         height: img.naturalHeight,
-      }))
+      } : current))
       // New source → canvas starts at original image size (safety-capped).
       setSettings((current) => ({ ...current, width, height }))
     }
+    img.onerror = () => {
+      if (cancelled) return
+      setImage(null)
+      setToast('Could not load image source.')
+    }
     img.src = source.url
-    return () => { if (source.url.startsWith('blob:')) URL.revokeObjectURL(source.url) }
-  }, [source.url])
+    // Do NOT revoke blob URLs here — Strict Mode remount would break the load.
+    return () => { cancelled = true }
+  }, [source?.url])
 
   useEffect(() => {
-    fetch('/api/health', { signal: AbortSignal.timeout(1800) })
-      .then(async (response) => { if (response.ok) { setApiAvailable(true); setApiInfo(await response.json()) } })
-      .catch(() => setApiAvailable(false))
+    // OpenCV.js is ~15MB WASM — do not load on startup (freezes play).
+    // Load lazily when Edit tab opens.
+    if (activeTab !== 'edit') return undefined
+    let cancelled = false
+    loadOpenCV()
+      .then(() => {
+        if (!cancelled && isOpenCVReady()) {
+          useStudioStore.getState().setCapabilities({ opencv: true })
+        }
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [activeTab])
+
+  useEffect(() => {
+    let cancelled = false
+    const probe = async () => {
+      try {
+        const response = await fetch('/api/health', { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) })
+        if (cancelled) return
+        if (response.ok) {
+          setApiAvailable(true)
+          setApiInfo(await response.json())
+          return
+        }
+      } catch { /* retry once — API often starts after Vite */ }
+      await new Promise((r) => setTimeout(r, 800))
+      if (cancelled) return
+      try {
+        const response = await fetch('/api/health', { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) })
+        if (cancelled) return
+        if (response.ok) {
+          setApiAvailable(true)
+          setApiInfo(await response.json())
+          return
+        }
+      } catch { /* offline */ }
+      if (!cancelled) setApiAvailable(false)
+    }
+    probe()
+    return () => { cancelled = true }
   }, [])
+
+  /** API-derived capability flags only — never wipe client-discovered opencv/ffmpeg/pixi/mediapipe. */
+  useEffect(() => {
+    useStudioStore.getState().setCapabilities({
+      api: apiAvailable,
+      sam2: Boolean(apiInfo?.sam2),
+      groundingDino: Boolean(apiInfo?.grounding_dino),
+      realesrgan: Boolean(apiInfo?.realesrgan),
+      rife: Boolean(apiInfo?.rife),
+      rembg: Boolean(apiInfo?.rembg || apiInfo?.ai),
+    })
+  }, [apiAvailable, apiInfo])
+
+  /** Keep Zustand project document in sync (no hardcoded demo data). */
+  useEffect(() => {
+    useStudioStore.getState().setSource(source)
+  }, [source])
+  useEffect(() => {
+    useStudioStore.getState().setSettings(settings)
+  }, [settings])
+  useEffect(() => {
+    useStudioStore.getState().setElements(elements)
+  }, [elements])
+  useEffect(() => {
+    useStudioStore.getState().setOverlays(overlays)
+  }, [overlays])
+  useEffect(() => {
+    useStudioStore.getState().setTextLayers(textLayers)
+  }, [textLayers])
+  useEffect(() => {
+    useStudioStore.getState().setGifEffects(gifEffects)
+  }, [gifEffects])
+  useEffect(() => {
+    useStudioStore.getState().setImageEdits(imageEdits)
+  }, [imageEdits])
+  useEffect(() => {
+    useStudioStore.getState().setCensor(censor)
+  }, [censor])
+  useEffect(() => {
+    useStudioStore.getState().setParallax(parallax)
+  }, [parallax])
 
   const draw = useCallback((rawT, target = canvasRef.current, exportScale = 1) => {
     if (!target || !image) return
@@ -319,8 +457,35 @@ export function StudioProvider({ children }) {
       if (motion === 'Wobble') rotation += Math.sin(phase) * amp
       if (motion === 'Orbit') { x += Math.cos(phase) * amp; y += Math.sin(phase) * amp }
     }
-    const opacity = (settings.opacityStart + (settings.opacityEnd - settings.opacityStart) * t) / 100
-    const iw = image.naturalWidth, ih = image.naturalHeight
+    let opacity = (settings.opacityStart + (settings.opacityEnd - settings.opacityStart) * t) / 100
+    // Custom keyframe timeline (Zustand) overrides base motion channels.
+    const keyframes = useStudioStore.getState().project.keyframes || []
+    if (keyframes.length) {
+      const kfScale = sampleKeyframes(keyframes, timeSec, 'scale')
+      const kfX = sampleKeyframes(keyframes, timeSec, 'x')
+      const kfY = sampleKeyframes(keyframes, timeSec, 'y')
+      const kfOpacity = sampleKeyframes(keyframes, timeSec, 'opacity')
+      if (kfScale != null) scale *= Number(kfScale) / 100
+      if (kfX != null) x = Number(kfX)
+      if (kfY != null) y = Number(kfY)
+      if (kfOpacity != null) opacity = Number(kfOpacity) / 100
+    }
+    // Multi-frame GIF (gifuct): sample source frame by timeline progress.
+    let drawSource = image
+    const gifPack = gifFramesRef.current
+    if (gifPack?.frames?.length > 1) {
+      const totalDelay = gifPack.frames.reduce((sum, f) => sum + (f.delay || 100), 0) || 1
+      let elapsed = (rawT % 1) * totalDelay
+      let frameIdx = 0
+      for (let i = 0; i < gifPack.frames.length; i += 1) {
+        elapsed -= gifPack.frames[i].delay || 100
+        if (elapsed <= 0) { frameIdx = i; break }
+        frameIdx = i
+      }
+      drawSource = gifPack.frames[frameIdx].canvas || image
+    }
+    const iw = drawSource.naturalWidth || drawSource.width
+    const ih = drawSource.naturalHeight || drawSource.height
     const contain = Math.min(W / iw, H / ih), cover = Math.max(W / iw, H / ih)
     const fitMode = settings.fit
     // Match Python engine._base_size: Contain/Cover scale to canvas; Original size = 1:1 source pixels.
@@ -349,7 +514,7 @@ export function StudioProvider({ children }) {
     ctx.translate(-originX, -originY)
     ctx.filter = `brightness(${imageEdits.brightness}%) contrast(${imageEdits.contrast}%) saturate(${imageEdits.saturation}%) blur(${imageEdits.blur}px) hue-rotate(${imageEdits.hue}deg) grayscale(${imageEdits.grayscale}%) sepia(${imageEdits.sepia}%)`
     ctx.globalAlpha = opacity
-    ctx.drawImage(image, 0, 0, iw, ih, 0, 0, baseDw, baseDh)
+    ctx.drawImage(drawSource, 0, 0, iw, ih, 0, 0, baseDw, baseDh)
     ctx.restore()
 
     if (censor.enabled) {
@@ -401,12 +566,39 @@ export function StudioProvider({ children }) {
         const amplitudeX = el.amplitude / 100 * W
         const amplitudeY = el.amplitude / 100 * H
         let tx = 0, ty = 0, elementRotation = 0, elementScale = 1
+        let anchorXPct = el.anchorX ?? 50
+        let anchorYPct = el.anchorY ?? 50
         if (el.motion === 'Float') ty = -Math.sin(phase) * amplitudeY
         if (el.motion === 'Drift') tx = Math.sin(phase) * amplitudeX
         if (el.motion === 'Bounce') ty = -Math.abs(Math.sin(phase)) * amplitudeY
         if (el.motion === 'Pulse') elementScale = 1 + Math.sin(phase) * el.amplitude / 100
         if (el.motion === 'Spin') elementRotation = phase
         if (el.motion === 'Wobble') elementRotation = Math.sin(phase) * el.amplitude * Math.PI / 180
+        if (el.motion === 'Orbit') {
+          tx = Math.cos(phase) * amplitudeX
+          ty = Math.sin(phase) * amplitudeY
+        }
+        if (el.motion === 'Pose sway' && (el.poseJoints?.length || poseRig.joints?.length)) {
+          const joints = el.poseJoints?.length ? el.poseJoints : poseRig.joints
+          const sway = samplePoseSway(joints, {
+            phase,
+            amplitude: el.amplitude,
+            boxX: el.x * W,
+            boxY: el.y * H,
+            boxW: el.w * W,
+            boxH: el.h * H,
+            canvasW: W,
+            canvasH: H,
+          })
+          tx += sway.tx
+          ty += sway.ty
+          elementRotation += sway.rotationRad
+          elementScale *= sway.scale
+          if (poseRig.driveMotion !== false) {
+            anchorXPct = sway.anchorX
+            anchorYPct = sway.anchorY
+          }
+        }
         if (parallax.enabled) {
           const parallaxPhase = rawT * Math.PI * 2 * parallax.speed
           const depth = (el.depth ?? 50) / 100
@@ -418,8 +610,8 @@ export function StudioProvider({ children }) {
           if (parallax.direction === 'Orbit') { tx += Math.cos(parallaxPhase) * distanceX; ty += Math.sin(parallaxPhase) * distanceY }
         }
         const x = el.x * W, y = el.y * H, w = el.w * W, h = el.h * H
-        const originX = ((el.anchorX ?? 50) / 100) * w
-        const originY = ((el.anchorY ?? 50) / 100) * h
+        const originX = (anchorXPct / 100) * w
+        const originY = (anchorYPct / 100) * h
         const sx = elementScale * el.scaleX / 100 * (el.flipX ? -1 : 1)
         const sy = elementScale * el.scaleY / 100 * (el.flipY ? -1 : 1)
         ctx.save()
@@ -517,6 +709,17 @@ export function StudioProvider({ children }) {
       ctx.restore()
     })
 
+    // Body joints overlay (MediaPipe Pose) — drawn above layers, below GIF color FX.
+    if (poseRig.visible && poseRig.joints?.length) {
+      drawPoseSkeleton(ctx, poseRig.joints, {
+        width: W,
+        height: H,
+        color: '#d8ff3e',
+        lineWidth: Math.max(1.5, Math.min(W, H) * 0.004),
+        jointRadius: Math.max(2.5, Math.min(W, H) * 0.008),
+      })
+    }
+
     if (Object.keys(EFFECT_DEFAULTS).some((key) => gifEffects[key] !== EFFECT_DEFAULTS[key])) {
       const copy = document.createElement('canvas'); copy.width = W; copy.height = H; copy.getContext('2d').drawImage(target, 0, 0)
       ctx.clearRect(0, 0, W, H)
@@ -549,11 +752,29 @@ export function StudioProvider({ children }) {
         phase: distort.phase || 0,
       })
     }
-  }, [image, settings, elements, textLayers, parallax, imageEdits, censor, overlays, gifEffects])
+  }, [image, settings, elements, textLayers, parallax, imageEdits, censor, overlays, gifEffects, poseRig])
 
+  drawRef.current = draw
+
+  // Idle preview — redraw when settings/layers change (not while playing).
   useEffect(() => {
-    if (!image) return
+    if (!image || playing) return undefined
     const canvas = canvasRef.current
+    if (!canvas) return undefined
+    const maxW = 1000, maxH = 650
+    const ratio = Math.min(maxW / settings.width, maxH / settings.height, 1)
+    canvas.width = Math.max(1, Math.round(settings.width * ratio))
+    canvas.height = Math.max(1, Math.round(settings.height * ratio))
+    const frameIndex = Math.min(frames - 1, Math.floor(progressRef.current * frames))
+    draw(frameIndex / frames)
+    return undefined
+  }, [draw, image, playing, settings.width, settings.height, frames])
+
+  // Playback loop — do NOT depend on `draw`, or every motion slider restart freezes the app.
+  useEffect(() => {
+    if (!image || !playing) return undefined
+    const canvas = canvasRef.current
+    if (!canvas) return undefined
     const maxW = 1000, maxH = 650
     const ratio = Math.min(maxW / settings.width, maxH / settings.height, 1)
     canvas.width = Math.max(1, Math.round(settings.width * ratio))
@@ -564,36 +785,67 @@ export function StudioProvider({ children }) {
       return frameIndex / frames
     }
 
-    // Idle: draw once from the live progress ref (scrubbers update ref + call draw).
-    if (!playing) {
-      draw(frameFromProgress(progressRef.current))
-      return undefined
+    let cancelled = false
+    let pixiReady = false
+    let blit = null
+    let blitFails = 0
+    const bootPixi = async () => {
+      if (!gpuPreview || !pixiCanvasRef.current) return null
+      try {
+        const { createPixiRenderer, resizePixiRenderer, blitCanvasToPixi } = await import('../engine/pixi-renderer')
+        if (cancelled) return null
+        await createPixiRenderer({
+          width: canvas.width,
+          height: canvas.height,
+          canvas: pixiCanvasRef.current,
+        })
+        if (cancelled) return null
+        resizePixiRenderer(canvas.width, canvas.height)
+        pixiReady = true
+        useStudioStore.getState().setCapabilities({ pixi: true })
+        return blitCanvasToPixi
+      } catch {
+        return null
+      }
     }
-
-    let started = performance.now() - progressRef.current * actualDuration * 1000
-    const tick = (now) => {
-      const timeline = ((now - started) / (actualDuration * 1000)) % 1
-      const t = frameFromProgress(timeline)
-      setProgress(t)
-      draw(t)
-      rafRef.current = requestAnimationFrame(tick)
+    if (gpuPreview) bootPixi().then((fn) => { if (!cancelled) blit = fn })
+    playTimeline({
+      duration: actualDuration,
+      from: progressRef.current,
+      onUpdate: (t) => {
+        const frameT = frameFromProgress(t)
+        setProgress(frameT)
+        drawRef.current?.(frameT)
+        if (pixiReady && blit) {
+          const ok = blit(canvas)
+          if (!ok) {
+            blitFails += 1
+            if (blitFails >= 3) {
+              pixiReady = false
+              blit = null
+            }
+          } else blitFails = 0
+        }
+      },
+    })
+    return () => {
+      cancelled = true
+      stopTimeline()
+      if (gpuPreview) {
+        import('../engine/pixi-renderer').then(({ destroyPixiRenderer }) => destroyPixiRenderer())
+      }
     }
-    rafRef.current = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(rafRef.current)
-  }, [draw, image, playing, settings.width, settings.height, actualDuration, frames])
+  }, [image, playing, settings.width, settings.height, actualDuration, frames, gpuPreview])
 
-  const loadFile = (file) => {
+  const loadFile = async (file) => {
     if (!file) return
     const blocked = uploadImageError(file)
     if (blocked) { setToast(blocked); return }
-    const url = URL.createObjectURL(file)
-    const probe = new Image()
-    probe.onload = () => {
-      if (Math.max(probe.naturalWidth, probe.naturalHeight) > MAX_UPLOAD_DIMENSION) {
-        URL.revokeObjectURL(url)
-        setToast(`Image dimensions must be at most ${MAX_UPLOAD_DIMENSION}×${MAX_UPLOAD_DIMENSION} px (got ${probe.naturalWidth}×${probe.naturalHeight}).`)
-        return
-      }
+
+    const generation = ++loadGenerationRef.current
+    const isStale = () => generation !== loadGenerationRef.current
+
+    const resetLayers = () => {
       setElements([])
       setSelectedElements([])
       setBaseImageSelected(false)
@@ -608,20 +860,136 @@ export function StudioProvider({ children }) {
       setSelectedMotionEffect(null)
       setSettings((current) => ({ ...current, motionEffects: [] }))
       setGifEffects({ ...EFFECT_DEFAULTS })
-      setImageEdits({ rotation: 0, flipX: false, flipY: false, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 })
-      setCensor((current) => ({ ...current, enabled: false }))
-      setParallax((current) => ({ ...current, enabled: false }))
+      setImageEdits({ ...IMAGE_EDITS_DEFAULT })
+      setCensor({ ...CENSOR_DEFAULT })
+      setParallax({ ...PARALLAX_DEFAULT })
+      setPoseRig({ ...POSE_RIG_DEFAULT })
       setProgress(0)
       setPlaying(false)
+      useStudioStore.getState().setKeyframes([])
+    }
+
+    const isGif = /image\/gif|\.gif$/i.test(file.type || file.name || '')
+    if (isGif) {
+      try {
+        const { decodeGifFile } = await import('../engine/gif-decode')
+        const decoded = await decodeGifFile(file)
+        if (isStale()) return
+        const url = await decoded.firstFrameUrl()
+        if (isStale()) { revokeBlobUrl(url); return }
+        resetLayers()
+        gifFramesRef.current = decoded
+        const totalMs = decoded.frames.reduce((sum, f) => sum + (f.delay || 100), 0)
+        const avgDelay = totalMs / Math.max(1, decoded.frameCount)
+        setSettings((current) => ({
+          ...current,
+          duration: Math.max(0.1, +(totalMs / 1000).toFixed(2)),
+          fps: Math.max(1, Math.min(60, Math.round(1000 / avgDelay))),
+          width: Math.min(MAX_CANVAS, decoded.width),
+          height: Math.min(MAX_CANVAS, decoded.height),
+        }))
+        replaceSource({
+          name: file.name,
+          width: decoded.width,
+          height: decoded.height,
+          url,
+          frameCount: decoded.frameCount,
+          kind: 'gif',
+        })
+        setToast(`GIF imported · ${decoded.frameCount} frames · ${decoded.width} × ${decoded.height} px`)
+      } catch (err) {
+        if (!isStale()) setToast(err?.message || 'Could not decode GIF.')
+      }
+      return
+    }
+
+    const isVideo = /^video\//i.test(file.type || '') || /\.(mp4|webm|mov)$/i.test(file.name || '')
+    if (isVideo) {
+      try {
+        setToast('Extracting video frames with ffmpeg.wasm…')
+        const { extractFramesWithFFmpeg, loadFFmpeg } = await import('../engine/ffmpeg-export')
+        await loadFFmpeg()
+        if (isStale()) return
+        useStudioStore.getState().setCapabilities({ ffmpeg: true })
+        const blobs = await extractFramesWithFFmpeg(file, { fps: 12, maxFrames: 120 })
+        if (isStale()) return
+        if (!blobs.length) throw new Error('No frames extracted')
+        const firstUrl = URL.createObjectURL(blobs[0])
+        const probe = await new Promise((resolve, reject) => {
+          const img = new Image()
+          img.onload = () => resolve(img)
+          img.onerror = reject
+          img.src = firstUrl
+        })
+        if (isStale()) { revokeBlobUrl(firstUrl); return }
+        const frameCanvases = []
+        for (const blob of blobs) {
+          const url = URL.createObjectURL(blob)
+          const img = await new Promise((resolve, reject) => {
+            const el = new Image()
+            el.onload = () => resolve(el)
+            el.onerror = reject
+            el.src = url
+          })
+          const c = document.createElement('canvas')
+          c.width = img.naturalWidth
+          c.height = img.naturalHeight
+          c.getContext('2d').drawImage(img, 0, 0)
+          URL.revokeObjectURL(url)
+          frameCanvases.push({ canvas: c, delay: Math.round(1000 / 12) })
+        }
+        if (isStale()) { revokeBlobUrl(firstUrl); return }
+        resetLayers()
+        gifFramesRef.current = {
+          frames: frameCanvases,
+          frameCount: frameCanvases.length,
+          width: probe.naturalWidth,
+          height: probe.naturalHeight,
+        }
+        setSettings((current) => ({
+          ...current,
+          duration: Math.max(0.1, +(frameCanvases.length / 12).toFixed(2)),
+          fps: 12,
+          width: Math.min(MAX_CANVAS, probe.naturalWidth),
+          height: Math.min(MAX_CANVAS, probe.naturalHeight),
+        }))
+        replaceSource({
+          name: file.name,
+          width: probe.naturalWidth,
+          height: probe.naturalHeight,
+          url: firstUrl,
+          frameCount: frameCanvases.length,
+          kind: 'video',
+        })
+        setToast(`Video imported · ${frameCanvases.length} frames via ffmpeg.wasm`)
+      } catch (err) {
+        if (!isStale()) setToast(err?.message || 'Video import failed')
+      }
+      return
+    }
+
+    gifFramesRef.current = null
+    const url = URL.createObjectURL(file)
+    const probe = new Image()
+    probe.onload = () => {
+      if (isStale()) { revokeBlobUrl(url); return }
+      if (Math.max(probe.naturalWidth, probe.naturalHeight) > MAX_UPLOAD_DIMENSION) {
+        revokeBlobUrl(url)
+        setToast(`Image dimensions must be at most ${MAX_UPLOAD_DIMENSION}×${MAX_UPLOAD_DIMENSION} px (got ${probe.naturalWidth}×${probe.naturalHeight}).`)
+        return
+      }
+      resetLayers()
       // Canvas size is applied when the image loads (original size, capped at MAX_CANVAS).
-      setSource({ name: file.name, width: probe.naturalWidth, height: probe.naturalHeight, url })
+      replaceSource({ name: file.name, width: probe.naturalWidth, height: probe.naturalHeight, url, kind: 'image' })
       setToast(`Image loaded at ${probe.naturalWidth} × ${probe.naturalHeight} px`)
     }
-    probe.onerror = () => { URL.revokeObjectURL(url); setToast('Could not open image.') }
+    probe.onerror = () => { revokeBlobUrl(url); if (!isStale()) setToast('Could not open image.') }
     probe.src = url
   }
 
-  const sourceAspect = source.width > 0 && source.height > 0 ? source.width / source.height : settings.width / Math.max(1, settings.height)
+  const sourceAspect = source?.width > 0 && source?.height > 0
+    ? source.width / source.height
+    : settings.width / Math.max(1, settings.height)
 
   const setCanvasWidth = (width) => {
     const nextWidth = clamp(width, 1, MAX_CANVAS)
@@ -642,7 +1010,7 @@ export function StudioProvider({ children }) {
   }
 
   const useSourceSize = () => {
-    if (!source.width || !source.height) { setToast('Open an image first'); return }
+    if (!source?.width || !source?.height) { setToast('Open an image first'); return }
     if (source.width > MAX_CANVAS || source.height > MAX_CANVAS) {
       setToast(`Source exceeds ${MAX_CANVAS}px limit — enter a smaller canvas size`)
       return
@@ -658,7 +1026,8 @@ export function StudioProvider({ children }) {
     ...transformsFromAmount(name, PRESETS[name]?.amplitude ?? s.amplitude),
   }))
   const reset = () => {
-    setSettings(INITIAL)
+    const empty = createEmptyProject()
+    setSettings(empty.settings)
     setElements([])
     setSelectedElements([])
     setTextLayers([])
@@ -670,13 +1039,19 @@ export function StudioProvider({ children }) {
     })
     setSelectedOverlay(null)
     setSelectedMotionEffect(null)
-    setGifEffects({ ...EFFECT_DEFAULTS })
-    setImageEdits({ rotation: 0, flipX: false, flipY: false, brightness: 100, contrast: 100, saturation: 100, blur: 0, hue: 0, grayscale: 0, sepia: 0 })
-    setCensor({ enabled: false, x: 25, y: 25, w: 30, h: 20, pixelSize: 14 })
-    setParallax({ enabled: false, direction: 'Horizontal', strength: 6, speed: 1 })
+    setGifEffects(empty.gifEffects)
+    setImageEdits(empty.imageEdits)
+    setCensor(empty.censor)
+    setParallax(empty.parallax)
+    setFontOptions(empty.fontOptions)
     setProgress(0)
     setPlaying(false)
-    setToast('Settings reset')
+    replaceSource(null)
+    setImage(null)
+    gifFramesRef.current = null
+    setPoseRig({ ...POSE_RIG_DEFAULT })
+    useStudioStore.getState().resetProject()
+    setToast('Project cleared — open an image to start')
   }
 
   const pointerPosition = (event) => {
@@ -688,14 +1063,6 @@ export function StudioProvider({ children }) {
     const xs = points.map((point) => point.x), ys = points.map((point) => point.y)
     const x = Math.min(...xs), y = Math.min(...ys)
     return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y }
-  }
-
-  const smoothSelectionPath = (points) => {
-    if (points.length < 3) return ''
-    const first = points[0], last = points[points.length - 1]
-    let path = `M ${(last.x + first.x) * 50} ${(last.y + first.y) * 50}`
-    points.forEach((point, index) => { const next = points[(index + 1) % points.length]; path += ` Q ${point.x * 100} ${point.y * 100} ${(point.x + next.x) * 50} ${(point.y + next.y) * 50}` })
-    return `${path} Z`
   }
 
   const cancelSelection = () => { selectionStart.current = null; setSelection(null); setSelectionPoints([]); setSelectMode(false) }
@@ -811,7 +1178,7 @@ export function StudioProvider({ children }) {
       filled.data[i + 3] = data[i + 3]
     }
     cleanup.getContext('2d').putImageData(filled, 0, 0)
-    const id = Date.now()
+    const id = newStudioId()
     const element = { id, name: `Element ${elements.length + 1}`, ...rect, bitmap, sourceBitmap, maskCanvas, cleanup, effects: { ...EFFECT_DEFAULTS }, rotation: 0, scaleX: 100, scaleY: 100, flipX: false, flipY: false, opacity: 100, motion: 'Float', amplitude: 5, speed: 1, depth: Math.min(100, 30 + elements.length * 20), visible: true, locked: false, anchorX: 50, anchorY: 50 }
     setElements((current) => insertInStack(current, element, layerInsertAt, selectedElement))
     setSelectedElements([id]); goToWorkspace('motion')
@@ -844,18 +1211,369 @@ export function StudioProvider({ children }) {
       bitmap.getContext('2d').drawImage(cutout, 0, 0)
       const sourceBitmap = document.createElement('canvas'); sourceBitmap.width = bitmap.width; sourceBitmap.height = bitmap.height; sourceBitmap.getContext('2d').drawImage(bitmap, 0, 0)
       const maskCanvas = document.createElement('canvas'); maskCanvas.width = bitmap.width; maskCanvas.height = bitmap.height; const maskCtx = maskCanvas.getContext('2d'); maskCtx.fillStyle = '#fff'; maskCtx.fillRect(0, 0, bitmap.width, bitmap.height)
-      const id = Date.now()
+      const id = newStudioId()
       const smartRect = { x: result.rect.x / sourceCanvas.width, y: result.rect.y / sourceCanvas.height, w: result.rect.width / sourceCanvas.width, h: result.rect.height / sourceCanvas.height }
       const element = { id, name: `Element ${elements.length + 1}`, ...smartRect, bitmap, sourceBitmap, maskCanvas, cleanup: null, effects: { ...EFFECT_DEFAULTS }, rotation: 0, scaleX: 100, scaleY: 100, flipX: false, flipY: false, opacity: 100, motion: 'Float', amplitude: 5, speed: 1, depth: Math.min(100, 30 + elements.length * 20), visible: true, smart: true, locked: false, anchorX: 50, anchorY: 50 }
       setElements((current) => insertInStack(current, element, layerInsertAt, selectedElement))
       setSelectedElements([id]); goToWorkspace('motion')
       setSettings((current) => ({ ...current, preset: 'Still', fit: 'Contain', ...PRESETS.Still }))
-      setSource((current) => ({ ...current, width: sourceCanvas.width, height: sourceCanvas.height, url: result.background }))
+      replaceSource({
+        ...(source || {}),
+        width: sourceCanvas.width,
+        height: sourceCanvas.height,
+        url: result.background,
+      })
       setToast(`${result.engine.startsWith('rembg') ? 'AI' : 'GrabCut'} object ready · ${layerInsertAt === 'front' ? 'in front' : 'in back'}`)
     } catch (error) {
       console.warn(error); extractElementLocal(rect)
       setToast(`${error.message}. Used edge selection instead.`)
     } finally { setSegmenting(false) }
+  }
+
+  /** Build a movable layer from a full-canvas mask (SAM2 / MediaPipe / etc.). */
+  const addElementFromMask = (maskCanvas, { name = 'AI layer', engine = 'ai' } = {}) => {
+    const sourceCanvas = canvasRef.current
+    if (!sourceCanvas || !maskCanvas) return null
+    const W = sourceCanvas.width
+    const H = sourceCanvas.height
+    const mw = maskCanvas.width
+    const mh = maskCanvas.height
+    const maskCtx = maskCanvas.getContext('2d', { willReadFrequently: true })
+    const maskData = maskCtx.getImageData(0, 0, mw, mh).data
+    let minX = mw, minY = mh, maxX = 0, maxY = 0, found = false
+    for (let y = 0; y < mh; y += 1) {
+      for (let x = 0; x < mw; x += 1) {
+        const a = maskData[(y * mw + x) * 4]
+        if (a > 24) {
+          found = true
+          if (x < minX) minX = x
+          if (y < minY) minY = y
+          if (x > maxX) maxX = x
+          if (y > maxY) maxY = y
+        }
+      }
+    }
+    if (!found) {
+      setToast('Mask was empty — nothing to extract')
+      return null
+    }
+    const pad = 2
+    minX = Math.max(0, minX - pad)
+    minY = Math.max(0, minY - pad)
+    maxX = Math.min(mw - 1, maxX + pad)
+    maxY = Math.min(mh - 1, maxY + pad)
+    const sw = Math.max(2, maxX - minX + 1)
+    const sh = Math.max(2, maxY - minY + 1)
+    const scaleX = W / mw
+    const scaleY = H / mh
+    const sx = Math.round(minX * scaleX)
+    const sy = Math.round(minY * scaleY)
+    const cw = Math.max(2, Math.round(sw * scaleX))
+    const ch = Math.max(2, Math.round(sh * scaleY))
+
+    const bitmap = document.createElement('canvas')
+    bitmap.width = cw
+    bitmap.height = ch
+    const bctx = bitmap.getContext('2d')
+    bctx.drawImage(sourceCanvas, sx, sy, cw, ch, 0, 0, cw, ch)
+    const localMask = document.createElement('canvas')
+    localMask.width = cw
+    localMask.height = ch
+    localMask.getContext('2d').drawImage(maskCanvas, minX, minY, sw, sh, 0, 0, cw, ch)
+    bctx.globalCompositeOperation = 'destination-in'
+    bctx.drawImage(localMask, 0, 0)
+    bctx.globalCompositeOperation = 'source-over'
+
+    const sourceBitmap = document.createElement('canvas')
+    sourceBitmap.width = cw
+    sourceBitmap.height = ch
+    sourceBitmap.getContext('2d').drawImage(sourceCanvas, sx, sy, cw, ch, 0, 0, cw, ch)
+
+    const id = newStudioId()
+    const rect = { x: sx / W, y: sy / H, w: cw / W, h: ch / H }
+    const element = {
+      id,
+      name,
+      ...rect,
+      bitmap,
+      sourceBitmap,
+      maskCanvas: localMask,
+      cleanup: null,
+      effects: { ...EFFECT_DEFAULTS },
+      rotation: 0,
+      scaleX: 100,
+      scaleY: 100,
+      flipX: false,
+      flipY: false,
+      opacity: 100,
+      motion: 'Float',
+      amplitude: 5,
+      speed: 1,
+      depth: Math.min(100, 30 + elements.length * 20),
+      visible: true,
+      smart: true,
+      locked: false,
+      anchorX: 50,
+      anchorY: 50,
+      engine,
+    }
+    setElements((current) => insertInStack(current, element, layerInsertAt, selectedElement))
+    setSelectedElements([id])
+    goToWorkspace('motion')
+    setSettings((current) => ({ ...current, preset: 'Still', ...PRESETS.Still }))
+    setToast(`${name} ready · ${engine}`)
+    return id
+  }
+
+  const runSam2Segment = async (point = null) => {
+    const canvas = canvasRef.current
+    if (!canvas || !image) { setToast('Open an image first'); return }
+    setSegmenting(true)
+    try {
+      const { segmentWithSam2 } = await import('../ai/sam2')
+      const pt = point || { x: canvas.width / 2, y: canvas.height / 2 }
+      const result = await segmentWithSam2({ imageCanvas: canvas, point: pt })
+      let maskCanvas = null
+      if (result.mask_png_base64) {
+        maskCanvas = document.createElement('canvas')
+        const img = new Image()
+        await new Promise((resolve, reject) => {
+          img.onload = resolve
+          img.onerror = reject
+          img.src = `data:image/png;base64,${result.mask_png_base64}`
+        })
+        maskCanvas.width = img.naturalWidth
+        maskCanvas.height = img.naturalHeight
+        maskCanvas.getContext('2d').drawImage(img, 0, 0)
+      } else if (result.mask?.data) {
+        // ONNX tensor — best-effort rasterize
+        const tensor = result.mask
+        const [,,, mh, mw] = tensor.dims?.length === 4
+          ? [1, 1, tensor.dims[2], tensor.dims[3]]
+          : [1, 1, canvas.height, canvas.width]
+        const data = tensor.data
+        maskCanvas = document.createElement('canvas')
+        maskCanvas.width = mw || canvas.width
+        maskCanvas.height = mh || canvas.height
+        const idata = maskCanvas.getContext('2d').createImageData(maskCanvas.width, maskCanvas.height)
+        for (let i = 0; i < idata.width * idata.height; i += 1) {
+          const v = data[i] > 0 ? 255 : 0
+          idata.data[i * 4] = v
+          idata.data[i * 4 + 1] = v
+          idata.data[i * 4 + 2] = v
+          idata.data[i * 4 + 3] = 255
+        }
+        maskCanvas.getContext('2d').putImageData(idata, 0, 0)
+      }
+      if (!maskCanvas) throw new Error('No mask returned')
+      useStudioStore.getState().setCapabilities({ sam2: true })
+      addElementFromMask(maskCanvas, { name: 'SAM2 cutout', engine: result.engine || 'sam2' })
+    } catch (err) {
+      setToast(err?.message || 'SAM2 segment failed')
+    } finally {
+      setSegmenting(false)
+    }
+  }
+
+  const runHumanSegment = async () => {
+    const canvas = canvasRef.current
+    if (!canvas || !image) { setToast('Open an image first'); return }
+    setSegmenting(true)
+    try {
+      const { segmentHuman } = await import('../ai/mediapipe')
+      const { maskCanvas, engine } = await segmentHuman(canvas)
+      useStudioStore.getState().setCapabilities({ mediapipe: true })
+      addElementFromMask(maskCanvas, { name: 'Human', engine: engine || 'mediapipe' })
+    } catch (err) {
+      setToast(err?.message || 'MediaPipe segment failed')
+    } finally {
+      setSegmenting(false)
+    }
+  }
+
+  /** Auto-detect body, mark joints, cut out character, enable Pose sway motion. */
+  const runPoseDetect = async ({ segment = true, driveMotion = true } = {}) => {
+    const canvas = canvasRef.current
+    if (!canvas || !image) { setToast('Open an image first'); return }
+    setSegmenting(true)
+    try {
+      const { detectBodyAndJoints } = await import('../ai/mediapipe')
+      const result = await detectBodyAndJoints(canvas, { segment })
+      useStudioStore.getState().setCapabilities({ mediapipe: true })
+      setPoseRig({
+        joints: result.joints,
+        visible: true,
+        driveMotion,
+        score: result.score,
+        engine: result.engine,
+      })
+
+      let elementId = null
+      if (result.maskCanvas) {
+        elementId = addElementFromMask(result.maskCanvas, {
+          name: 'Body',
+          engine: result.engine || 'mediapipe-pose',
+        })
+      }
+
+      if (elementId != null) {
+        setElements((current) => current.map((el) => {
+          if (el.id !== elementId) return el
+          const sway = samplePoseSway(result.joints, {
+            phase: 0,
+            amplitude: el.amplitude ?? 8,
+            boxX: el.x * canvas.width,
+            boxY: el.y * canvas.height,
+            boxW: el.w * canvas.width,
+            boxH: el.h * canvas.height,
+            canvasW: canvas.width,
+            canvasH: canvas.height,
+          })
+          return {
+            ...el,
+            poseJoints: result.joints,
+            motion: 'Pose sway',
+            amplitude: Math.max(el.amplitude || 0, 8),
+            speed: Math.max(el.speed || 1, 0.85),
+            anchorX: sway.anchorX,
+            anchorY: sway.anchorY,
+          }
+        }))
+        goToWorkspace('motion')
+      }
+
+      const marked = result.joints.filter((j) => (j.score ?? 1) >= 0.25).length
+      setToast(
+        result.maskCanvas
+          ? `Body + ${marked} joints · Pose sway ready`
+          : `Pose · ${marked} joints marked (no cutout mask)`,
+      )
+    } catch (err) {
+      setToast(err?.message || 'Body / pose detect failed')
+    } finally {
+      setSegmenting(false)
+    }
+  }
+
+  const runTextDetect = async (prompt) => {
+    const canvas = canvasRef.current
+    if (!canvas || !image) { setToast('Open an image first'); return }
+    if (!prompt?.trim()) { setToast('Enter a text prompt'); return }
+    setSegmenting(true)
+    try {
+      const { detectWithGroundingDino } = await import('../ai/grounding-dino')
+      const result = await detectWithGroundingDino({ imageCanvas: canvas, prompt: prompt.trim() })
+      const boxes = result.boxes || []
+      if (!boxes.length) {
+        setToast(`Detect · ${result.engine || 'ok'} · no boxes`)
+        return
+      }
+      useStudioStore.getState().setCapabilities({ groundingDino: true })
+      const top = [...boxes].sort((a, b) => (b.score || 0) - (a.score || 0))[0]
+      const rect = {
+        x: top.x / canvas.width,
+        y: top.y / canvas.height,
+        w: top.w / canvas.width,
+        h: top.h / canvas.height,
+      }
+      await extractElement(rect)
+      setToast(`Detect · ${result.engine} · ${boxes.length} box${boxes.length === 1 ? '' : 'es'} · extracted top hit`)
+    } catch (err) {
+      setToast(err?.message || 'Text detect failed')
+    } finally {
+      setSegmenting(false)
+    }
+  }
+
+  /** Apply RIFE / interpolated PNG data-URLs or blobs as multi-frame source. */
+  const applyInterpolatedFrames = async (frameSources, { engine = 'rife', fps } = {}) => {
+    if (!Array.isArray(frameSources) || frameSources.length < 2) {
+      setToast('Need at least 2 interpolated frames')
+      return
+    }
+    const generation = ++loadGenerationRef.current
+    const frameCanvases = []
+    for (const src of frameSources) {
+      let url = src
+      if (src instanceof Blob) url = URL.createObjectURL(src)
+      const img = await new Promise((resolve, reject) => {
+        const el = new Image()
+        el.onload = () => resolve(el)
+        el.onerror = reject
+        el.src = url
+      })
+      const c = document.createElement('canvas')
+      c.width = img.naturalWidth
+      c.height = img.naturalHeight
+      c.getContext('2d').drawImage(img, 0, 0)
+      if (src instanceof Blob) URL.revokeObjectURL(url)
+      frameCanvases.push({
+        canvas: c,
+        delay: Math.round(1000 / Math.max(1, fps || settings.fps || 12)),
+      })
+    }
+    if (generation !== loadGenerationRef.current) return
+    const first = frameCanvases[0].canvas
+    const firstUrl = await blobUrlFromCanvas(first)
+    if (generation !== loadGenerationRef.current) { revokeBlobUrl(firstUrl); return }
+    gifFramesRef.current = {
+      frames: frameCanvases,
+      frameCount: frameCanvases.length,
+      width: first.width,
+      height: first.height,
+    }
+    const rate = fps || settings.fps || 12
+    setSettings((current) => ({
+      ...current,
+      duration: Math.max(0.1, +(frameCanvases.length / Math.max(1, rate)).toFixed(2)),
+      fps: rate,
+      width: Math.min(MAX_CANVAS, first.width),
+      height: Math.min(MAX_CANVAS, first.height),
+    }))
+    replaceSource({
+      name: `interpolated-${engine}.png`,
+      width: first.width,
+      height: first.height,
+      url: firstUrl,
+      frameCount: frameCanvases.length,
+      kind: 'gif',
+    })
+    setToast(`${engine} · ${frameCanvases.length} frames loaded`)
+  }
+
+  const runRifeInterpolate = async ({ factor = 2 } = {}) => {
+    const pack = gifFramesRef.current
+    const canvas = canvasRef.current
+    if (!image || !canvas) { setToast('Open an image or GIF first'); return }
+    if (!pack?.frames || pack.frames.length < 2) {
+      setToast('RIFE needs a multi-frame GIF or video — open one with at least 2 frames')
+      return
+    }
+    setSegmenting(true)
+    try {
+      const { interpolateFrames } = await import('../ai/rife')
+      const blobs = []
+      for (const frame of pack.frames) {
+        const blob = await new Promise((resolve, reject) => {
+          frame.canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Frame encode failed'))), 'image/png')
+        })
+        blobs.push(blob)
+      }
+      const out = await interpolateFrames(blobs, { factor })
+      if (out?.jobId && !(out.frames?.length)) {
+        setToast('RIFE job queued — async polling is not wired yet. Run without Celery for sync results.')
+        return
+      }
+      const frames = Array.isArray(out) ? out : (out.frames || [])
+      if (!frames.length) throw new Error('No frames returned')
+      const engine = (!Array.isArray(out) && out.engine) || 'rife'
+      useStudioStore.getState().setCapabilities({ rife: String(engine).startsWith('rife') })
+      await applyInterpolatedFrames(frames, { engine, fps: settings.fps })
+    } catch (err) {
+      setToast(err?.message || 'RIFE interpolate failed')
+    } finally {
+      setSegmenting(false)
+    }
   }
 
   const updateElement = (key, value) => setElements((current) => current.map((el) => {
@@ -1057,7 +1775,7 @@ export function StudioProvider({ children }) {
   }
 
   const imageTransformBox = useMemo(() => {
-    if (!source.width || !source.height || !settings.width || !settings.height) {
+    if (!source?.width || !source?.height || !settings.width || !settings.height) {
       return { x: 0.1, y: 0.1, w: 0.8, h: 0.8, rotation: 0 }
     }
     const iw = source.width
@@ -1125,137 +1843,8 @@ export function StudioProvider({ children }) {
       h: Math.max(0.02, dh),
       rotation,
     }
-  }, [source.width, source.height, settings, imageEdits.rotation, progress])
+  }, [source?.width, source?.height, settings, imageEdits.rotation, progress])
 
-  const beginTransform = (event, target) => {
-    if (!stageRef.current) return
-    event.stopPropagation()
-    event.preventDefault()
-    stageRef.current.setPointerCapture?.(event.pointerId)
-    const bounds = stageRef.current.getBoundingClientRect()
-    transformDrag.current = {
-      ...target,
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      boundsW: bounds.width,
-      boundsH: bounds.height,
-      origin: target.origin,
-    }
-    setPlaying(false)
-  }
-
-  const moveTransform = (event) => {
-    const drag = transformDrag.current
-    if (!drag || drag.pointerId !== event.pointerId) return
-    event.stopPropagation()
-    const dx = (event.clientX - drag.startX) / drag.boundsW
-    const dy = (event.clientY - drag.startY) / drag.boundsH
-
-    if (drag.kind === 'image') {
-      if (drag.mode === 'move') {
-        const dpx = dx * 100
-        const dpy = dy * 100
-        setSettings((s) => ({
-          ...s,
-          xStart: nice(s.xStart + dpx, 1),
-          xEnd: nice(s.xEnd + dpx, 1),
-          yStart: nice(s.yStart + dpy, 1),
-          yEnd: nice(s.yEnd + dpy, 1),
-        }))
-        transformDrag.current = { ...drag, startX: event.clientX, startY: event.clientY }
-      } else if (drag.mode === 'rotate') {
-        const box = drag.origin.box
-        const cx = (box.x + box.w / 2) * drag.boundsW
-        const cy = (box.y + box.h / 2) * drag.boundsH
-        const rect = stageRef.current.getBoundingClientRect()
-        const angle = Math.atan2(event.clientY - rect.top - cy, event.clientX - rect.left - cx) * 180 / Math.PI
-        const delta = angle - drag.origin.startAngle
-        setSettings((s) => ({
-          ...s,
-          rotateStart: nice(drag.origin.rotateStart + delta, 1),
-          rotateEnd: nice(drag.origin.rotateEnd + delta, 1),
-        }))
-      } else if (drag.mode.startsWith('resize')) {
-        const factor = 1 + (dx + dy) * (drag.mode.includes('w') || drag.mode.includes('n') ? -1 : 1)
-        const next = clampNice(drag.origin.scale * factor, 5, 400, 1)
-        const ratio = next / Math.max(1, drag.origin.scale)
-        setSettings((s) => ({
-          ...s,
-          scaleStart: clampNice(drag.origin.scaleStart * ratio, 5, 400, 1),
-          scaleEnd: clampNice(drag.origin.scaleEnd * ratio, 5, 400, 1),
-        }))
-      }
-      return
-    }
-
-    if (drag.kind === 'element') {
-      const id = drag.id
-      setElements((current) => current.map((el) => {
-        if (el.id !== id || el.locked) return el
-        const o = drag.origin
-        if (drag.mode === 'move') {
-          return { ...el, x: nice(o.x + dx, 4), y: nice(o.y + dy, 4) }
-        }
-        if (drag.mode === 'rotate') {
-          const cx = (o.x + o.w / 2) * drag.boundsW
-          const cy = (o.y + o.h / 2) * drag.boundsH
-          const rect = stageRef.current.getBoundingClientRect()
-          const angle = Math.atan2(event.clientY - rect.top - cy, event.clientX - rect.left - cx) * 180 / Math.PI
-          return { ...el, rotation: nice(o.rotation + (angle - o.startAngle), 1) }
-        }
-        // resize handles
-        let { x, y, w, h } = o
-        const handle = drag.mode.replace('resize-', '')
-        if (handle.includes('e')) w = Math.max(0.02, o.w + dx)
-        if (handle.includes('s')) h = Math.max(0.02, o.h + dy)
-        if (handle.includes('w')) { w = Math.max(0.02, o.w - dx); x = o.x + (o.w - w) }
-        if (handle.includes('n')) { h = Math.max(0.02, o.h - dy); y = o.y + (o.h - h) }
-        return {
-          ...el,
-          x: nice(x, 4),
-          y: nice(y, 4),
-          w: nice(w, 4),
-          h: nice(h, 4),
-        }
-      }))
-      return
-    }
-
-    if (drag.kind === 'overlay') {
-      const id = drag.id
-      setOverlays((current) => current.map((overlay) => {
-        if (overlay.id !== id) return overlay
-        const o = drag.origin
-        if (drag.mode === 'move') {
-          return {
-            ...overlay,
-            x: nice(o.x + dx * 100, 1),
-            y: nice(o.y + dy * 100, 1),
-          }
-        }
-        if (drag.mode === 'rotate') {
-          const cx = (o.box.x + o.box.w / 2) * drag.boundsW
-          const cy = (o.box.y + o.box.h / 2) * drag.boundsH
-          const rect = stageRef.current.getBoundingClientRect()
-          const angle = Math.atan2(event.clientY - rect.top - cy, event.clientX - rect.left - cx) * 180 / Math.PI
-          return { ...overlay, rotation: nice(o.rotation + (angle - o.startAngle), 1) }
-        }
-        if (drag.mode.startsWith('resize')) {
-          const factor = 1 + (dx + dy) * (drag.mode.includes('w') || drag.mode.includes('n') ? -1 : 1)
-          const next = clampNice(o.width * factor, 1, 300, 1)
-          return { ...overlay, width: next }
-        }
-        return overlay
-      }))
-    }
-  }
-
-  const endTransform = (event) => {
-    if (!transformDrag.current || transformDrag.current.pointerId !== event.pointerId) return
-    event.stopPropagation()
-    transformDrag.current = null
-  }
   const rebuildMaskedElement = (element) => {
     if (!element.sourceBitmap || !element.maskCanvas) return element
     const bitmap = document.createElement('canvas'); bitmap.width = element.sourceBitmap.width; bitmap.height = element.sourceBitmap.height
@@ -1302,7 +1891,7 @@ export function StudioProvider({ children }) {
     const duration = Math.max(0.1, settings.duration || 1)
     setTextLayers((current) => {
       if (current.length >= MAX_TEXT_LAYERS) return current
-      const id = Date.now()
+      const id = newStudioId()
       const layer = clampTextInOut(
         { id, name: `Text ${current.length + 1}`, ...TEXT_DEFAULT, in: 0, out: duration },
         duration,
@@ -1366,7 +1955,7 @@ export function StudioProvider({ children }) {
   }
   const addOverlay = async (file) => {
     if (!file) return
-    const url = URL.createObjectURL(file), overlayImage = await imageFromUrl(url), id = Date.now()
+    const url = URL.createObjectURL(file), overlayImage = await imageFromUrl(url), id = newStudioId()
     const overlay = {
       id, name: file.name, image: overlayImage, url,
       x: 50, y: 50, width: 30, scaleX: 100, scaleY: 100, rotation: 0, opacity: 100,
@@ -1388,6 +1977,14 @@ export function StudioProvider({ children }) {
     if (typeof value !== 'number') return { ...overlay, [key]: value }
     return { ...overlay, [key]: nice(value, 1) }
   }))
+  const updateOverlayById = (id, patch) => setOverlays((current) => current.map((overlay) => {
+    if (overlay.id !== id) return overlay
+    const next = { ...overlay }
+    Object.entries(patch).forEach(([key, value]) => {
+      next[key] = typeof value === 'number' ? nice(value, 1) : value
+    })
+    return next
+  }))
   const saveCurrentPng = async (reducePalette = false) => {
     const ratio = Math.min(1, 1920 / Math.max(settings.width, settings.height)), canvas = document.createElement('canvas')
     canvas.width = Math.round(settings.width * ratio); canvas.height = Math.round(settings.height * ratio); draw(progress, canvas, ratio)
@@ -1395,7 +1992,7 @@ export function StudioProvider({ children }) {
     if (apiAvailable) {
       try { const form = new FormData(); form.append('image', blob, 'frame.png'); form.append('palette', String(reducePalette)); const response = await fetch('/api/optimize-png', { method: 'POST', body: form }); if (response.ok) blob = await response.blob() } catch { /* Keep browser PNG. */ }
     }
-    const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `${source.name.replace(/\.[^.]+$/, '')}-frame.png`; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); setToast(`PNG saved · ${fmtBytes(blob.size)}`)
+    const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `${(source?.name || 'frame').replace(/\.[^.]+$/, '')}-frame.png`; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); setToast(`PNG saved · ${fmtBytes(blob.size)}`)
   }
   const compressExistingGif = async (file) => {
     if (!file) return
@@ -1410,21 +2007,6 @@ export function StudioProvider({ children }) {
       setLastExport({ bytes: blob.size, originalBytes, optimized: true, encoder: 'gifsicle compressor' }); setToast(`Compressed ${Math.max(0, Math.round((1 - blob.size / originalBytes) * 100))}% · ${fmtBytes(blob.size)}`)
     } catch (error) { setToast(error.message) } finally { setExporting(false) }
   }
-  const beginTextDrag = (event, layer) => {
-    if (layer.locked) { setToast('Text layer is locked'); return }
-    event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId)
-    textDrag.current = { id: layer.id, clientX: event.clientX, clientY: event.clientY, x: layer.x, y: layer.y }
-    setSelectedText(layer.id); setBaseImageSelected(false); setSelectedElements([]); goToWorkspace('text'); setPlaying(false)
-  }
-  const dragTextLayer = (event) => {
-    if (!textDrag.current || !stageRef.current) return
-    event.stopPropagation()
-    const bounds = stageRef.current.getBoundingClientRect(), drag = textDrag.current
-    const x = nice(drag.x + (event.clientX - drag.clientX) / bounds.width * 100, 1)
-    const y = nice(drag.y + (event.clientY - drag.clientY) / bounds.height * 100, 1)
-    setTextLayers((current) => current.map((layer) => layer.id === drag.id ? { ...layer, x, y } : layer))
-  }
-  const endTextDrag = (event) => { event.stopPropagation(); textDrag.current = null }
 
   const beginAnchorDrag = (event) => {
     if (!stageRef.current) return
@@ -1530,7 +2112,7 @@ export function StudioProvider({ children }) {
           if (!response.ok) { const detail = await response.json().catch(() => ({})); throw new Error(apiErrorMessage(detail.detail, 'Python export failed')) }
           const blob = await response.blob(); setProgress(1)
           const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
-          a.download = `${source.name.replace(/\.[^.]+$/, '').trim().replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'animation'}.gif`; a.click()
+          a.download = `${(source?.name || 'animation').replace(/\.[^.]+$/, '').trim().replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'animation'}.gif`; a.click()
           setTimeout(() => URL.revokeObjectURL(a.href), 1000)
           const optimized = response.headers.get('X-GIF-Optimized') === 'true'
           const originalBytes = Number(response.headers.get('X-GIF-Original-Bytes')) || blob.size
@@ -1568,11 +2150,48 @@ export function StudioProvider({ children }) {
       encoder.finish()
       const blob = new Blob([encoder.bytesView()], { type: 'image/gif' })
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
-      a.download = `${source.name.replace(/\.[^.]+$/, '').trim().replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'animation'}.gif`; a.click()
+      a.download = `${(source?.name || 'animation').replace(/\.[^.]+$/, '').trim().replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'animation'}.gif`; a.click()
       setTimeout(() => URL.revokeObjectURL(a.href), 1000)
-      setLastExport({ bytes: blob.size, originalBytes: blob.size, optimized: false, encoder: 'Browser' })
-      setToast(`GIF exported with browser encoder · ${fmtBytes(blob.size)}`)
-    } catch (error) { console.error(error); setToast('Export failed — try a smaller canvas') }
+      setLastExport({ bytes: blob.size, originalBytes: blob.size, optimized: false, encoder: 'gifenc' })
+      setToast(`GIF exported with gifenc · ${fmtBytes(blob.size)}`)
+    } catch (error) {
+      console.error(error)
+      try {
+        setToast('Browser encoder failed — trying ffmpeg.wasm…')
+        const pngFrames = []
+        const workFf = document.createElement('canvas')
+        const limitFf = settings.quality === 'High quality' ? 1440 : settings.quality === 'Balanced' ? 1080 : 720
+        const ratioFf = Math.min(1, limitFf / Math.max(settings.width, settings.height))
+        workFf.width = Math.round(settings.width * ratioFf)
+        workFf.height = Math.round(settings.height * ratioFf)
+        for (let i = 0; i < frames; i += 1) {
+          draw(i / frames, workFf, ratioFf)
+          const frameBlob = await new Promise((resolve) => workFf.toBlob(resolve, 'image/png'))
+          pngFrames.push(frameBlob)
+          if (i % 3 === 0) {
+            setProgress((i + 1) / frames * 0.9)
+            await new Promise((r) => setTimeout(r, 0))
+          }
+        }
+        const { encodeGifWithFFmpeg, loadFFmpeg } = await import('../engine/ffmpeg-export')
+        await loadFFmpeg()
+        useStudioStore.getState().setCapabilities({ ffmpeg: true })
+        const blob = await encodeGifWithFFmpeg(pngFrames, {
+          fps: Math.max(1, Math.round(timingFps)),
+          onProgress: (p) => setProgress(0.9 + p * 0.1),
+        })
+        const a = document.createElement('a')
+        a.href = URL.createObjectURL(blob)
+        a.download = `${(source?.name || 'animation').replace(/\.[^.]+$/, '').trim().replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'animation'}.gif`
+        a.click()
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+        setLastExport({ bytes: blob.size, originalBytes: blob.size, optimized: false, encoder: 'ffmpeg.wasm' })
+        setToast(`GIF exported with ffmpeg.wasm · ${fmtBytes(blob.size)}`)
+      } catch (ffErr) {
+        console.error(ffErr)
+        setToast('Export failed — try a smaller canvas')
+      }
+    }
     finally {
       setExporting(false)
       setPlaying(false)
@@ -1594,7 +2213,7 @@ export function StudioProvider({ children }) {
 
   const value = {
     // refs
-    canvasRef, stageRef, fileRef, fontFileRef, overlayFileRef, compressGifRef,
+    canvasRef, pixiCanvasRef, stageRef, fileRef, fontFileRef, overlayFileRef, compressGifRef,
     // state
     settings, setSettings, image, source, playing, setPlaying, progress, setProgress, exporting,
     dropActive, setDropActive, mobilePanel, setMobilePanel, toast, setToast, activeTab, goToWorkspace, zoom, setZoom, canvasZoom,
@@ -1612,18 +2231,21 @@ export function StudioProvider({ children }) {
     imageEdits, setImageEdits, censor, setCensor, censorSelecting, setCensorSelecting,
     overlays, setOverlays, selectedOverlay, setSelectedOverlay, effectTarget, setEffectTarget, gifEffects, setGifEffects,
     selectedMotionEffect, setSelectedMotionEffect,
+    gpuPreview, setGpuPreview,
+    poseRig, setPoseRig,
     // derived
     frames, frameDelays, actualDuration, actualFps, memory, timingFps, activeEffects, stageStyle,
     // actions
     update, setAmplitude, setSpeed, applyQuality, applyPreset, reset, loadFile, draw, cancelSelection, completePathSelection,
-    startSelection, moveSelection, finishSelection, smoothSelectionPath, updateElement, removeElement,
+    startSelection, moveSelection, finishSelection, updateElement, removeElement,
     toggleElementLock, toggleElementVisible, toggleImageLock, toggleFlip, rotateSelection, selectionFlip, toggleTextLock, selectBaseImage, selectStageElement,
-    beginTransform, moveTransform, endTransform,
     resetElementMask, invertElementMask, featherElementMask, addTextLayer, updateText, updateTextById, removeText, moveText,
     uploadFont, updateEffect,
-    addOverlay, updateOverlay, selectOverlay, selectStageOverlay, overlayBounds, toggleOverlayVisible, removeOverlay, saveCurrentPng, compressExistingGif, beginTextDrag, dragTextLayer, endTextDrag,
+    addOverlay, updateOverlay, updateOverlayById, selectOverlay, selectStageOverlay, overlayBounds, toggleOverlayVisible, removeOverlay, saveCurrentPng, compressExistingGif,
     beginAnchorDrag, moveAnchorDrag, endAnchorDrag, resetMotionAnchor,
     addMotionEffect, updateMotionEffect, removeMotionEffect, moveMotionEffectTrack,
+    addElementFromMask, runSam2Segment, runHumanSegment, runPoseDetect, runTextDetect,
+    applyInterpolatedFrames, runRifeInterpolate,
     exportGif, textBounds,
   }
 

@@ -8,3 +8,14 @@ Pillow>=10.2
 pygifsicle>=1.1
 gifsicle-bin>=1.96.4; platform_system == "Windows"
 rembg[cpu]>=2.0.76
+# Optional persistence / jobs / storage / AI extras
+sqlalchemy>=2.0
+psycopg[binary]>=3.1
+celery[redis]>=5.4
+redis>=5.0
+boto3>=1.34
+# Optional: rembg already included. Heavy AI extras:
+#   pip install -r requirements-ai.txt
+#   pip install "git+https://github.com/facebookresearch/sam2.git"
+#   python scripts/setup_ai_models.py
+# ultralytics>=8  # optional YOLO detect engine

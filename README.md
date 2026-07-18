@@ -66,6 +66,26 @@ and uses gifsicle optimization when the platform executable is available. If the
 API is offline, the browser automatically falls back to edge-based selection and
 the bundled GIF encoder.
 
+### Optional heavy AI engines (SAM2 · Grounding DINO · Real-ESRGAN · RIFE)
+
+Real PyTorch runners live under `src/gif_studio/ai/` and call the official stacks:
+
+| Engine | Upstream | Ready when |
+|--------|----------|------------|
+| **SAM 2** | [facebookresearch/sam2](https://github.com/facebookresearch/sam2) | `pip install git+https://github.com/facebookresearch/sam2.git` (HF weights on first use) |
+| **Grounding DINO** | [IDEA-Research/GroundingDINO](https://github.com/IDEA-Research/GroundingDINO) | `pip install transformers` → `IDEA-Research/grounding-dino-tiny` |
+| **Real-ESRGAN** | [xinntao/Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) | `pip install realesrgan basicsr` (or `spandrel`); weights auto-download |
+| **RIFE** | [hzwer/ECCV2022-RIFE](https://github.com/hzwer/ECCV2022-RIFE) / [Practical-RIFE](https://github.com/hzwer/Practical-RIFE) | clone + `train_log` weights via setup script |
+
+```bash
+pip install -r requirements-ai.txt
+pip install "git+https://github.com/facebookresearch/sam2.git"
+python scripts/setup_ai_models.py
+```
+
+Check `/api/health` for `sam2`, `grounding_dino`, `realesrgan`, and `rife` flags.
+Without weights/packages, those AI endpoints return an error — there are no substitute algorithms.
+
 ## Requirements
 
 - Python 3.11 or newer.
@@ -250,8 +270,9 @@ gif_studio/
 ├── run.py
 ├── examples/
 │   ├── batch_example.py
-│   ├── sample_source.png
+│   ├── sample_source.png      # CLI/examples only (not web demo)
 │   └── sample_output.gif
+├── public/                    # Web static assets (no bundled demo image)
 ├── scripts/
 │   └── build_executable.py
 ├── src/gif_studio/

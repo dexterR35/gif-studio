@@ -1,0 +1,30 @@
+# Optional heavy AI engines for GIF Studio (PyTorch).
+#   pip install -r requirements-ai.txt
+#   pip install "git+https://github.com/facebookresearch/sam2.git"
+#   python scripts/setup_ai_models.py
+#
+# Note: basicsr/realesrgan often fail on Python ≥3.12 — Spandrel is the
+# preferred Real-ESRGAN weight loader (still uses xinntao .pth checkpoints).
+
+torch>=2.5.1
+torchvision>=0.20.1
+huggingface_hub>=0.26
+
+# Grounding DINO (IDEA-Research) via Transformers
+transformers>=4.45
+
+# Real-ESRGAN weights loader (xinntao checkpoints)
+spandrel>=0.4.0
+
+# Optional classic stack (may fail on newer Python):
+# realesrgan>=0.3.0
+# basicsr>=1.4.2
+# facexlib>=0.3.0
+
+# SAM 2 — install separately (CUDA extension optional):
+#   pip install "git+https://github.com/facebookresearch/sam2.git"
+
+# Optional YOLO (separate detect engine, not a DINO substitute):
+# ultralytics>=8.0
+
+# RIFE uses third_party/Practical-RIFE (cloned by setup_ai_models.py).

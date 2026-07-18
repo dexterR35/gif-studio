@@ -1,9 +1,9 @@
 import { Field } from './field'
+import { FormGrid } from './form'
 import { SelectField } from './select-field'
+import { FIT_MODES } from '../../lib/catalogs'
 import { fmtBytes, MAX_CANVAS } from '../../lib/format'
 import { cn } from '../../lib/cn'
-
-const FIT_MODES = ['Contain', 'Cover', 'Stretch', 'Original size']
 
 /**
  * Shared canvas + image resize controls (matches Python desktop sizing UX).
@@ -33,10 +33,10 @@ export function CanvasSizeControls({
         {atSource && <span className="font-semibold text-acid/80">Original size</span>}
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <FormGrid gap={3}>
         <Field label="Canvas width" value={width} onChange={onWidthChange} min={1} max={max} suffix="px" />
         <Field label="Canvas height" value={height} onChange={onHeightChange} min={1} max={max} suffix="px" />
-      </div>
+      </FormGrid>
 
       {showFit && (
         <div className="mt-3">
@@ -65,5 +65,3 @@ export function CanvasSizeControls({
     </div>
   )
 }
-
-export { MAX_CANVAS, FIT_MODES }

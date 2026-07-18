@@ -159,6 +159,9 @@ export const applyDistortion = (canvas, {
 
 export const applyPixelEffects = (canvas, effects) => {
   if (!effects) return canvas
+  // Skip OpenCV in the hot path — WASM getImageData/Mat round-trips freeze playback.
+  // Canvas 2D filters below stay fast enough for live preview.
+
   const context = canvas.getContext('2d', { willReadFrequently: true }), width = canvas.width, height = canvas.height
   if (effects.distortion !== 'None' && effects.distortionAmount > 0) {
     applyDistortion(canvas, {
@@ -194,9 +197,14 @@ export const applyPixelEffects = (canvas, effects) => {
   }
   if (effects.sharpen) convolveCanvas(canvas, [0, -1, 0, -1, 5, -1, 0, -1, 0], effects.sharpen / 100)
   if (effects.emboss) convolveCanvas(canvas, [-2, -1, 0, -1, 1, 1, 0, 1, 2], effects.emboss / 100)
+  if (effects.blur) {
+    const copy = document.createElement('canvas'); copy.width = width; copy.height = height; copy.getContext('2d').drawImage(canvas, 0, 0)
+    context.clearRect(0, 0, width, height); context.filter = `blur(${effects.blur / 12}px)`; context.drawImage(copy, 0, 0); context.filter = 'none'
+  }
   if (effects.oilPaint) {
     const copy = document.createElement('canvas'); copy.width = width; copy.height = height; copy.getContext('2d').drawImage(canvas, 0, 0)
     context.clearRect(0, 0, width, height); context.filter = `blur(${effects.oilPaint / 35}px) contrast(${1 + effects.oilPaint / 120}) saturate(${1 + effects.oilPaint / 160})`; context.drawImage(copy, 0, 0); context.filter = 'none'
   }
   return canvas
 }
+

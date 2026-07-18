@@ -5,16 +5,28 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "api": ".venv/bin/python run_web_api.py",
+    "api": "node scripts/run-api.mjs",
+    "start": "node scripts/start-both.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
+    "@mediapipe/tasks-vision": "^0.10.35",
+    "@techstark/opencv-js": "^5.0.0-release.1",
     "gifenc": "^1.0.3",
+    "gifuct-js": "^2.1.2",
+    "gsap": "^3.15.0",
+    "konva": "^9.3.22",
     "lucide-react": "^0.468.0",
+    "onnxruntime-web": "^1.27.0",
+    "pixi.js": "^8.19.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^7.18.1"
+    "react-konva": "^18.2.10",
+    "react-router-dom": "^7.18.1",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",

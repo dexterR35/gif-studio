@@ -31,16 +31,21 @@ export const MAX_CANVAS = 8192
 /** Source upload limits (matches Python `validate_uploaded_image`). */
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 export const MAX_UPLOAD_DIMENSION = 5000
-export const ALLOWED_UPLOAD_TYPES = new Set(['image/png', 'image/jpeg'])
-export const ALLOWED_UPLOAD_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg'])
+export const ALLOWED_UPLOAD_TYPES = new Set([
+  'image/png', 'image/jpeg', 'image/gif',
+  'video/mp4', 'video/webm', 'video/quicktime',
+])
+export const ALLOWED_UPLOAD_EXTENSIONS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.mp4', '.webm', '.mov',
+])
 
 export const uploadImageError = (file) => {
   if (!file) return 'An image file is required.'
   const name = (file.name || '').toLowerCase()
   const ext = name.includes('.') ? `.${name.split('.').pop()}` : ''
   const typeOk = ALLOWED_UPLOAD_TYPES.has(file.type) || ALLOWED_UPLOAD_EXTENSIONS.has(ext)
-  if (!typeOk) return 'Only PNG and JPG images are allowed.'
-  if (file.size > MAX_UPLOAD_BYTES) return 'Image exceeds the 20 MB upload limit.'
+  if (!typeOk) return 'Only PNG, JPG, GIF, MP4, and WebM are allowed.'
+  if (file.size > MAX_UPLOAD_BYTES) return 'File exceeds the 20 MB upload limit.'
   return null
 }
 
@@ -52,5 +57,6 @@ export const ease = (t, type) => {
   if (type === 'Ease in') return t * t
   if (type === 'Ease out') return 1 - (1 - t) ** 2
   if (type === 'Smoothstep') return t * t * (3 - 2 * t)
+  if (type === 'Spring') return 1 - Math.exp(-4.5 * t) * Math.cos(t * Math.PI * 2.5)
   return t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2
 }

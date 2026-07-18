@@ -9,7 +9,7 @@ from .ui.main_window import MainWindow
 
 
 def main() -> int:
-    QCoreApplication.setOrganizationName("OpenAI")
+    QCoreApplication.setOrganizationName("GIF Studio")
     QCoreApplication.setApplicationName("GIF Studio")
     QCoreApplication.setApplicationVersion("0.1.0")
 

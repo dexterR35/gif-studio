@@ -38,7 +38,7 @@ export const MOTION_EFFECT_COLORS = {
   Swirl: '#fcd34d',
   Wave: '#67e8f9',
   Zoom: PRIMARY_ACCENT,
-  /** Fallback for named base presets on the M lane */
+  /** Color for named base presets on the M lane */
   Base: '#a1a1aa',
 }
 

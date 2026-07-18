@@ -3,14 +3,15 @@ import { cn } from '../../lib/cn'
 const variants = {
   primary: 'gs-btn-primary',
   ghost: '',
+  /** Alias of ghost — preferred for secondary full-width actions in panels. */
+  soft: '',
   accent: 'gs-btn-accent',
   danger: 'gs-btn-danger',
   solid: 'gs-btn-solid',
-  soft: '',
 }
 
 const sizes = {
-  sm: '',
+  sm: 'text-[10px]',
   md: '',
   lg: 'gs-btn-lg',
   xl: 'gs-btn-xl',

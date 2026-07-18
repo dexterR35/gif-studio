@@ -4,6 +4,7 @@ import base64
 import io
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -20,20 +21,31 @@ from PIL import Image
 from starlette.concurrency import run_in_threadpool
 
 from .engine import MAX_UPLOAD_BYTES, validate_uploaded_image
+from .ai_pipeline import default_rembg_model
 
 app = FastAPI(title="GIF Studio Local API", version="1.0.0")
+
+_CORS_DEFAULT = "http://127.0.0.1:5173,http://localhost:5173"
+_cors_origins = [
+    origin.strip()
+    for origin in os.environ.get("GIF_STUDIO_CORS_ORIGINS", _CORS_DEFAULT).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_origins=_cors_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT"],
     allow_headers=["*"],
-    expose_headers=["X-GIF-Encoder", "X-GIF-Optimized", "X-GIF-Original-Bytes", "X-GIF-Bytes", "X-GIF-Compression"],
+    expose_headers=[
+        "X-GIF-Encoder", "X-GIF-Optimized", "X-GIF-Original-Bytes", "X-GIF-Bytes",
+        "X-GIF-Compression", "X-Upscale-Engine", "X-Interpolate-Engine",
+    ],
 )
 
 MAX_IMAGE_BYTES = MAX_UPLOAD_BYTES
 MAX_FRAMES = 240
-AI_MODEL = "isnet-general-use"
+AI_MODEL = default_rembg_model()
 _rembg_session = None
 _rembg_model: str | None = None
 
@@ -44,6 +56,28 @@ def _reject_upload(exc: ValueError) -> HTTPException:
     if "required" in message.lower():
         status = 422
     return HTTPException(status, message)
+
+
+def _ai_http_error(exc: BaseException, *, default_message: str) -> HTTPException:
+    """Map missing engines → 503, bad input → 422, unexpected → 500."""
+    message = str(exc) or default_message
+    if isinstance(exc, ValueError):
+        return HTTPException(422, message)
+    if isinstance(exc, RuntimeError) and "not available" in message.lower():
+        return HTTPException(503, message)
+    if isinstance(exc, FileNotFoundError):
+        return HTTPException(503, message)
+    return HTTPException(500, f"{default_message}: {message}")
+
+
+def _inline_or_queued(result: object, *, inline_builder):
+    """When Celery is off, delay() returns a dict — convert to a real response."""
+    if isinstance(result, dict) and "job_id" not in result:
+        return inline_builder(result)
+    job_id = getattr(result, "id", None)
+    if job_id is None and isinstance(result, dict):
+        job_id = result.get("job_id")
+    return {"job_id": job_id or "queued", "status": "queued"}
 
 
 def _require_upload_image(payload: bytes, filename: str | None = None) -> Image.Image:
@@ -104,16 +138,32 @@ def _grabcut_mask(source: np.ndarray, rect: tuple[int, int, int, int], iteration
 
 @app.get("/api/health")
 def health() -> dict[str, object]:
-    ai_available = importlib.util.find_spec("rembg") is not None
+    from . import ai_pipeline
+    from .db import db_available
+    from .jobs import celery_available
+    from .storage import storage_configured
+
+    caps = ai_pipeline.capability_flags()
+    rembg = caps["rembg"]
     return {
         "status": "ok",
         "opencv": cv2.__version__,
         "imageio": iio.__version__ if hasattr(iio, "__version__") else "available",
         "gifsicle": shutil.which("gifsicle") is not None,
         "oxipng": shutil.which("oxipng") is not None,
-        "ai": ai_available,
-        "ai_model": AI_MODEL if ai_available else None,
-        "engines": ["rembg/ONNX", "OpenCV GrabCut", "ImageIO", "gifsicle"],
+        "ai": rembg,
+        "ai_model": default_rembg_model() if rembg else None,
+        "rembg": rembg,
+        "sam2": caps["sam2"],
+        "grounding_dino": caps["grounding_dino"],
+        "yolo": caps["yolo"],
+        "realesrgan": caps["realesrgan"],
+        "rife": caps["rife"],
+        "database": db_available(),
+        "storage": storage_configured(),
+        "storage_local": True,
+        "celery": celery_available(),
+        "engines": ai_pipeline.active_engines(),
     }
 
 
@@ -432,3 +482,225 @@ async def compress_gif(
             "X-GIF-Compression": compression_method,
         },
     )
+
+
+# --- AI / storage / project API (SAM2, DINO, RealESRGAN, RIFE, Postgres, S3) ---
+
+
+@app.post("/api/ai/segment")
+async def ai_segment(
+    image: Annotated[UploadFile, File()],
+    point_x: Annotated[float | None, Form()] = None,
+    point_y: Annotated[float | None, Form()] = None,
+    engine: Annotated[str, Form()] = "sam2",
+) -> dict[str, object]:
+    payload = await image.read()
+    _require_upload_image(payload, image.filename)
+    point = (point_x, point_y) if point_x is not None and point_y is not None else None
+    try:
+        from .ai_pipeline import segment_sam2
+
+        return await run_in_threadpool(segment_sam2, payload, point)
+    except Exception as exc:
+        raise _ai_http_error(exc, default_message="AI segment failed") from exc
+
+
+@app.post("/api/ai/detect")
+async def ai_detect(
+    image: Annotated[UploadFile, File()],
+    prompt: Annotated[str, Form()] = "",
+    confidence: Annotated[float, Form()] = 0.35,
+    engine: Annotated[str, Form()] = "auto",
+) -> dict[str, object]:
+    del engine  # selected inside pipeline
+    payload = await image.read()
+    _require_upload_image(payload, image.filename)
+    try:
+        from .ai_pipeline import detect_objects
+
+        return await run_in_threadpool(detect_objects, payload, prompt, confidence)
+    except Exception as exc:
+        raise _ai_http_error(exc, default_message="AI detect failed") from exc
+
+
+@app.post("/api/ai/upscale")
+async def ai_upscale(
+    image: Annotated[UploadFile, File()],
+    scale: Annotated[int, Form()] = 2,
+    async_job: Annotated[bool, Form()] = False,
+):
+    payload = await image.read()
+    _require_upload_image(payload, image.filename)
+    if async_job:
+        from .jobs import job_upscale
+        from .storage import get_bytes, put_bytes
+
+        key = put_bytes(payload, content_type="image/png")
+        result = job_upscale.delay(key, scale)
+
+        def build_inline(data: dict) -> Response:
+            out = get_bytes(data["storage_key"])
+            return Response(
+                out,
+                media_type="image/png",
+                headers={"X-Upscale-Engine": str(data.get("engine") or "realesrgan")},
+            )
+
+        return _inline_or_queued(result, inline_builder=build_inline)
+    try:
+        from .ai_pipeline import upscale_image
+
+        out, engine = await run_in_threadpool(upscale_image, payload, scale)
+        return Response(out, media_type="image/png", headers={"X-Upscale-Engine": engine})
+    except Exception as exc:
+        raise _ai_http_error(exc, default_message="Upscale failed") from exc
+
+
+@app.post("/api/ai/interpolate")
+async def ai_interpolate(
+    frames: Annotated[list[UploadFile], File()],
+    factor: Annotated[int, Form()] = 2,
+    async_job: Annotated[bool, Form()] = False,
+) -> dict[str, object]:
+    if len(frames) < 2:
+        raise HTTPException(400, "Need at least two frames to interpolate.")
+    payloads: list[bytes] = []
+    for upload in frames[:MAX_FRAMES]:
+        data = await upload.read()
+        _require_upload_image(data, upload.filename)
+        payloads.append(data)
+
+    if async_job:
+        from .jobs import job_interpolate
+        from .storage import get_bytes, put_bytes
+
+        keys = [put_bytes(p, content_type="image/png") for p in payloads]
+        result = job_interpolate.delay(keys, factor)
+
+        def build_inline(data: dict) -> dict[str, object]:
+            outs = [get_bytes(k) for k in data.get("frame_keys") or []]
+            return {
+                "engine": data.get("engine") or "rife",
+                "frames": [
+                    "data:image/png;base64," + base64.b64encode(b).decode("ascii") for b in outs
+                ],
+            }
+
+        return _inline_or_queued(result, inline_builder=build_inline)
+
+    try:
+        from .ai_pipeline import interpolate_frames
+
+        outs, engine = await run_in_threadpool(interpolate_frames, payloads, factor)
+        return {
+            "engine": engine,
+            "frames": [
+                "data:image/png;base64," + base64.b64encode(b).decode("ascii") for b in outs
+            ],
+        }
+    except Exception as exc:
+        raise _ai_http_error(exc, default_message="Interpolate failed") from exc
+
+
+@app.post("/api/projects")
+async def create_project(document: dict[str, object] | None = None) -> dict[str, object]:
+    payload = document or {}
+    from .db import Project, get_session
+
+    session = get_session()
+    if session is None:
+        from uuid import uuid4
+
+        return {
+            "id": str(uuid4()),
+            "persisted": False,
+            "document": payload,
+            "note": "DATABASE_URL not set — project kept client-side only.",
+        }
+    try:
+        row = Project(name=payload.get("name", "Untitled"), document=payload)
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return {"id": row.id, "persisted": True, "name": row.name}
+    finally:
+        session.close()
+
+
+@app.get("/api/projects/{project_id}")
+async def get_project(project_id: str) -> dict[str, object]:
+    from .db import Project, get_session
+
+    session = get_session()
+    if session is None:
+        raise HTTPException(503, "DATABASE_URL is not configured.")
+    try:
+        row = session.get(Project, project_id)
+        if row is None:
+            raise HTTPException(404, "Project not found.")
+        return {
+            "id": row.id,
+            "name": row.name,
+            "document": row.document,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        }
+    finally:
+        session.close()
+
+
+@app.put("/api/projects/{project_id}")
+async def update_project(project_id: str, document: dict[str, object]) -> dict[str, object]:
+    from datetime import datetime
+
+    from .db import Project, get_session
+
+    session = get_session()
+    if session is None:
+        raise HTTPException(503, "DATABASE_URL is not configured.")
+    try:
+        row = session.get(Project, project_id)
+        if row is None:
+            raise HTTPException(404, "Project not found.")
+        row.document = document
+        row.name = document.get("name", row.name)
+        row.updated_at = datetime.utcnow()
+        session.commit()
+        return {"id": row.id, "persisted": True}
+    finally:
+        session.close()
+
+
+@app.post("/api/assets")
+async def upload_asset(
+    file: Annotated[UploadFile, File()],
+    project_id: Annotated[str | None, Form()] = None,
+) -> dict[str, object]:
+    payload = await file.read()
+    _require_upload_image(payload, file.filename)
+    from .storage import put_bytes, storage_configured
+
+    key = put_bytes(payload, content_type=file.content_type or "application/octet-stream")
+    asset_id = None
+    from .db import Asset, get_session
+
+    session = get_session()
+    if session is not None and project_id:
+        try:
+            row = Asset(
+                project_id=project_id,
+                storage_key=key,
+                filename=file.filename or "",
+                bytes=len(payload),
+            )
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            asset_id = row.id
+        finally:
+            session.close()
+    return {
+        "id": asset_id,
+        "storage_key": key,
+        "s3": storage_configured(),
+        "bytes": len(payload),
+    }

@@ -1,5 +1,5 @@
 import { Plus, Trash2 } from 'lucide-react'
-import { Button, Field, Hint, Section, SelectField } from '../components/ui'
+import { Button, Field, FormGrid, Hint, Section, SelectField } from '../components/ui'
 import { MAX_TEXT_LAYERS } from '../lib/presets'
 import { useStudio } from '../context/studio-provider'
 
@@ -51,10 +51,10 @@ export default function TextPage() {
                 ))}
               </SelectField>
             </div>
-            <div className="mt-3 grid grid-cols-2 gap-3">
+            <FormGrid className="mt-3" gap={3}>
               <Field label="Amount" value={layer.amplitude} onChange={(v) => updateText('amplitude', v)} min={0} max={100} suffix="%" />
               <Field label="Speed" value={layer.speed} onChange={(v) => updateText('speed', v)} min={0.1} max={10} step={0.1} suffix="×" />
-            </div>
+            </FormGrid>
             <div className="mt-4">
               <SelectField label="Exit" value={layer.exit} onChange={(v) => updateText('exit', v)}>
                 {['None', 'Fade out', 'Slide out left', 'Slide out right', 'Slide out up', 'Slide out down', 'Zoom out', 'Spin out'].map((x) => (

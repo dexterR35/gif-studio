@@ -23,7 +23,3 @@ export function StatusBadge({ tone = 'neutral', children, className }) {
     </div>
   )
 }
-
-export function Dot({ active = false, className }) {
-  return <span className={cn('h-2 w-2 rounded-full', active ? 'bg-acid' : 'bg-zinc-700', className)} />
-}
