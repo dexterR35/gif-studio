@@ -27,7 +27,11 @@ GIF Studio is designed as a maintainable application rather than a single script
 - PyInstaller build helper for a distributable desktop executable.
 - Automated tests for animation, transparency, metadata, sidecars, and CLI export.
 
-A complete product and engineering specification is in [BUILD_SPEC.md](BUILD_SPEC.md).
+A complete product and engineering specification is in [BUILD_SPEC.md](BUILD_SPEC.md).  
+**Execution plan:** [docs/production-refactor/CURSOR_PRODUCTION_BUILD_PLAN.md](docs/production-refactor/CURSOR_PRODUCTION_BUILD_PLAN.md)  
+**Locked overlays / control surface:** [docs/GIF_STUDIO_MEGA_SENIOR_BUILD.md](docs/GIF_STUDIO_MEGA_SENIOR_BUILD.md)  
+**Status log:** [docs/production-refactor/STATUS.md](docs/production-refactor/STATUS.md)  
+Full archive: [docs/GIF_STUDIO_COMPLETE_PRODUCTION_MANUAL.md](docs/GIF_STUDIO_COMPLETE_PRODUCTION_MANUAL.md).
 
 ## Web studio with smart element animation
 

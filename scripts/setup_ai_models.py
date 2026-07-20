@@ -401,7 +401,7 @@ def main() -> int:
     print("  pip install -r requirements-ai.txt")
     print("  pip install 'git+https://github.com/facebookresearch/sam2.git'")
     print("  pip install ultralytics rembg")
-    print("  See docs/AI_GIF_STACK.md for the reality-check matrix.")
+    print("  See docs/GIF_STUDIO_MEGA_SENIOR_BUILD.md (§10 AI subsystem).")
     print("Device auto-selects CUDA → MPS → CPU (override: GIF_STUDIO_TORCH_DEVICE).")
     print("Check /api/health for device + models.*.ready flags.")
     return 0

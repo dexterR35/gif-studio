@@ -35,5 +35,5 @@ python scripts/setup_ai_models.py --with-sam3
 
 Device auto-selects **CUDA → MPS → CPU**. Override with `GIF_STUDIO_TORCH_DEVICE=cpu|cuda|mps`.
 
-Product matrix: [`docs/AI_GIF_STACK.md`](../docs/AI_GIF_STACK.md).  
+Build / AI contracts: [`docs/GIF_STUDIO_MEGA_SENIOR_BUILD.md`](../docs/GIF_STUDIO_MEGA_SENIOR_BUILD.md) (§10).  
 Check `/api/health` for `device` and `models.*.ready`.

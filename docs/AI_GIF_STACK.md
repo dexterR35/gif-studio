@@ -2,6 +2,8 @@
 
 **Purpose:** Map which jobs use ML vs stay classical, and how the AI tab jobs wire to APIs/models.
 
+**Build from:** [GIF_STUDIO_MEGA_SENIOR_BUILD.md](./GIF_STUDIO_MEGA_SENIOR_BUILD.md) (§10) · Archive Part D: [COMPLETE_PRODUCTION_MANUAL.md](./GIF_STUDIO_COMPLETE_PRODUCTION_MANUAL.md)
+
 **Date:** 2026-07-18
 
 ---

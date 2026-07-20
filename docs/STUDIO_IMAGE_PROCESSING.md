@@ -2,6 +2,8 @@
 
 Full reference for how the studio handles **image processing**, **cutting / selecting / moving**, **layers**, **properties**, **settings**, **motion / animation**, **AI models**, and **content fill**.
 
+**Build from:** [GIF_STUDIO_MEGA_SENIOR_BUILD.md](./GIF_STUDIO_MEGA_SENIOR_BUILD.md) · Archive Part C: [COMPLETE_PRODUCTION_MANUAL.md](./GIF_STUDIO_COMPLETE_PRODUCTION_MANUAL.md)
+
 Related docs: [AI_GIF_STACK.md](./AI_GIF_STACK.md) · [BUILD_SPEC.md](../BUILD_SPEC.md)
 
 ---
