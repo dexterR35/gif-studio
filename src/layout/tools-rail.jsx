@@ -255,8 +255,13 @@ export function ToolsRail() {
       />
 
       {segmenting && (
-        <div className="mt-auto pb-2" title="Separating object…">
-          <LoaderCircle className="h-4 w-4 animate-spin text-acid" />
+        <div
+          className="mt-auto pb-2"
+          title="Separating object…"
+          role="status"
+          aria-label="Separating object"
+        >
+          <LoaderCircle className="h-4 w-4 animate-spin text-acid" aria-hidden="true" />
         </div>
       )}
     </aside>

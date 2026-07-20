@@ -1,22 +1,21 @@
 # Third-party AI source trees
 
-`scripts/setup_ai_models.py` clones:
+Populated by `python scripts/setup_ai_models.py` (not committed as weights).
 
-| Folder | Upstream |
-|--------|----------|
-| `Practical-RIFE/` | https://github.com/hzwer/Practical-RIFE |
-| `ECCV2022-RIFE/` | https://github.com/hzwer/ECCV2022-RIFE |
+| Folder | Upstream | When |
+|--------|----------|------|
+| `Practical-RIFE/` | https://github.com/hzwer/Practical-RIFE | Default RIFE clone (`RIFE_REPO`) |
+| `ECCV2022-RIFE/` | https://github.com/hzwer/ECCV2022-RIFE | Optional alternate |
+| `sam3/` | facebookresearch/sam3 (gated) | Only with `--with-sam3` |
 
-Set `RIFE_REPO=third_party/Practical-RIFE` (default auto-detected).
-
-Optional local installs:
+Grounding DINO weights/config live primarily under `models/groundingdino/` (Transformers / local ckpts). An editable GroundingDINO clone is **optional**, not required by the default setup script.
 
 ```bash
-# SAM 2
-git clone https://github.com/facebookresearch/sam2.git
-cd sam2 && pip install -e .
-
-# Grounding DINO (if not using transformers HF path)
-git clone https://github.com/IDEA-Research/GroundingDINO.git
-cd GroundingDINO && pip install -e .
+# Typical setup (from repo root, venv active):
+pip install -r requirements-ai.txt
+pip install "git+https://github.com/facebookresearch/sam2.git"
+python scripts/setup_ai_models.py --tiny-only   # lighter
+# or: python scripts/setup_ai_models.py          # fuller catalog
 ```
+
+Do not commit `.pt` / `.pth` / large clones. See [models/README.md](../models/README.md).

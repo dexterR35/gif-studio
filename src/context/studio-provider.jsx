@@ -18,6 +18,14 @@ import {
   emptyJointKey,
 } from '../lib/pose'
 import { warpElementByJoints, poseHasWarp } from '../lib/pose-warp'
+import { evaluatePreviewPlan } from '../render/preview-evaluator-bridge'
+import {
+  runStudioTask,
+  trackImportCommitted,
+  trackCutoutApplied,
+  trackExportSucceeded,
+} from '../tasks/studio-task-bridge'
+import { GIF_CUTOUT_LABEL, resolveGifCutoutPolicy } from '../tools/gif-cutout-policy'
 
 const StudioContext = createContext(null)
 
@@ -516,6 +524,8 @@ export function StudioProvider({ children }) {
 
   const draw = useCallback((rawT, target = canvasRef.current, exportScale = 1) => {
     if (!target || !image) return
+    // Strangler: build V2 RenderPlan alongside legacy draw (parity prep).
+    if (target === canvasRef.current) evaluatePreviewPlan(rawT)
     const ctx = target.getContext('2d', { willReadFrequently: true })
     const W = target.width, H = target.height
     // Prefer live ref so joint drags warp immediately (setState is async).
@@ -1078,7 +1088,9 @@ export function StudioProvider({ children }) {
           frameCount: decoded.frameCount,
           kind: 'gif',
         })
-        setToast(`GIF imported · ${decoded.frameCount} frames · ${decoded.width} × ${decoded.height} px`)
+        trackImportCommitted({ kind: 'gif', frameCount: decoded.frameCount, width: decoded.width, height: decoded.height })
+        const cutPolicy = resolveGifCutoutPolicy({ kind: 'animated-image', frameCount: decoded.frameCount })
+        setToast(`GIF imported · ${decoded.frameCount} frames · ${decoded.width} × ${decoded.height} px · cutouts: ${cutPolicy.label}`)
       } catch (err) {
         if (!isStale()) setToast(err?.message || 'Could not decode GIF.')
       }
@@ -1143,6 +1155,7 @@ export function StudioProvider({ children }) {
           frameCount: frameCanvases.length,
           kind: 'video',
         })
+        trackImportCommitted({ kind: 'video', frameCount: frameCanvases.length })
         setToast(`Video imported · ${frameCanvases.length} frames via ffmpeg.wasm`)
       } catch (err) {
         if (!isStale()) setToast(err?.message || 'Video import failed')
@@ -1163,6 +1176,7 @@ export function StudioProvider({ children }) {
       resetLayers()
       // Canvas size is applied when the image loads (original size, capped at MAX_CANVAS).
       replaceSource({ name: file.name, width: probe.naturalWidth, height: probe.naturalHeight, url, kind: 'image' })
+      trackImportCommitted({ kind: 'image', width: probe.naturalWidth, height: probe.naturalHeight })
       setToast(`Image loaded at ${probe.naturalWidth} × ${probe.naturalHeight} px`)
     }
     probe.onerror = () => { revokeBlobUrl(url); if (!isStale()) setToast('Could not open image.') }
@@ -1377,9 +1391,10 @@ export function StudioProvider({ children }) {
     }
     cleanup.getContext('2d').putImageData(filled, 0, 0)
     const id = newStudioId()
-    const element = { id, name: `Element ${elements.length + 1}`, ...rect, bitmap, sourceBitmap, maskCanvas, cleanup, effects: { ...EFFECT_DEFAULTS }, rotation: 0, scaleX: 100, scaleY: 100, flipX: false, flipY: false, opacity: 100, motion: 'Float', amplitude: 5, speed: 1, depth: Math.min(100, 30 + elements.length * 20), visible: true, locked: false, anchorX: 50, anchorY: 50 }
+    const element = { id, name: `Element ${elements.length + 1}`, ...rect, bitmap, sourceBitmap, maskCanvas, cleanup, effects: { ...EFFECT_DEFAULTS }, rotation: 0, scaleX: 100, scaleY: 100, flipX: false, flipY: false, opacity: 100, motion: 'None', amplitude: 5, speed: 1, depth: Math.min(100, 30 + elements.length * 20), visible: true, locked: false, anchorX: 50, anchorY: 50, cutoutMode: source?.kind === 'gif' ? GIF_CUTOUT_LABEL : 'Still image' }
     setElements((current) => insertInStack(current, element, layerInsertAt, selectedElement))
     setSelectedElements([id])
+    trackCutoutApplied({ method: 'local', kind: 'edge' })
     setEffectTarget('Selected element')
     if (activeTab !== 'ai' && activeTab !== 'edit') goToWorkspace('motion')
     setSettings((current) => ({ ...current, preset: 'Still', ...PRESETS.Still }))
@@ -1528,7 +1543,7 @@ export function StudioProvider({ children }) {
           flipX: false,
           flipY: false,
           opacity: 100,
-          motion: 'Float',
+          motion: 'None',
           amplitude: 5,
           speed: 1,
           depth: Math.min(100, 30 + elements.length * 20),
@@ -1538,6 +1553,7 @@ export function StudioProvider({ children }) {
           anchorX: 50,
           anchorY: 50,
           engine,
+          cutoutMode: source?.kind === 'gif' ? GIF_CUTOUT_LABEL : 'Still image',
         }
         setElements((current) => insertInStack(current, element, layerInsertAt, selectedElement))
         setSelectedElements([id])
@@ -1559,6 +1575,7 @@ export function StudioProvider({ children }) {
       const kind = String(engine).startsWith('rembg') || String(engine).includes('birefnet') || String(engine).includes('rmbg')
         ? 'AI'
         : 'GrabCut'
+      trackCutoutApplied({ engine: String(engine), method: String(method), kind })
       setToast(
         updateBackground
           ? `${kind} object ready · hole filled on base`
@@ -1802,7 +1819,7 @@ export function StudioProvider({ children }) {
       flipX: false,
       flipY: false,
       opacity: 100,
-      motion: 'Float',
+      motion: 'None',
       amplitude: 5,
       speed: 1,
       depth: Math.min(100, 30 + elements.length * 20),
@@ -2897,47 +2914,62 @@ export function StudioProvider({ children }) {
     setBusyLabel('Upscaling…')
     setToast('Upscaling…')
     try {
-      // Always upscale the original source bitmap — not the composited preview canvas.
-      const srcCanvas = document.createElement('canvas')
-      srcCanvas.width = image.naturalWidth || image.width
-      srcCanvas.height = image.naturalHeight || image.height
-      srcCanvas.getContext('2d').drawImage(image, 0, 0)
-      const { upscaleWithRealESRGAN } = await import('../ai/realesrgan')
-      const result = await upscaleWithRealESRGAN({
-        imageCanvas: srcCanvas,
-        scale,
-        model,
+      await runStudioTask({
+        kind: 'upscale',
+        backend: 'server',
+        run: async ({ setProgress }) => {
+          setProgress(0.05)
+          // Always upscale the original source bitmap — not the composited preview canvas.
+          const srcCanvas = document.createElement('canvas')
+          srcCanvas.width = image.naturalWidth || image.width
+          srcCanvas.height = image.naturalHeight || image.height
+          srcCanvas.getContext('2d').drawImage(image, 0, 0)
+          const { upscaleWithRealESRGAN } = await import('../ai/realesrgan')
+          const result = await upscaleWithRealESRGAN({
+            imageCanvas: srcCanvas,
+            scale,
+            model,
+          })
+          setProgress(0.85)
+          if (gen !== enhanceGenRef.current) return null
+          if (!result.url && !result.blob) throw new Error('Upscale returned no image')
+          const blob = result.blob || await (await fetch(result.url)).blob()
+          const url = result.url || URL.createObjectURL(blob)
+          const img = await imageFromUrl(url)
+          if (gen !== enhanceGenRef.current) {
+            if (url.startsWith('blob:')) revokeBlobUrl(url)
+            return null
+          }
+          setEnhancedLayer((prev) => {
+            if (prev?.url && prev.url !== url) revokeBlobUrl(prev.url)
+            return {
+              id: newStudioId(),
+              name: `Enhanced ${scale}×`,
+              url,
+              image: img,
+              width: img.naturalWidth || img.width,
+              height: img.naturalHeight || img.height,
+              scale,
+              model,
+              engine: result.engine || model,
+              fit: 'Contain',
+              visible: true,
+              bytes: blob.size,
+              rollbackKept: true,
+            }
+          })
+          setEnhancedSelected(true)
+          setBaseImageSelected(false)
+          setImageVisible(false)
+          setToast(`Enhanced · ${scale}× · ${result.engine || model} · original kept for rollback · hide base to preview`)
+          setProgress(1)
+          return { engine: result.engine || model, scale }
+        },
       })
-      if (gen !== enhanceGenRef.current) return
-      if (!result.url && !result.blob) throw new Error('Upscale returned no image')
-      const blob = result.blob || await (await fetch(result.url)).blob()
-      const url = result.url || URL.createObjectURL(blob)
-      const img = await imageFromUrl(url)
-      if (gen !== enhanceGenRef.current) {
-        if (url.startsWith('blob:')) revokeBlobUrl(url)
-        return
+    } catch (err) {
+      if (err?.code !== 'CANCELLED' && err?.code !== 'STALE') {
+        setToast(err?.message || 'Upscale failed')
       }
-      setEnhancedLayer((prev) => {
-        if (prev?.url && prev.url !== url) revokeBlobUrl(prev.url)
-        return {
-          id: newStudioId(),
-          name: `Enhanced ${scale}×`,
-          url,
-          image: img,
-          width: img.naturalWidth || img.width,
-          height: img.naturalHeight || img.height,
-          scale,
-          model,
-          engine: result.engine || model,
-          fit: 'Contain',
-          visible: true,
-          bytes: blob.size,
-        }
-      })
-      setEnhancedSelected(true)
-      setBaseImageSelected(false)
-      setImageVisible(false)
-      setToast(`Enhanced layer · ${scale}× · ${result.engine || model} · hide base to preview`)
     } finally {
       if (gen === enhanceGenRef.current) {
         ioLockRef.current = false
@@ -3228,6 +3260,7 @@ export function StudioProvider({ children }) {
           const optimized = response.headers.get('X-GIF-Optimized') === 'true'
           const originalBytes = Number(response.headers.get('X-GIF-Original-Bytes')) || blob.size
           setLastExport({ bytes: blob.size, originalBytes, optimized, encoder: 'ImageIO' })
+          trackExportSucceeded({ encoder: 'ImageIO', bytes: blob.size, frames, backend: 'server' })
           setToast(`GIF exported with ImageIO${optimized ? ' + gifsicle' : ''} · ${fmtBytes(blob.size)}`)
           return
         } catch (error) {
@@ -3264,6 +3297,7 @@ export function StudioProvider({ children }) {
       a.download = `${(source?.name || 'animation').replace(/\.[^.]+$/, '').trim().replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'animation'}.gif`; a.click()
       setTimeout(() => URL.revokeObjectURL(a.href), 1000)
       setLastExport({ bytes: blob.size, originalBytes: blob.size, optimized: false, encoder: 'gifenc' })
+      trackExportSucceeded({ encoder: 'gifenc', bytes: blob.size, frames, backend: 'browser' })
       setToast(`GIF exported with gifenc · ${fmtBytes(blob.size)}`)
     } catch (error) {
       console.error(error)
@@ -3297,6 +3331,7 @@ export function StudioProvider({ children }) {
         a.click()
         setTimeout(() => URL.revokeObjectURL(a.href), 1000)
         setLastExport({ bytes: blob.size, originalBytes: blob.size, optimized: false, encoder: 'ffmpeg.wasm' })
+        trackExportSucceeded({ encoder: 'ffmpeg.wasm', bytes: blob.size, frames, backend: 'browser' })
         setToast(`GIF exported with ffmpeg.wasm · ${fmtBytes(blob.size)}`)
       } catch (ffErr) {
         console.error(ffErr)

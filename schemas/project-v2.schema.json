@@ -1,0 +1,390 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gif-studio.local/schemas/project-v2.schema.json",
+  "title": "ProjectDocumentV2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "projectSeed",
+    "metadata",
+    "canvas",
+    "assets",
+    "rootLayerIds",
+    "layers",
+    "timeline",
+    "exportSettings"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "id": { "type": "string", "minLength": 1 },
+    "projectSeed": { "type": "string", "minLength": 1 },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "createdAt", "updatedAt", "appVersion"],
+      "properties": {
+        "name": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "appVersion": { "type": "string" }
+      }
+    },
+    "canvas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "background", "colorSpace"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "background": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": { "kind": { "const": "transparent" } }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "color"],
+              "properties": {
+                "kind": { "const": "solid" },
+                "color": { "type": "string" }
+              }
+            }
+          ]
+        },
+        "colorSpace": { "const": "srgb" }
+      }
+    },
+    "assets": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/assetManifestEntry" }
+    },
+    "rootLayerIds": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "layers": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/layer" }
+    },
+    "timeline": { "$ref": "#/$defs/timeline" },
+    "exportSettings": { "$ref": "#/$defs/exportSettings" },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "assetManifestEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "mimeType",
+        "checksumSha256",
+        "byteLength",
+        "storageKey"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": {
+          "type": "string",
+          "enum": ["image", "animated-image", "mask", "depth", "font", "video"]
+        },
+        "mimeType": { "type": "string" },
+        "checksumSha256": { "type": "string" },
+        "byteLength": { "type": "integer", "minimum": 0 },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "frameCount": { "type": "integer", "minimum": 1 },
+        "durationUs": { "type": "integer", "minimum": 0 },
+        "storageKey": { "type": "string", "minLength": 1 },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sourceAssetIds",
+            "operation",
+            "parametersHash",
+            "createdAt"
+          ],
+          "properties": {
+            "sourceAssetIds": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "operation": { "type": "string" },
+            "parametersHash": { "type": "string" },
+            "modelId": { "type": "string" },
+            "modelRevision": { "type": "string" },
+            "createdAt": { "type": "string" }
+          }
+        }
+      }
+    },
+    "transform2D": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "scaleX", "scaleY", "rotationDeg", "anchorX", "anchorY"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "scaleX": { "type": "number" },
+        "scaleY": { "type": "number" },
+        "rotationDeg": { "type": "number" },
+        "anchorX": { "type": "number" },
+        "anchorY": { "type": "number" },
+        "flipX": { "type": "boolean" },
+        "flipY": { "type": "boolean" }
+      }
+    },
+    "effectNode": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "type", "enabled", "version", "params"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "version": { "type": "integer", "minimum": 1 },
+        "params": { "type": "object" }
+      }
+    },
+    "shape": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "x", "y", "w", "h"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["rect"] },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "w": { "type": "number" },
+        "h": { "type": "number" }
+      }
+    },
+    "visualLayerCommon": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "visible",
+        "locked",
+        "opacity",
+        "blendMode",
+        "transform",
+        "effects",
+        "animationTrackIds"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "visible": { "type": "boolean" },
+        "locked": { "type": "boolean" },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "blendMode": { "type": "string" },
+        "transform": { "$ref": "#/$defs/transform2D" },
+        "effects": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/effectNode" }
+        },
+        "animationTrackIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "layer": {
+      "oneOf": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/visualLayerCommon" },
+            {
+              "type": "object",
+              "required": ["type", "assetId"],
+              "properties": {
+                "type": { "const": "raster" },
+                "assetId": { "type": "string", "minLength": 1 },
+                "maskAssetId": { "type": "string" },
+                "rollbackAssetId": { "type": "string" },
+                "mediaMapping": { "type": "object" },
+                "pose": { "type": "object" },
+                "cutoutMotion": {
+                  "type": "string",
+                  "enum": ["None", "Float", "Drift", "Bounce", "Pulse", "Spin", "Wobble", "Orbit"]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/visualLayerCommon" },
+            {
+              "type": "object",
+              "required": ["type", "text", "style"],
+              "properties": {
+                "type": { "const": "text" },
+                "text": { "type": "string" },
+                "style": { "type": "object" },
+                "fontAssetId": { "type": "string" }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/visualLayerCommon" },
+            {
+              "type": "object",
+              "required": ["type", "childIds"],
+              "properties": {
+                "type": { "const": "group" },
+                "childIds": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/visualLayerCommon" },
+            {
+              "type": "object",
+              "required": ["type", "scope"],
+              "properties": {
+                "type": { "const": "adjustment" },
+                "scope": { "type": "string", "enum": ["below", "group"] }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/visualLayerCommon" },
+            {
+              "type": "object",
+              "required": ["type", "region", "pixelSize"],
+              "properties": {
+                "type": { "const": "pixelate" },
+                "region": { "$ref": "#/$defs/shape" },
+                "pixelSize": { "type": "number", "minimum": 1 }
+              }
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "type",
+            "name",
+            "visible",
+            "locked",
+            "region",
+            "fill",
+            "secure"
+          ],
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "type": { "const": "redaction" },
+            "name": { "type": "string" },
+            "visible": { "type": "boolean" },
+            "locked": { "type": "boolean" },
+            "region": { "$ref": "#/$defs/shape" },
+            "fill": { "type": "string" },
+            "secure": { "const": true }
+          }
+        }
+      ]
+    },
+    "keyframe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeUs", "value"],
+      "properties": {
+        "timeUs": { "type": "integer" },
+        "value": {},
+        "easing": { "type": "string" }
+      }
+    },
+    "motionModifier": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "amplitude": { "type": "number" },
+        "speed": { "type": "number" },
+        "phase": { "type": "number" }
+      }
+    },
+    "track": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "target", "mode", "keyframes", "modifiers"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["layerId", "property"],
+          "properties": {
+            "layerId": { "type": "string" },
+            "property": { "type": "string" }
+          }
+        },
+        "mode": { "type": "string", "enum": ["absolute", "additive", "multiply"] },
+        "keyframes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/keyframe" }
+        },
+        "modifiers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/motionModifier" }
+        }
+      }
+    },
+    "timeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["durationUs", "loopMode", "tracks", "trackOrder"],
+      "properties": {
+        "durationUs": { "type": "integer", "minimum": 0 },
+        "loopMode": { "type": "string", "enum": ["once", "loop", "ping-pong"] },
+        "tracks": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/track" }
+        },
+        "trackOrder": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "exportSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "fps", "quality", "loop", "paletteSize", "dither"],
+      "properties": {
+        "format": { "type": "string", "enum": ["gif", "png", "webp"] },
+        "fps": { "type": "number", "minimum": 1 },
+        "quality": { "type": "string" },
+        "loop": { "type": "integer", "minimum": 0 },
+        "paletteSize": { "type": "integer", "minimum": 2, "maximum": 256 },
+        "dither": { "type": ["boolean", "string"] },
+        "disposal": { "type": "integer" },
+        "transparent": { "type": "boolean" }
+      }
+    }
+  }
+}

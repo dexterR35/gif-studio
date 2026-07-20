@@ -1,8 +1,33 @@
 # GIF Studio
 
-A local Python desktop application and automation toolkit for turning one static image into a customizable animated GIF.
+A local-first toolkit for turning stills and GIFs into editable, exportable animations.
 
-GIF Studio is designed as a maintainable application rather than a single script. The rendering engine is independent from the user interface, so the same animation pipeline can be used from the desktop app, the command line, tests, or a future batch/API service.
+## Dual stack
+
+| Surface | Technology | How to run |
+|---------|------------|------------|
+| **Desktop** | Python 3.11+ / **PySide6** | `python run.py` |
+| **Web editor** | **JavaScript** (Vite + React) — no TypeScript requirement | `npm run dev` |
+| **Local API** | **FastAPI** (AI, GrabCut, export) | `npm run api` |
+
+Frontend source under `src/**/*.js` / `*.jsx` is intentionally **JavaScript-only** (no TS build gate).
+
+## Authority (engineering)
+
+| Doc | Role |
+|-----|------|
+| [docs/production-refactor/CURSOR_PRODUCTION_BUILD_PLAN.md](docs/production-refactor/CURSOR_PRODUCTION_BUILD_PLAN.md) | Executable production refactor plan |
+| [docs/GIF_STUDIO_MEGA_SENIOR_BUILD.md](docs/GIF_STUDIO_MEGA_SENIOR_BUILD.md) **§2** | Locked product overlays (win on conflict) |
+| [docs/production-refactor/STATUS.md](docs/production-refactor/STATUS.md) | Phase status + evidence |
+| [docs/production-refactor/ARCHITECTURE.md](docs/production-refactor/ARCHITECTURE.md) | Current architecture summary |
+| [docs/adr/](docs/adr/) | Architecture decision records |
+
+## Local models & privacy
+
+- Weights and caches prefer the repo **`models/`** directory ([models/README.md](models/README.md)).
+- Hugging Face hub downloads are **opt-in** only: set `GIF_STUDIO_ALLOW_HF=1` (or `true`/`yes`). Default is local-only.
+- **GrabCut** vs rembg soft-matte is an **explicit UI method choice** — never a silent fallback when AI fails.
+- Best quality AI and export are **local-backend-first** when FastAPI is healthy ([ADR 0010](docs/adr/0010-ai-local-backend-routing.md)).
 
 ## Implemented features
 
@@ -28,16 +53,13 @@ GIF Studio is designed as a maintainable application rather than a single script
 - Automated tests for animation, transparency, metadata, sidecars, and CLI export.
 
 A complete product and engineering specification is in [BUILD_SPEC.md](BUILD_SPEC.md).  
-**Execution plan:** [docs/production-refactor/CURSOR_PRODUCTION_BUILD_PLAN.md](docs/production-refactor/CURSOR_PRODUCTION_BUILD_PLAN.md)  
-**Locked overlays / control surface:** [docs/GIF_STUDIO_MEGA_SENIOR_BUILD.md](docs/GIF_STUDIO_MEGA_SENIOR_BUILD.md)  
-**Status log:** [docs/production-refactor/STATUS.md](docs/production-refactor/STATUS.md)  
 Full archive: [docs/GIF_STUDIO_COMPLETE_PRODUCTION_MANUAL.md](docs/GIF_STUDIO_COMPLETE_PRODUCTION_MANUAL.md).
 
 ## Web studio with smart element animation
 
-The Vite interface can use a local FastAPI service for rembg/ONNX AI segmentation,
-OpenCV GrabCut selection and background inpainting, ImageIO GIF encoding, and
-optional gifsicle optimization.
+The Vite interface uses a local FastAPI service for rembg/ONNX AI segmentation,
+**explicit** OpenCV GrabCut (selected in the cutout method UI), background inpainting,
+ImageIO GIF encoding, and optional gifsicle optimization.
 All image data stays on the local machine.
 
 Install both application stacks:
@@ -49,26 +71,29 @@ python -m pip install -r requirements-web.txt
 npm install
 ```
 
-Start the API in one terminal:
+Or on macOS/Linux:
 
-```powershell
-npm run api
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-web.txt
+npm install
 ```
 
-Start Vite in a second terminal:
+Start both (or separately with `npm run api` + `npm run dev`):
 
-```powershell
-npm run dev
+```bash
+npm start
 ```
 
-Open `http://127.0.0.1:5173`, choose **Elements**, and draw a close rectangle
-around an object. The API first tries the local `isnet-general-use` AI model and
-falls back to OpenCV GrabCut when appropriate. The AI model is downloaded to the
-local rembg model cache on first use; subsequent processing is local. OpenCV
-inpaints the original position. GIF export sends the rendered frames to ImageIO
-and uses gifsicle optimization when the platform executable is available. If the
-API is offline, the browser automatically falls back to edge-based selection and
-the bundled GIF encoder.
+Open `http://127.0.0.1:5173`. Choose a soft-matte model **or** OpenCV GrabCut in the
+cutout controls — GrabCut is never applied as a silent fallback when rembg fails.
+Models load from local rembg / `models/` caches (HF only if `GIF_STUDIO_ALLOW_HF` is set).
+OpenCV can inpaint the original position after cutout. GIF export prefers `/api/export`
+(ImageIO + optional gifsicle). If the API is offline, the browser uses degraded
+edge-based selection and the bundled gifenc path (labeled offline / degraded).
+
+FE unit tests: `npm test` (Vitest). OpenAPI drift: `npm run check:openapi`.
 
 ### Optional heavy AI engines (SAM2 · Grounding DINO · Real-ESRGAN · RIFE)
 

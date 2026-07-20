@@ -11,12 +11,29 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       strictPort: true,
       proxy: { '/api': apiProxy },
+      // Never watch Python venv / AI weights — they exhaust inotify (ENOSPC).
+      watch: {
+        ignored: [
+          '**/.venv/**',
+          '**/venv/**',
+          '**/__pycache__/**',
+          '**/models/**',
+          '**/third_party/**',
+          '**/.git/**',
+          '**/.pytest_cache/**',
+          '**/.ruff_cache/**',
+        ],
+      },
     },
     optimizeDeps: {
       exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util'],
     },
     worker: {
       format: 'es',
+    },
+    test: {
+      environment: 'node',
+      include: ['tests/js/**/*.test.js'],
     },
   }
 })

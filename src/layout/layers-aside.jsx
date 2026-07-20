@@ -1,18 +1,21 @@
-import { useEffect, useRef, useState } from 'react'
-import { Frame, ImageIcon, Layers3, Maximize2, Type } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Frame, ImageIcon, Layers3, Maximize2, Type, Shield, Grid3x3 } from 'lucide-react'
 import { EmptyState, LayerRow } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
 import { useStudioStore } from '../store/studio-store'
+import { isFeatureEnabled } from '../domain/feature-flags'
+import { buildUnifiedLayerList } from '../domain/layers/unified-layer-list'
 
 /**
  * Third sidebar — Photoshop-style layers (front at top · drag to reorder).
- * Layer stacks + selection live in Zustand; actions stay on useStudio().
+ * When unifiedLayers is on, order comes from Project V2 rootLayerIds.
  */
 export function LayersAside() {
   const elements = useStudioStore((s) => s.project.elements)
   const overlays = useStudioStore((s) => s.project.overlays)
   const textLayers = useStudioStore((s) => s.project.textLayers)
   const enhancedLayer = useStudioStore((s) => s.project.enhancedLayer)
+  const projectV2 = useStudioStore((s) => s.projectV2)
   const selectedElements = useStudioStore((s) => s.selection.selectedElements)
   const selectedOverlay = useStudioStore((s) => s.selection.selectedOverlay)
   const selectedText = useStudioStore((s) => s.selection.selectedText)
@@ -30,6 +33,7 @@ export function LayersAside() {
   const setPlaying = useStudioStore((s) => s.setPlaying)
 
   const selectedElement = selectedElements.length ? selectedElements[selectedElements.length - 1] : null
+  const unified = isFeatureEnabled('unifiedLayers') && projectV2?.schemaVersion === 2
 
   const {
     selectLayer, selectBaseImage, toggleImageLock,
@@ -42,10 +46,18 @@ export function LayersAside() {
   } = useStudio()
 
   const dragRef = useRef(null)
-  const [dragState, setDragState] = useState(null) // { kind, id, overId }
+  const [dragState, setDragState] = useState(null)
 
-  const layerCount = elements.length + overlays.length + textLayers.length + (enhancedLayer ? 1 : 0)
-  // Front of stack at top of list (array end → first). Higher index draws on top.
+  const unifiedRows = useMemo(() => (
+    unified
+      ? buildUnifiedLayerList(projectV2, { elements, overlays, textLayers, enhancedLayer })
+      : []
+  ), [unified, projectV2, elements, overlays, textLayers, enhancedLayer])
+
+  const layerCount = unified
+    ? unifiedRows.length
+    : elements.length + overlays.length + textLayers.length + (enhancedLayer ? 1 : 0)
+
   const elementsFrontFirst = [...elements].reverse()
   const overlaysFrontFirst = [...overlays].reverse()
   const textFrontFirst = [...textLayers].reverse()
@@ -87,7 +99,6 @@ export function LayersAside() {
     setDragState(null)
   }
 
-  // While dragging, listen on window so reorder works even when the pointer leaves the grip.
   useEffect(() => {
     if (!dragState) return undefined
     const onMove = (event) => moveLayerDrag(event)
@@ -107,129 +118,12 @@ export function LayersAside() {
     dragState?.kind === kind && dragState?.overId === id && dragState?.id !== id
   )
 
-  return (
-    <aside
-      aria-label="Layers"
-      className="scrollbar flex h-full w-[200px] shrink-0 flex-col overflow-y-auto overscroll-contain border-l border-white/[.06] bg-panel"
-    >
-      <div className="flex h-11 shrink-0 items-center border-b border-white/[.06] px-3">
-        <span className="text-[10px] font-semibold uppercase tracking-[.14em] text-zinc-500">
-          Layers · {layerCount}
-        </span>
-      </div>
-
-      <div className="flex flex-col gap-1 p-2">
-        {!elements.length && !overlays.length && !textLayers.length && (
-          <EmptyState icon={Layers3} className="mt-2 px-1">
-            Use a selection tool to extract layers, or add an image
-          </EmptyState>
-        )}
-
-        {textFrontFirst.map((layer) => {
-          const selected = selectedText === layer.id
-          return (
-            <LayerRow
-              key={layer.id}
-              layerKind="text"
-              layerId={layer.id}
-              selected={selected}
-              onClick={() => {
-                clearLayerSelection()
-                setSelectedOverlay(null)
-                setSelectedText(layer.id)
-                setPlaying(false)
-                setSelectMode(false)
-                setMaskEditing(false)
-                goToWorkspace('text')
-              }}
-              icon={Type}
-              title={layer.text || 'Empty text'}
-              subtitle="Text"
-              visible={layer.visible}
-              locked={layer.locked}
-              onToggleVisible={() => updateText('visible', !layer.visible)}
-              onToggleLock={() => toggleTextLock(layer.id)}
-              onRemove={() => removeText(layer.id)}
-              onDragStart={(e) => beginLayerDrag(e, 'text', layer.id)}
-              onDragEnd={endLayerDrag}
-              dragging={isDragging('text', layer.id)}
-              dropTarget={isDropTarget('text', layer.id)}
-              className="!rounded-md !p-1.5"
-            />
-          )
-        })}
-
-        {elementsFrontFirst.map((el) => {
-          const selected = selectedElements.includes(el.id)
-          const multi = selectedElements.length >= 2
-          const role = selected && multi
-            ? (el.id === selectedElement ? 'primary' : 'secondary')
-            : null
-          return (
-            <LayerRow
-              key={el.id}
-              layerKind="element"
-              layerId={el.id}
-              selected={selected}
-              role={role}
-              onClick={(event) => {
-                selectLayer(el.id, event)
-                setSelectMode(false)
-              }}
-              thumb={(
-                <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded checker ring-1 ring-white/[.08]">
-                  <img src={el.bitmap.toDataURL()} alt="" className="max-h-full max-w-full" />
-                </span>
-              )}
-              title={el.name}
-              subtitle={el.motion}
-              visible={el.visible}
-              locked={el.locked}
-              onToggleVisible={() => toggleElementVisible(el.id)}
-              onToggleLock={() => toggleElementLock(el.id)}
-              onRemove={() => removeElement(el.id)}
-              onDragStart={(e) => beginLayerDrag(e, 'element', el.id)}
-              onDragEnd={endLayerDrag}
-              dragging={isDragging('element', el.id)}
-              dropTarget={isDropTarget('element', el.id)}
-              className="!rounded-md !p-1.5"
-            />
-          )
-        })}
-
-        {overlaysFrontFirst.map((overlay) => {
-          const selected = selectedOverlay === overlay.id
-          return (
-            <LayerRow
-              key={overlay.id}
-              layerKind="overlay"
-              layerId={overlay.id}
-              selected={selected}
-              onClick={() => {
-                selectOverlay(overlay.id)
-                setSelectMode(false)
-                setMaskEditing(false)
-              }}
-              thumb={(
-                <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded checker ring-1 ring-white/[.08]">
-                  <img src={overlay.url} alt="" className="max-h-full max-w-full object-contain" />
-                </span>
-              )}
-              title={overlay.name}
-              subtitle="Image"
-              visible={overlay.visible}
-              onToggleVisible={() => toggleOverlayVisible(overlay.id)}
-              onRemove={() => removeOverlay(overlay.id)}
-              onDragStart={(e) => beginLayerDrag(e, 'overlay', overlay.id)}
-              onDragEnd={endLayerDrag}
-              dragging={isDragging('overlay', overlay.id)}
-              dropTarget={isDropTarget('overlay', overlay.id)}
-              className="!rounded-md !p-1.5"
-            />
-          )
-        })}
-
+  const renderUnifiedRow = (row) => {
+    const kind = row.legacyKind
+    if (kind === 'background') {
+      return (
         <LayerRow
+          key={row.id}
           selected={baseImageSelected}
           onClick={() => {
             selectBaseImage()
@@ -245,40 +139,369 @@ export function LayersAside() {
           onToggleLock={toggleImageLock}
           className="!rounded-md !p-1.5"
         />
-
-        {enhancedLayer && (
-          <LayerRow
-            selected={enhancedSelected}
-            onClick={() => {
-              selectEnhancedLayer()
-              setSelectMode(false)
-              setMaskEditing(false)
-              goToWorkspace('scale')
-            }}
-            icon={Maximize2}
-            title={enhancedLayer.name || 'Enhanced'}
-            subtitle={`${enhancedLayer.width}×${enhancedLayer.height} · under base`}
-            visible={enhancedLayer.visible !== false}
-            onToggleVisible={() => updateEnhancedLayer({ visible: enhancedLayer.visible === false })}
-            onRemove={removeEnhancedLayer}
-            className="!rounded-md !p-1.5"
-          />
-        )}
-
+      )
+    }
+    if (kind === 'enhanced') {
+      return (
         <LayerRow
-          selected={artboardSelected}
+          key={row.id}
+          selected={enhancedSelected}
           onClick={() => {
-            selectArtboard()
+            selectEnhancedLayer()
+            setSelectMode(false)
+            setMaskEditing(false)
+            goToWorkspace('scale')
+          }}
+          icon={Maximize2}
+          title={row.name}
+          subtitle={`${row.subtitle} · rollback kept`}
+          visible={row.visible}
+          onToggleVisible={() => updateEnhancedLayer({ visible: enhancedLayer?.visible === false })}
+          onRemove={removeEnhancedLayer}
+          className="!rounded-md !p-1.5"
+        />
+      )
+    }
+    if (kind === 'text') {
+      const layer = row.legacyEntity
+      if (!layer) return null
+      return (
+        <LayerRow
+          key={row.id}
+          layerKind="text"
+          layerId={layer.id}
+          selected={selectedText === layer.id}
+          onClick={() => {
+            clearLayerSelection()
+            setSelectedOverlay(null)
+            setSelectedText(layer.id)
+            setPlaying(false)
+            setSelectMode(false)
+            setMaskEditing(false)
+            goToWorkspace('text')
+          }}
+          icon={Type}
+          title={layer.text || 'Empty text'}
+          subtitle="Text"
+          visible={layer.visible}
+          locked={layer.locked}
+          onToggleVisible={() => updateText('visible', !layer.visible)}
+          onToggleLock={() => toggleTextLock(layer.id)}
+          onRemove={() => removeText(layer.id)}
+          onDragStart={(e) => beginLayerDrag(e, 'text', layer.id)}
+          onDragEnd={endLayerDrag}
+          dragging={isDragging('text', layer.id)}
+          dropTarget={isDropTarget('text', layer.id)}
+          className="!rounded-md !p-1.5"
+        />
+      )
+    }
+    if (kind === 'element') {
+      const el = row.legacyEntity
+      if (!el) return null
+      const selected = selectedElements.includes(el.id)
+      const multi = selectedElements.length >= 2
+      const role = selected && multi
+        ? (el.id === selectedElement ? 'primary' : 'secondary')
+        : null
+      return (
+        <LayerRow
+          key={row.id}
+          layerKind="element"
+          layerId={el.id}
+          selected={selected}
+          role={role}
+          onClick={(event) => {
+            selectLayer(el.id, event)
+            setSelectMode(false)
+          }}
+          thumb={(
+            <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded checker ring-1 ring-white/[.08]">
+              {el.bitmap?.toDataURL ? (
+                <img src={el.bitmap.toDataURL()} alt="" className="max-h-full max-w-full" />
+              ) : null}
+            </span>
+          )}
+          title={el.name}
+          subtitle={el.cutoutMode || el.motion || 'None'}
+          visible={el.visible}
+          locked={el.locked}
+          onToggleVisible={() => toggleElementVisible(el.id)}
+          onToggleLock={() => toggleElementLock(el.id)}
+          onRemove={() => removeElement(el.id)}
+          onDragStart={(e) => beginLayerDrag(e, 'element', el.id)}
+          onDragEnd={endLayerDrag}
+          dragging={isDragging('element', el.id)}
+          dropTarget={isDropTarget('element', el.id)}
+          className="!rounded-md !p-1.5"
+        />
+      )
+    }
+    if (kind === 'overlay') {
+      const overlay = row.legacyEntity
+      if (!overlay) return null
+      return (
+        <LayerRow
+          key={row.id}
+          layerKind="overlay"
+          layerId={overlay.id}
+          selected={selectedOverlay === overlay.id}
+          onClick={() => {
+            selectOverlay(overlay.id)
             setSelectMode(false)
             setMaskEditing(false)
           }}
-          icon={Frame}
-          title="Artboard"
-          subtitle={canvasLocked ? 'Locked' : 'Canvas size'}
-          locked={canvasLocked}
-          onToggleLock={toggleCanvasLock}
+          thumb={(
+            <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded checker ring-1 ring-white/[.08]">
+              <img src={overlay.url} alt="" className="max-h-full max-w-full object-contain" />
+            </span>
+          )}
+          title={overlay.name}
+          subtitle="Image"
+          visible={overlay.visible}
+          onToggleVisible={() => toggleOverlayVisible(overlay.id)}
+          onRemove={() => removeOverlay(overlay.id)}
+          onDragStart={(e) => beginLayerDrag(e, 'overlay', overlay.id)}
+          onDragEnd={endLayerDrag}
+          dragging={isDragging('overlay', overlay.id)}
+          dropTarget={isDropTarget('overlay', overlay.id)}
           className="!rounded-md !p-1.5"
         />
+      )
+    }
+    if (kind === 'pixelate') {
+      return (
+        <LayerRow
+          key={row.id}
+          icon={Grid3x3}
+          title={row.name}
+          subtitle="Pixelate (visual)"
+          visible={row.visible}
+          locked={row.locked}
+          className="!rounded-md !p-1.5"
+        />
+      )
+    }
+    if (kind === 'redaction') {
+      return (
+        <LayerRow
+          key={row.id}
+          icon={Shield}
+          title={row.name}
+          subtitle="Secure redact"
+          visible={row.visible}
+          locked={row.locked}
+          className="!rounded-md !p-1.5"
+        />
+      )
+    }
+    return (
+      <LayerRow
+        key={row.id}
+        icon={Layers3}
+        title={row.name}
+        subtitle={row.subtitle}
+        visible={row.visible}
+        locked={row.locked}
+        className="!rounded-md !p-1.5"
+      />
+    )
+  }
+
+  return (
+    <aside
+      aria-label="Layers"
+      className="scrollbar flex h-full w-[200px] shrink-0 flex-col overflow-y-auto overscroll-contain border-l border-white/[.06] bg-panel"
+    >
+      <div className="flex h-11 shrink-0 items-center border-b border-white/[.06] px-3">
+        <span className="text-[10px] font-semibold uppercase tracking-[.14em] text-zinc-500">
+          Layers · {layerCount}{unified ? ' · V2' : ''}
+        </span>
+      </div>
+
+      <div className="flex flex-col gap-1 p-2">
+        {!layerCount && (
+          <EmptyState icon={Layers3} className="mt-2 px-1">
+            Use a selection tool to extract layers, or add an image
+          </EmptyState>
+        )}
+
+        {unified ? (
+          <>
+            {unifiedRows.map((row) => renderUnifiedRow(row))}
+            <LayerRow
+              selected={artboardSelected}
+              onClick={() => {
+                selectArtboard()
+                setSelectMode(false)
+                setMaskEditing(false)
+              }}
+              icon={Frame}
+              title="Artboard"
+              subtitle={canvasLocked ? 'Locked' : 'Canvas size'}
+              locked={canvasLocked}
+              onToggleLock={toggleCanvasLock}
+              className="!rounded-md !p-1.5"
+            />
+          </>
+        ) : (
+          <>
+            {textFrontFirst.map((layer) => {
+              const selected = selectedText === layer.id
+              return (
+                <LayerRow
+                  key={layer.id}
+                  layerKind="text"
+                  layerId={layer.id}
+                  selected={selected}
+                  onClick={() => {
+                    clearLayerSelection()
+                    setSelectedOverlay(null)
+                    setSelectedText(layer.id)
+                    setPlaying(false)
+                    setSelectMode(false)
+                    setMaskEditing(false)
+                    goToWorkspace('text')
+                  }}
+                  icon={Type}
+                  title={layer.text || 'Empty text'}
+                  subtitle="Text"
+                  visible={layer.visible}
+                  locked={layer.locked}
+                  onToggleVisible={() => updateText('visible', !layer.visible)}
+                  onToggleLock={() => toggleTextLock(layer.id)}
+                  onRemove={() => removeText(layer.id)}
+                  onDragStart={(e) => beginLayerDrag(e, 'text', layer.id)}
+                  onDragEnd={endLayerDrag}
+                  dragging={isDragging('text', layer.id)}
+                  dropTarget={isDropTarget('text', layer.id)}
+                  className="!rounded-md !p-1.5"
+                />
+              )
+            })}
+
+            {elementsFrontFirst.map((el) => {
+              const selected = selectedElements.includes(el.id)
+              const multi = selectedElements.length >= 2
+              const role = selected && multi
+                ? (el.id === selectedElement ? 'primary' : 'secondary')
+                : null
+              return (
+                <LayerRow
+                  key={el.id}
+                  layerKind="element"
+                  layerId={el.id}
+                  selected={selected}
+                  role={role}
+                  onClick={(event) => {
+                    selectLayer(el.id, event)
+                    setSelectMode(false)
+                  }}
+                  thumb={(
+                    <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded checker ring-1 ring-white/[.08]">
+                      <img src={el.bitmap.toDataURL()} alt="" className="max-h-full max-w-full" />
+                    </span>
+                  )}
+                  title={el.name}
+                  subtitle={el.motion}
+                  visible={el.visible}
+                  locked={el.locked}
+                  onToggleVisible={() => toggleElementVisible(el.id)}
+                  onToggleLock={() => toggleElementLock(el.id)}
+                  onRemove={() => removeElement(el.id)}
+                  onDragStart={(e) => beginLayerDrag(e, 'element', el.id)}
+                  onDragEnd={endLayerDrag}
+                  dragging={isDragging('element', el.id)}
+                  dropTarget={isDropTarget('element', el.id)}
+                  className="!rounded-md !p-1.5"
+                />
+              )
+            })}
+
+            {overlaysFrontFirst.map((overlay) => {
+              const selected = selectedOverlay === overlay.id
+              return (
+                <LayerRow
+                  key={overlay.id}
+                  layerKind="overlay"
+                  layerId={overlay.id}
+                  selected={selected}
+                  onClick={() => {
+                    selectOverlay(overlay.id)
+                    setSelectMode(false)
+                    setMaskEditing(false)
+                  }}
+                  thumb={(
+                    <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded checker ring-1 ring-white/[.08]">
+                      <img src={overlay.url} alt="" className="max-h-full max-w-full object-contain" />
+                    </span>
+                  )}
+                  title={overlay.name}
+                  subtitle="Image"
+                  visible={overlay.visible}
+                  onToggleVisible={() => toggleOverlayVisible(overlay.id)}
+                  onRemove={() => removeOverlay(overlay.id)}
+                  onDragStart={(e) => beginLayerDrag(e, 'overlay', overlay.id)}
+                  onDragEnd={endLayerDrag}
+                  dragging={isDragging('overlay', overlay.id)}
+                  dropTarget={isDropTarget('overlay', overlay.id)}
+                  className="!rounded-md !p-1.5"
+                />
+              )
+            })}
+
+            <LayerRow
+              selected={baseImageSelected}
+              onClick={() => {
+                selectBaseImage()
+                setSelectMode(false)
+                setMaskEditing(false)
+              }}
+              icon={ImageIcon}
+              title="Background"
+              subtitle={imageLocked ? 'Locked' : 'Base image'}
+              visible={imageVisible !== false}
+              onToggleVisible={() => setImageVisible((v) => !v)}
+              locked={imageLocked}
+              onToggleLock={toggleImageLock}
+              className="!rounded-md !p-1.5"
+            />
+
+            {enhancedLayer && (
+              <LayerRow
+                selected={enhancedSelected}
+                onClick={() => {
+                  selectEnhancedLayer()
+                  setSelectMode(false)
+                  setMaskEditing(false)
+                  goToWorkspace('scale')
+                }}
+                icon={Maximize2}
+                title={enhancedLayer.name || 'Enhanced'}
+                subtitle={`${enhancedLayer.width}×${enhancedLayer.height} · under base`}
+                visible={enhancedLayer.visible !== false}
+                onToggleVisible={() => updateEnhancedLayer({ visible: enhancedLayer.visible === false })}
+                onRemove={removeEnhancedLayer}
+                className="!rounded-md !p-1.5"
+              />
+            )}
+
+            <LayerRow
+              selected={artboardSelected}
+              onClick={() => {
+                selectArtboard()
+                setSelectMode(false)
+                setMaskEditing(false)
+              }}
+              icon={Frame}
+              title="Artboard"
+              subtitle={canvasLocked ? 'Locked' : 'Canvas size'}
+              locked={canvasLocked}
+              onToggleLock={toggleCanvasLock}
+              className="!rounded-md !p-1.5"
+            />
+          </>
+        )}
 
         {selectedElements.length >= 2 && (
           <p className="mt-2 px-1 text-[9px] font-semibold uppercase tracking-wider text-acid/80">

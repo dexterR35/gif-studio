@@ -8,6 +8,7 @@ build/
 !.env.example
 dist/
 node_modules/
+.tmp/
 *.egg-info/
 *.gif.json
 .DS_Store
@@ -24,3 +25,4 @@ third_party/**
 *.pt
 *.pkl
 *.part
+.tmp/

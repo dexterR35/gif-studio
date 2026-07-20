@@ -1,5 +1,9 @@
 import { useEffect } from 'react'
 import { Outlet } from 'react-router-dom'
+import {
+  LIVE_REGION_ASSERTIVE_ID,
+  LIVE_REGION_POLITE_ID,
+} from '../a11y/live-region'
 import { BusyOverlay, ExportModal, Toast } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
 import { LAYER_WORKSPACES } from '../lib/routes'
@@ -94,6 +98,22 @@ export function StudioLayout() {
 
   return (
     <div className="flex h-screen max-h-screen flex-col overflow-hidden bg-ink text-zinc-100">
+      {/* Visually hidden live regions for screen-reader announcements (Phase 13). */}
+      <div
+        id={LIVE_REGION_POLITE_ID}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      />
+      <div
+        id={LIVE_REGION_ASSERTIVE_ID}
+        role="alert"
+        aria-live="assertive"
+        aria-atomic="true"
+        className="sr-only"
+      />
+
       <StudioHeader />
       <WorkspaceNav />
 

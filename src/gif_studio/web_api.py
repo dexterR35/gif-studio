@@ -22,6 +22,8 @@ from starlette.concurrency import run_in_threadpool
 
 from .engine import MAX_UPLOAD_BYTES, validate_uploaded_image
 from .ai_pipeline import default_rembg_model
+from .api import jobs_router
+from .api.errors import RequestIdMiddleware
 from .security_limits import (
     SecurityRateLimitMiddleware,
     acquire_ai_slot,
@@ -37,6 +39,7 @@ _cors_origins = [
     if origin.strip()
 ]
 # Added before CORS → runs after CORS on the way in (POST bodies already allowed).
+app.add_middleware(RequestIdMiddleware)
 app.add_middleware(SecurityRateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -48,8 +51,11 @@ app.add_middleware(
         "X-GIF-Encoder", "X-GIF-Optimized", "X-GIF-Original-Bytes", "X-GIF-Bytes",
         "X-GIF-Compression", "X-Upscale-Engine", "X-Interpolate-Engine",
         "Retry-After", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Window",
+        "X-Request-Id",
     ],
 )
+
+app.include_router(jobs_router)
 
 MAX_IMAGE_BYTES = MAX_UPLOAD_BYTES
 MAX_FRAMES = 240

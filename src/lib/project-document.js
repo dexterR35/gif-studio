@@ -1,8 +1,13 @@
 /**
  * Versioned studio project document — no bundled demo assets.
  * Session starts empty; user upload / import fills source + layers.
+ *
+ * V2 migration lives in the domain kernel; re-exported here for convenience
+ * without changing V1 createEmptyProject behavior.
  */
 import { EFFECT_DEFAULTS, INITIAL, SYSTEM_FONTS } from './presets'
+export { migrateV1ToV2 } from '../domain/project/migrate-v1-to-v2.js'
+export { createEmptyProjectV2 } from '../domain/project/create-empty-v2.js'
 
 export const PROJECT_SCHEMA_VERSION = 1
 

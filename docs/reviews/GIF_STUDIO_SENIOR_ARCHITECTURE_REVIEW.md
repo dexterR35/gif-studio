@@ -1,6 +1,8 @@
+> **Canonical review path.** Sibling docs under `docs/` — use `../` for MEGA/manual links.
+
 # GIF Studio - Senior Architecture and Engineering Review
 
-> **Canonical master (includes this file as Part E):** [GIF_STUDIO_COMPLETE_PRODUCTION_MANUAL.md](./GIF_STUDIO_COMPLETE_PRODUCTION_MANUAL.md)
+> **Canonical master (includes this file as Part E):** [GIF_STUDIO_COMPLETE_PRODUCTION_MANUAL.md](../GIF_STUDIO_COMPLETE_PRODUCTION_MANUAL.md)
 
 ## Review scope
 

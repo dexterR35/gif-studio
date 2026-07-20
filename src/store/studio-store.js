@@ -1,5 +1,11 @@
 import { create } from 'zustand'
 import { createEmptyProject, projectFromJson, serializeProject } from '../lib/project-document'
+import {
+  ensureProjectV2,
+  getActiveProjectDocument,
+  loadProjectPair,
+  syncProjectV2FromV1,
+} from './project-v2-bridge'
 
 const apply = (prev, updater) => (typeof updater === 'function' ? updater(prev) : updater)
 
@@ -94,6 +100,8 @@ const patchProject = (state, partial) => ({
  */
 export const useStudioStore = create((set, get) => ({
   project: createEmptyProject(),
+  /** V2 document kept alongside V1 when `projectV2` feature flag is on. */
+  projectV2: ensureProjectV2(createEmptyProject()),
   selection: { ...INITIAL_SELECTION },
   tools: { ...INITIAL_TOOLS },
   ui: { ...INITIAL_UI },
@@ -124,83 +132,123 @@ export const useStudioStore = create((set, get) => ({
   },
 
   // ── Project document ──────────────────────────────────────────────
-  resetProject: () => set({ project: createEmptyProject() }),
+  resetProject: () => {
+    const project = createEmptyProject()
+    set({ project, projectV2: ensureProjectV2(project) })
+  },
 
-  loadProject: (raw) => set({ project: projectFromJson(raw) }),
+  loadProject: (raw) => {
+    const parsed = raw?.schemaVersion === 2 ? raw : projectFromJson(raw)
+    const pair = loadProjectPair(parsed)
+    set({ project: pair.project, projectV2: pair.projectV2 })
+  },
 
-  patchProject: (partial) => set((state) => patchProject(state, partial)),
+  patchProject: (partial) => set((state) => {
+    const next = patchProject(state, partial)
+    return {
+      ...next,
+      projectV2: syncProjectV2FromV1(next.project, state.projectV2),
+    }
+  }),
+
+  setProjectV2: (updater) => set((state) => ({
+    projectV2: typeof updater === 'function' ? updater(state.projectV2) : updater,
+  })),
 
   setSource: (updater) => set((state) => {
     const source = apply(state.project.source, updater)
-    return patchProject(state, {
+    const next = patchProject(state, {
       source,
       name: source?.name ? source.name.replace(/\.[^.]+$/, '') : state.project.name,
     })
+    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
   }),
 
   setSettings: (updater) => set((state) => {
     const prev = state.project.settings
-    const next = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
-    return patchProject(state, { settings: next })
+    const nextSettings = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
+    const next = patchProject(state, { settings: nextSettings })
+    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
   }),
 
-  setElements: (updater) => set((state) => (
-    patchProject(state, { elements: apply(state.project.elements, updater) })
-  )),
+  setElements: (updater) => set((state) => {
+    const next = patchProject(state, { elements: apply(state.project.elements, updater) })
+    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
+  }),
 
-  setOverlays: (updater) => set((state) => (
-    patchProject(state, { overlays: apply(state.project.overlays, updater) })
-  )),
+  setOverlays: (updater) => set((state) => {
+    const next = patchProject(state, { overlays: apply(state.project.overlays, updater) })
+    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
+  }),
 
-  setTextLayers: (updater) => set((state) => (
-    patchProject(state, { textLayers: apply(state.project.textLayers, updater) })
-  )),
+  setTextLayers: (updater) => set((state) => {
+    const next = patchProject(state, { textLayers: apply(state.project.textLayers, updater) })
+    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
+  }),
 
-  setEnhancedLayer: (updater) => set((state) => (
-    patchProject(state, { enhancedLayer: apply(state.project.enhancedLayer, updater) })
-  )),
+  setEnhancedLayer: (updater) => set((state) => {
+    const next = patchProject(state, { enhancedLayer: apply(state.project.enhancedLayer, updater) })
+    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
+  }),
 
   setGifEffects: (updater) => set((state) => {
     const prev = state.project.gifEffects
-    const next = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
-    return patchProject(state, { gifEffects: next })
+    const nextEffects = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
+    const next = patchProject(state, { gifEffects: nextEffects })
+    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
   }),
 
   setImageEdits: (updater) => set((state) => {
     const prev = state.project.imageEdits
-    const next = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
-    return patchProject(state, { imageEdits: next })
+    const nextEdits = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
+    const next = patchProject(state, { imageEdits: nextEdits })
+    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
   }),
 
   setCensor: (updater) => set((state) => {
     const prev = state.project.censor
-    const next = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
-    return { project: { ...state.project, censor: next } }
+    const nextCensor = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
+    const project = { ...state.project, censor: nextCensor }
+    return { project, projectV2: syncProjectV2FromV1(project, state.projectV2) }
   }),
 
   setParallax: (updater) => set((state) => {
     const prev = state.project.parallax
-    const next = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
-    return { project: { ...state.project, parallax: next } }
+    const nextParallax = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
+    const project = { ...state.project, parallax: nextParallax }
+    return { project, projectV2: syncProjectV2FromV1(project, state.projectV2) }
   }),
 
-  setFontOptions: (updater) => set((state) => (
-    patchProject(state, { fontOptions: apply(state.project.fontOptions, updater) })
-  )),
+  setFontOptions: (updater) => set((state) => {
+    const next = patchProject(state, { fontOptions: apply(state.project.fontOptions, updater) })
+    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
+  }),
 
-  setKeyframes: (keyframes) => set((state) => patchProject(state, { keyframes })),
+  setKeyframes: (keyframes) => set((state) => {
+    const next = patchProject(state, { keyframes })
+    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
+  }),
 
-  addKeyframe: (kf) => set((state) => patchProject(state, {
-    keyframes: [...(state.project.keyframes || []), kf],
-  })),
+  addKeyframe: (kf) => set((state) => {
+    const next = patchProject(state, {
+      keyframes: [...(state.project.keyframes || []), kf],
+    })
+    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
+  }),
 
-  updateKeyframe: (id, patch) => set((state) => patchProject(state, {
-    keyframes: (state.project.keyframes || []).map((k) => (k.id === id ? { ...k, ...patch } : k)),
-  })),
+  updateKeyframe: (id, patch) => set((state) => {
+    const next = patchProject(state, {
+      keyframes: (state.project.keyframes || []).map((k) => (k.id === id ? { ...k, ...patch } : k)),
+    })
+    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
+  }),
 
-  removeKeyframe: (id) => set((state) => patchProject(state, {
-    keyframes: (state.project.keyframes || []).filter((k) => k.id !== id),
-  })),
+  removeKeyframe: (id) => set((state) => {
+    const next = patchProject(state, {
+      keyframes: (state.project.keyframes || []).filter((k) => k.id !== id),
+    })
+    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
+  }),
 
   // ── Selection / layers chrome ─────────────────────────────────────
   setSelectedElements: (updater) => set((state) => ({
@@ -376,8 +424,10 @@ export const useStudioStore = create((set, get) => ({
   /** Clear project + selection/tools/session UI (keeps API capability probe). */
   resetStudio: () => {
     const { apiAvailable, apiInfo } = get().session
+    const project = createEmptyProject()
     set({
-      project: createEmptyProject(),
+      project,
+      projectV2: ensureProjectV2(project),
       selection: { ...INITIAL_SELECTION },
       tools: { ...INITIAL_TOOLS },
       ui: { ...INITIAL_UI },
@@ -386,10 +436,14 @@ export const useStudioStore = create((set, get) => ({
   },
 
   exportDocument: (opts) => serializeProject(get().project, opts),
+
+  /** Prefer V2 when flag on; else V1. */
+  getActiveProjectDocument: () => getActiveProjectDocument(get()),
 }))
 
 /** Selector helpers — prefer these in components over useStudio() for new code. */
 export const selectProject = (s) => s.project
+export const selectProjectV2 = (s) => s.projectV2
 export const selectSettings = (s) => s.project.settings
 export const selectElements = (s) => s.project.elements
 export const selectOverlays = (s) => s.project.overlays
@@ -399,3 +453,5 @@ export const selectTools = (s) => s.tools
 export const selectUi = (s) => s.ui
 export const selectSession = (s) => s.session
 export const selectCapabilities = (s) => s.capabilities
+
+export { getActiveProjectDocument } from './project-v2-bridge'
