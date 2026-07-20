@@ -1,6 +1,5 @@
 import { Menu, RotateCcw, Zap, Download, LoaderCircle } from 'lucide-react'
 import { Badge, Button } from '../components/ui'
-import { ModelsInstallPanel } from '../components/studio/models-install-panel'
 import { useStudio } from '../context/studio-provider'
 
 export function StudioHeader() {
@@ -21,7 +20,6 @@ export function StudioHeader() {
         </div>
         <div className="display text-[15px] font-extrabold tracking-tight">My Studio</div>
         <Badge className="hidden sm:block">LOCAL</Badge>
-        <ModelsInstallPanel compact className="hidden sm:block" />
       </div>
       <div className="flex items-center gap-2">
         <Button onClick={reset} disabled={studioLocked} className="hidden sm:inline-flex" size="md">
