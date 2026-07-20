@@ -6,7 +6,12 @@ export default defineConfig(({ mode }) => {
   const apiProxy = env.VITE_API_PROXY || 'http://127.0.0.1:8000'
   return {
     plugins: [react()],
-    server: { proxy: { '/api': apiProxy } },
+    server: {
+      host: '127.0.0.1',
+      port: 5173,
+      strictPort: true,
+      proxy: { '/api': apiProxy },
+    },
     optimizeDeps: {
       exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util'],
     },

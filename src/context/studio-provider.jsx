@@ -2014,8 +2014,9 @@ export function StudioProvider({ children }) {
       if (segment && result.maskCanvas) {
         elementId = addElementFromMask(result.maskCanvas, {
           name: 'Body',
-          engine: result.engine || 'mediapipe-pose',
+          engine: 'mediapipe-pose',
         })
+        if (elementId != null) selectDetectedCutout(elementId)
       }
 
       if (elementId != null && result.joints?.length) {
@@ -2056,10 +2057,16 @@ export function StudioProvider({ children }) {
 
       if (segment && elementId != null) {
         setToast('Body mesh ready · drag joints — the arm follows (image warp)')
+      } else if (segment && result.segmentError) {
+        setToast(
+          marked.length
+            ? `${marked.length} joints · cutout failed: ${result.segmentError}`
+            : `Cutout failed: ${result.segmentError}`,
+        )
       } else if (openPanel && marked.length) {
         setToast(
           segment
-            ? `${marked.length} joints · drag on preview to warp the Body layer`
+            ? `${marked.length} joints · Body layer missing — try Human segment`
             : `${marked.length} joints · enable “Cut out body as layer” so the photo warps`,
         )
       } else {

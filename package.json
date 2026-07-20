@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "setup": "node scripts/install.mjs",
+    "postinstall": "node scripts/install.mjs --from-npm",
     "dev": "vite",
     "api": "node scripts/run-api.mjs",
     "start": "node scripts/start-both.mjs",

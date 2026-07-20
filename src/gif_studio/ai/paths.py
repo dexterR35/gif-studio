@@ -73,7 +73,12 @@ def torch_device():
     Override with ``GIF_STUDIO_TORCH_DEVICE=cpu|cuda|cuda:0|mps``.
     Default policy skips MPS — NVIDIA → CPU only unless explicitly requested.
     """
-    import torch
+    try:
+        import torch
+    except ImportError as exc:
+        raise RuntimeError(
+            "PyTorch is not installed. pip install -r requirements-ai.txt"
+        ) from exc
 
     prefer = (os.environ.get("GIF_STUDIO_TORCH_DEVICE") or "").strip().lower()
     if prefer == "cpu":
@@ -117,10 +122,26 @@ def host_memory_bytes() -> int | None:
 
 def device_runtime_info() -> dict[str, Any]:
     """Honest device report for /api/health — NVIDIA vs CPU/RAM fallback."""
-    import torch
+    mem = host_memory_bytes()
+    try:
+        import torch
+    except ImportError:
+        info: dict[str, Any] = {
+            "device": "cpu",
+            "nvidia": nvidia_present(),
+            "cuda": False,
+            "cpu": True,
+            "fallback": "cpu",
+            "policy": "nvidia→cpu (override GIF_STUDIO_TORCH_DEVICE)",
+            "torch": False,
+            "note": "PyTorch not installed — heavy AI engines unavailable (pip install -r requirements-ai.txt).",
+        }
+        if mem is not None:
+            info["ram_bytes"] = mem
+            info["ram_gib"] = round(mem / (1024 ** 3), 2)
+        return info
 
     device = torch_device()
-    mem = host_memory_bytes()
     info: dict[str, Any] = {
         "device": str(device),
         "nvidia": nvidia_present(),
@@ -128,6 +149,7 @@ def device_runtime_info() -> dict[str, Any]:
         "cpu": True,
         "fallback": "cpu" if device.type == "cpu" else None,
         "policy": "nvidia→cpu (override GIF_STUDIO_TORCH_DEVICE)",
+        "torch": True,
     }
     if mem is not None:
         info["ram_bytes"] = mem
@@ -155,9 +177,14 @@ def model_device_policy() -> dict[str, dict[str, Any]]:
     """Per-engine: prefers NVIDIA, can use CPU/RAM, or hard-requires NVIDIA."""
     nvidia = nvidia_present()
     try:
-        device = str(torch_device())
-    except RuntimeError as exc:
-        device = f"error:{exc}"
+        import torch  # noqa: F401
+    except ImportError:
+        device = "cpu (torch not installed)"
+    else:
+        try:
+            device = str(torch_device())
+        except RuntimeError as exc:
+            device = f"error:{exc}"
 
     def row(*, prefers: str, cpu_ok: bool, requires_nvidia: bool = False, note: str = "") -> dict[str, Any]:
         available = True
