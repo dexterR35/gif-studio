@@ -49,7 +49,7 @@ def nvidia_present() -> bool:
         if torch.cuda.is_available() and torch.cuda.device_count() > 0:
             return True
     except Exception:  # noqa: BLE001
-        pass
+        return False
     smi = shutil.which("nvidia-smi")
     if not smi:
         return False
@@ -75,9 +75,9 @@ def torch_device():
     """
     try:
         import torch
-    except ImportError as exc:
+    except Exception as exc:  # noqa: BLE001
         raise RuntimeError(
-            "PyTorch is not installed. pip install -r requirements-ai.txt"
+            "PyTorch is not usable in this environment: " + str(exc)
         ) from exc
 
     prefer = (os.environ.get("GIF_STUDIO_TORCH_DEVICE") or "").strip().lower()
@@ -125,23 +125,39 @@ def device_runtime_info() -> dict[str, Any]:
     mem = host_memory_bytes()
     try:
         import torch
-    except ImportError:
+    except Exception:  # noqa: BLE001
         info: dict[str, Any] = {
             "device": "cpu",
-            "nvidia": nvidia_present(),
+            "nvidia": False,
             "cuda": False,
             "cpu": True,
             "fallback": "cpu",
             "policy": "nvidia→cpu (override GIF_STUDIO_TORCH_DEVICE)",
             "torch": False,
-            "note": "PyTorch not installed — heavy AI engines unavailable (pip install -r requirements-ai.txt).",
+            "note": "PyTorch is not usable in this environment — heavy AI engines are unavailable.",
         }
         if mem is not None:
             info["ram_bytes"] = mem
             info["ram_gib"] = round(mem / (1024 ** 3), 2)
         return info
 
-    device = torch_device()
+    try:
+        device = torch_device()
+    except Exception as exc:  # noqa: BLE001
+        info = {
+            "device": "cpu",
+            "nvidia": False,
+            "cuda": False,
+            "cpu": True,
+            "fallback": "cpu",
+            "policy": "nvidia→cpu (override GIF_STUDIO_TORCH_DEVICE)",
+            "torch": False,
+            "note": f"PyTorch import failed: {exc}",
+        }
+        if mem is not None:
+            info["ram_bytes"] = mem
+            info["ram_gib"] = round(mem / (1024 ** 3), 2)
+        return info
     info: dict[str, Any] = {
         "device": str(device),
         "nvidia": nvidia_present(),

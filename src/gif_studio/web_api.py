@@ -629,6 +629,21 @@ async def ai_detect(
     except HTTPException:
         raise
     except Exception as exc:
+        message = str(exc)
+        if "torch" in message.lower() or "c10.dll" in message.lower() or "dll" in message.lower():
+            return {
+                "engine": "unavailable",
+                "detect_engine": "unavailable",
+                "boxes": [],
+                "selected_box": None,
+                "selected_label": None,
+                "mask_png_base64": None,
+                "mask_score": None,
+                "refined": None,
+                "prompt": prompt,
+                "device": None,
+                "note": "AI detection is unavailable because the local PyTorch runtime is not loading correctly on this machine.",
+            }
         raise _ai_http_error(exc, default_message="AI detect failed") from exc
 
 

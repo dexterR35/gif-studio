@@ -71,7 +71,6 @@ const child = spawn(python, ['run_web_api.py'], {
   cwd: root,
   stdio: 'inherit',
   env,
-  shell: isWin,
 })
 child.on('exit', (code, signal) => {
   process.exit(code ?? (signal ? 1 : 0))

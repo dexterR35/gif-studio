@@ -69,11 +69,18 @@ function ensureSetup() {
     console.error('Missing node_modules. Run setup first:\n  npm run setup')
     process.exit(1)
   }
-  const check = spawnSync(
-    vpy,
-    ['-c', 'import cv2, fastapi, uvicorn; import gif_studio.web_api'],
-    { cwd: root, encoding: 'utf8', shell: isWin },
-  )
+  const probe = [
+    'import importlib',
+    'importlib.import_module("cv2")',
+    'importlib.import_module("fastapi")',
+    'importlib.import_module("uvicorn")',
+    'importlib.import_module("gif_studio.web_api")',
+  ].join('; ')
+
+  const check = spawnSync(vpy, ['-c', probe], {
+    cwd: root,
+    encoding: 'utf8',
+  })
   if (check.status !== 0) {
     console.error('Python API dependencies are missing or broken.')
     if (check.stderr) {
@@ -125,7 +132,6 @@ function run(name, cmd, args, env, color) {
     cwd: root,
     stdio: ['inherit', 'pipe', 'pipe'],
     env,
-    shell: isWin,
   })
   const tag = (stream) => {
     stream.on('data', (buf) => {
