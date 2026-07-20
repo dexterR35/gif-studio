@@ -24,6 +24,7 @@ from .engine import MAX_UPLOAD_BYTES, validate_uploaded_image
 from .ai_pipeline import default_rembg_model
 from .api import jobs_router
 from .api.errors import RequestIdMiddleware
+from .api.schemas import ModelsInstallRequest
 from .security_limits import (
     SecurityRateLimitMiddleware,
     acquire_ai_slot,
@@ -211,6 +212,40 @@ def health() -> dict[str, object]:
         "engines": ai_pipeline.active_engines(),
         "rate_limit": rate_limit_status(),
     }
+
+
+@app.get("/api/models/install")
+def models_install_status() -> dict[str, object]:
+    """Poll local model download / install progress."""
+    from .ai.model_install import get_install_status
+
+    return get_install_status()
+
+
+@app.post("/api/models/install")
+async def models_install_start(body: ModelsInstallRequest = ModelsInstallRequest()) -> dict[str, object]:
+    """Download and install local AI checkpoints under ``models/``.
+
+    Optional JSON body:
+      profile: "recommended" (default, --tiny-only) | "full"
+      with_sam3: bool — gated Hugging Face SAM3 (needs HF login)
+      install_packages: bool — also pip-install SAM2 if missing (default true)
+    """
+    from .ai.model_install import start_install
+
+    try:
+        result = await run_in_threadpool(
+            start_install,
+            profile=body.profile,
+            with_sam3=body.with_sam3,
+            install_packages=body.install_packages,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    if not result.get("accepted"):
+        raise HTTPException(409, result.get("reason") or "Install already running")
+    return result
 
 
 @app.post("/api/segment")

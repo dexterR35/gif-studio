@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const isWin = process.platform === 'win32'
+const skipForFrontendBuild = process.env.VERCEL || process.env.CI
 const bin = isWin ? 'Scripts' : 'bin'
 const pyExe = isWin ? 'python.exe' : 'python'
 const force = process.argv.includes('--force')
@@ -161,6 +162,11 @@ function checkSystemTools() {
         '  Ubuntu/Debian: sudo apt install gifsicle',
     )
   }
+}
+
+if (skipForFrontendBuild) {
+  console.log('Skipping full local setup during frontend-only build.')
+  process.exit(0)
 }
 
 console.log('GIF Studio setup')

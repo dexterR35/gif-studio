@@ -4,6 +4,63 @@ import { msToUs } from '../timeline/time.js'
 import { createEmptyProjectV2 } from './create-empty-v2.js'
 import { validateProjectV2 } from './validate-project.js'
 
+/** Runtime-only fields on V1 cutouts — not structuredClone-able (HTMLCanvasElement, etc.). */
+const RUNTIME_LAYER_KEYS = new Set([
+  'bitmap',
+  'sourceBitmap',
+  'maskCanvas',
+  'cleanup',
+  'image',
+  'imageElement',
+  'canvas',
+])
+
+function isNonCloneableHostObject(value) {
+  if (value == null || typeof value !== 'object') return false
+  if (typeof HTMLCanvasElement !== 'undefined' && value instanceof HTMLCanvasElement) return true
+  if (typeof ImageBitmap !== 'undefined' && value instanceof ImageBitmap) return true
+  if (typeof HTMLImageElement !== 'undefined' && value instanceof HTMLImageElement) return true
+  if (typeof ImageData !== 'undefined' && value instanceof ImageData) return true
+  return false
+}
+
+/**
+ * Strip live bitmaps/canvases from a V1 tree (not a deep freeze).
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+function stripRuntimeFields(value) {
+  if (value == null || typeof value !== 'object') return value
+  if (isNonCloneableHostObject(value)) return null
+  if (Array.isArray(value)) return value.map((item) => stripRuntimeFields(item))
+
+  const out = {}
+  for (const [key, child] of Object.entries(value)) {
+    if (RUNTIME_LAYER_KEYS.has(key)) continue
+    if (isNonCloneableHostObject(child)) continue
+    out[key] = stripRuntimeFields(child)
+  }
+  return out
+}
+
+/**
+ * Deep-clone a V1 document for migration backup, stripping live bitmaps/canvases.
+ * Live V1 still keeps canvases for Konva; V2 only needs metadata + layer order.
+ *
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+export function cloneV1Snapshot(value) {
+  const stripped = stripRuntimeFields(value)
+  try {
+    return typeof structuredClone === 'function'
+      ? structuredClone(stripped)
+      : JSON.parse(JSON.stringify(stripped))
+  } catch {
+    return stripped
+  }
+}
+
 /**
  * Pure V1 → V2 migration.
  * Retains an immutable backup of the original document in the return value.
@@ -26,7 +83,7 @@ export function migrateV1ToV2(v1) {
 
   const schemaVersion = v1.schemaVersion ?? 1
   if (schemaVersion === 2) {
-    const backup = structuredClone ? structuredClone(v1) : JSON.parse(JSON.stringify(v1))
+    const backup = cloneV1Snapshot(v1)
     return {
       project: v1,
       backup,
@@ -42,7 +99,7 @@ export function migrateV1ToV2(v1) {
     )
   }
 
-  const backup = structuredClone ? structuredClone(v1) : JSON.parse(JSON.stringify(v1))
+  const backup = cloneV1Snapshot(v1)
   const warnings = []
   const notes = [
     'V1 backup retained; do not overwrite original until migrated project is saved successfully.',

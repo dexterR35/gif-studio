@@ -86,17 +86,20 @@ export function migrateLayersFromV1(v1, ctx = {}) {
       checksumSha256: source.checksumSha256 || 'pending',
       byteLength: source.byteLength ?? 0,
     })
-    if (!sourceAssetId && source.storageKey) {
+    // Blob / session imports have no durable URL — still need a Background layer in V2.
+    if (!sourceAssetId) {
       sourceAssetId = 'asset-source'
       assets[sourceAssetId] = {
         id: sourceAssetId,
-        kind: source.animated ? 'animated-image' : 'image',
-        mimeType: source.mimeType || 'image/png',
+        kind: source.animated || source.kind === 'gif' ? 'animated-image' : 'image',
+        mimeType: source.mimeType || (source.kind === 'gif' ? 'image/gif' : 'image/png'),
         checksumSha256: source.checksumSha256 || 'pending',
         byteLength: source.byteLength ?? 0,
         width: source.width,
         height: source.height,
-        storageKey: source.storageKey,
+        frameCount: source.frameCount,
+        durationUs: source.durationUs ?? (source.duration != null ? msToUs(source.duration * 1000) : undefined),
+        storageKey: source.storageKey || 'session:source',
       }
     }
   }

@@ -1,6 +1,9 @@
 # AI model weights (local only)
 
-Downloaded by `python scripts/setup_ai_models.py`. Do not commit `.pth` / `.pt` / `.pkl` files.
+Downloaded by `python scripts/setup_ai_models.py`, `npm run setup`, or the in-app
+**Download models** button (`POST /api/models/install`).
+
+Do not commit `.pth` / `.pt` / `.pkl` files.
 
 Runtime inference uses files under this folder — **not** the Hugging Face Hub
 (unless you explicitly set `GIF_STUDIO_ALLOW_HF=1`).
@@ -26,6 +29,7 @@ pip install -r requirements-ai.txt
 pip install 'git+https://github.com/facebookresearch/sam2.git'
 pip install ultralytics rembg
 python scripts/setup_ai_models.py --tiny-only
+# Or from the studio UI: Download models (header / Select & detect panel)
 # SAM3 (optional, gated Hub — request access + hf auth login first):
 # https://huggingface.co/facebook/sam3
 python scripts/setup_ai_models.py --with-sam3
@@ -37,3 +41,4 @@ Device auto-selects **CUDA → MPS → CPU**. Override with `GIF_STUDIO_TORCH_DE
 
 Build / AI contracts: [`docs/GIF_STUDIO_MEGA_SENIOR_BUILD.md`](../docs/GIF_STUDIO_MEGA_SENIOR_BUILD.md) (§10).  
 Check `/api/health` for `device` and `models.*.ready`.
+Poll install progress at `/api/models/install`.

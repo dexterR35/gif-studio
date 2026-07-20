@@ -77,6 +77,69 @@ describe('ProjectDocumentV2', () => {
     expect(v.ok).toBe(true)
   })
 
+  it('migrates cutouts with live canvas bitmaps without wiping layers', () => {
+    const fakeCanvas = Object.assign(Object.create(null), {
+      width: 8,
+      height: 8,
+      getContext() { return null },
+      toDataURL() { return 'data:image/png;base64,xx' },
+    })
+
+    const v1 = createEmptyProject()
+    v1.source = {
+      name: 'shot.png',
+      width: 64,
+      height: 48,
+      url: 'blob:http://localhost/abc',
+      kind: 'image',
+    }
+    v1.elements = [{
+      id: 'cut-lasso-1',
+      name: 'Lasso cut',
+      x: 4,
+      y: 4,
+      w: 8,
+      h: 8,
+      motion: 'None',
+      visible: true,
+      locked: false,
+      bitmap: fakeCanvas,
+      sourceBitmap: fakeCanvas,
+      maskCanvas: fakeCanvas,
+      cleanup: fakeCanvas,
+    }]
+
+    const originalClone = globalThis.structuredClone?.bind(globalThis)
+    globalThis.structuredClone = (value) => {
+      const walk = (v, seen = new Set()) => {
+        if (v == null || typeof v !== 'object') return
+        if (seen.has(v)) return
+        seen.add(v)
+        if (v === fakeCanvas) {
+          throw new DOMException('Canvas cannot be cloned', 'DataCloneError')
+        }
+        if (Array.isArray(v)) v.forEach((item) => walk(item, seen))
+        else Object.values(v).forEach((item) => walk(item, seen))
+      }
+      walk(value)
+      return originalClone ? originalClone(value) : JSON.parse(JSON.stringify(value))
+    }
+
+    try {
+      const { project, backup } = migrateV1ToV2(v1)
+      expect(project.schemaVersion).toBe(2)
+      expect(project.layers['layer-background']).toBeTruthy()
+      expect(project.layers['cut-lasso-1']).toBeTruthy()
+      expect(project.layers['cut-lasso-1'].name).toBe('Lasso cut')
+      expect(project.rootLayerIds).toEqual(expect.arrayContaining(['layer-background', 'cut-lasso-1']))
+      expect(backup.elements?.[0]?.bitmap).toBeUndefined()
+      expect(validateProjectV2(project).ok).toBe(true)
+    } finally {
+      if (originalClone) globalThis.structuredClone = originalClone
+      else delete globalThis.structuredClone
+    }
+  })
+
   it('serialize hydrate round-trip preserves revision', () => {
     const doc = createEmptyProjectV2({ projectSeed: 'round-trip' })
     doc.assets['a1'] = {

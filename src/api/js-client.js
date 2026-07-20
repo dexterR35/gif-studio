@@ -7,6 +7,7 @@ import { mapApiError, readErrorBody } from './error-mapping.js'
 /** Paths documented in schemas/api/openapi.json */
 export const API_PATHS = {
   health: '/api/health',
+  modelsInstall: '/api/models/install',
   jobs: '/api/v1/jobs',
   job: (jobId) => `/api/v1/jobs/${encodeURIComponent(jobId)}`,
   jobCancel: (jobId) => `/api/v1/jobs/${encodeURIComponent(jobId)}/cancel`,
@@ -80,6 +81,12 @@ export function createApiClient(options = {}) {
     paths: API_PATHS,
     request,
     getHealth: () => request(API_PATHS.health),
+    getModelsInstallStatus: () => request(API_PATHS.modelsInstall),
+    startModelsInstall: (body = {}) => request(API_PATHS.modelsInstall, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
     createJob: (body) => request(API_PATHS.jobs, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

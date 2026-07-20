@@ -7,7 +7,7 @@ export {
 } from './feature-flags.js'
 export { createEmptyProjectV2 } from './project/create-empty-v2.js'
 export { validateProjectV2, assertValidProjectV2, ProjectV2Zod } from './project/validate-project.js'
-export { migrateV1ToV2 } from './project/migrate-v1-to-v2.js'
+export { migrateV1ToV2, cloneV1Snapshot } from './project/migrate-v1-to-v2.js'
 export { checkProjectInvariants, assertProjectInvariants } from './project/invariants.js'
 export { projectRevision, fingerprintString, stableStringify } from './project/revision.js'
 export {

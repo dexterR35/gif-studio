@@ -1,0 +1,8 @@
+python
+scripts
+requirements*.txt
+*.py
+*.md
+models
+third_party
+.vscode

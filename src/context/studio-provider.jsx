@@ -499,6 +499,23 @@ export function StudioProvider({ children }) {
     return () => { cancelled = true }
   }, [])
 
+  const refreshApiHealth = useCallback(async () => {
+    try {
+      const response = await fetch('/api/health', { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) })
+      if (!response.ok) {
+        setApiAvailable(false)
+        return null
+      }
+      const info = await response.json()
+      setApiAvailable(true)
+      setApiInfo(info)
+      return info
+    } catch {
+      setApiAvailable(false)
+      return null
+    }
+  }, [setApiAvailable, setApiInfo])
+
   /** API-derived capability flags only — never wipe client-discovered opencv/ffmpeg/pixi/mediapipe. */
   useEffect(() => {
     useStudioStore.getState().setCapabilities({
@@ -3387,7 +3404,7 @@ export function StudioProvider({ children }) {
     imageLocked, setImageLocked, imageTransformBox,
     selectMode, setSelectMode, selectionTool, setSelectionTool,
     selection, setSelection, selectionPoints, setSelectionPoints, extractTolerance, setExtractTolerance,
-    apiAvailable, apiInfo, segmenting, textLayers, setTextLayers, selectedText, setSelectedText, fontOptions,
+    apiAvailable, apiInfo, refreshApiHealth, segmenting, textLayers, setTextLayers, selectedText, setSelectedText, fontOptions,
     parallax, setParallax, lastExport, maskEditing, setMaskEditing, maskBrush, setMaskBrush,
     imageEdits, setImageEdits, censor, setCensor, censorSelecting, setCensorSelecting,
     overlays, setOverlays, selectedOverlay, setSelectedOverlay, effectTarget, setEffectTarget, gifEffects, setGifEffects,

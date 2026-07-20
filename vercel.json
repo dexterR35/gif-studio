@@ -1,4 +1,8 @@
 {
+  "version": 2,
+  "installCommand": "npm install --ignore-scripts",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
   "rewrites": [
     {
       "source": "/(.*)",

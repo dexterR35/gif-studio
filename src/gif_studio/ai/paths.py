@@ -194,8 +194,8 @@ def model_device_policy() -> dict[str, dict[str, Any]]:
     nvidia = nvidia_present()
     try:
         import torch  # noqa: F401
-    except ImportError:
-        device = "cpu (torch not installed)"
+    except Exception as exc:  # noqa: BLE001 — ImportError, OSError (Win DLL), etc.
+        device = f"cpu (torch unavailable: {exc})"
     else:
         try:
             device = str(torch_device())

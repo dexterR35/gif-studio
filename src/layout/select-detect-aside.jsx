@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { LoaderCircle, ScanSearch, Sparkles, User } from 'lucide-react'
 import { Button, SelectField } from '../components/ui'
+import { ModelsInstallPanel } from '../components/studio/models-install-panel'
 import { useStudio } from '../context/studio-provider'
 import { useStudioStore } from '../store/studio-store'
 
@@ -159,6 +160,8 @@ export function SelectDetectAside() {
       </div>
 
       <div className="space-y-2 px-3 py-3">
+        <ModelsInstallPanel />
+
         <SelectField label="SAM 2 (click / refine)" value={segmentModel} onChange={setSegmentModel}>
           {segmentOptions.map((m) => (
             <option key={m.id} value={m.id} disabled={m.ready === false}>

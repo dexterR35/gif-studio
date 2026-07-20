@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "setup": "node scripts/install.mjs",
-    "postinstall": "node scripts/install.mjs --from-npm",
+    "postinstall": "node -e \"if (process.env.VERCEL || process.env.CI) process.exit(0); require('child_process').spawnSync(process.execPath, ['scripts/install.mjs', '--from-npm'], { stdio: 'inherit' })\"",
     "dev": "vite",
     "api": "node scripts/run-api.mjs",
     "start": "node scripts/start-both.mjs",

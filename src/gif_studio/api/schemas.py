@@ -32,3 +32,20 @@ class ProblemDetail(BaseModel):
     request_id: str | None = None
     retryable: bool = False
     job_id: str | None = None
+
+
+class ModelsInstallRequest(BaseModel):
+    """POST /api/models/install — download local AI weights."""
+
+    profile: str = Field(
+        default="recommended",
+        description="'recommended' (--tiny-only) or 'full'",
+    )
+    with_sam3: bool = Field(
+        default=False,
+        description="Also install gated facebook/sam3 (requires HF login)",
+    )
+    install_packages: bool = Field(
+        default=True,
+        description="pip install SAM2 package when missing",
+    )

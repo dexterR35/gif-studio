@@ -12,9 +12,10 @@ import { createEmptyProject } from '../lib/project-document.js'
 
 /**
  * @param {object | null | undefined} v1
- * @returns {object}
+ * @param {object | null | undefined} [previousV2] keep on failure so Layers panel is not wiped
+ * @returns {object | null}
  */
-export function ensureProjectV2(v1) {
+export function ensureProjectV2(v1, previousV2 = null) {
   if (!isFeatureEnabled('projectV2')) {
     return null
   }
@@ -24,7 +25,13 @@ export function ensureProjectV2(v1) {
   try {
     const { project } = migrateV1ToV2(v1 || createEmptyProject())
     return project
-  } catch {
+  } catch (err) {
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn('[project-v2] migrateV1ToV2 failed; keeping previous projection', err)
+    }
+    if (previousV2 && previousV2.schemaVersion === 2) {
+      return previousV2
+    }
     return createEmptyProjectV2({
       name: v1?.name,
       width: v1?.settings?.width,
@@ -56,7 +63,7 @@ export function getActiveProjectDocument(state) {
  */
 export function syncProjectV2FromV1(v1, previousV2) {
   if (!isFeatureEnabled('projectV2')) return previousV2 ?? null
-  return ensureProjectV2(v1)
+  return ensureProjectV2(v1, previousV2)
 }
 
 /**
