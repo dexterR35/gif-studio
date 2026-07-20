@@ -1319,7 +1319,8 @@ export function StudioProvider({ children }) {
     const rect = { x: Math.min(start.x, point.x), y: Math.min(start.y, point.y), w: Math.abs(point.x - start.x), h: Math.abs(point.y - start.y) }
     selectionStart.current = null; setSelection(null); setSelectMode(false)
     if (rect.w < .025 || rect.h < .025) { setToast('Draw a larger box around the element'); return }
-    extractElement(rect)
+    // Rectangle matches lasso/pen: always local canvas cut (not API rembg/GrabCut).
+    extractElementLocal(rect)
   }
 
   const extractElementLocal = (rect, pathPoints = null, exactMask = false) => {
