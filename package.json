@@ -9,6 +9,7 @@
     "dev": "vite",
     "api": "node scripts/run-api.mjs",
     "start": "node scripts/start-both.mjs",
+    "tunnel": "npx --yes cloudflared tunnel --url http://127.0.0.1:5173",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",

@@ -10,6 +10,8 @@ export default defineConfig(({ mode }) => {
       host: '127.0.0.1',
       port: 5173,
       strictPort: true,
+      // Cloudflare / ngrok quick tunnels (Host header is the public URL)
+      allowedHosts: ['.trycloudflare.com', '.ngrok-free.app', '.ngrok.io', '.loca.lt'],
       proxy: { '/api': apiProxy },
       // Never watch Python venv / AI weights — they exhaust inotify (ENOSPC).
       watch: {
