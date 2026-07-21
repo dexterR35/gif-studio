@@ -190,11 +190,32 @@ export function migrateLayersFromV1(v1, ctx = {}) {
           scaleX: (Number(el.scaleX) || 100) / 100,
           scaleY: (Number(el.scaleY) || 100) / 100,
           rotationDeg: Number(el.rotation) || 0,
+          flipX: Boolean(el.flipX),
+          flipY: Boolean(el.flipY),
+          anchorX: el.anchorX != null ? Number(el.anchorX) / 100 : 0.5,
+          anchorY: el.anchorY != null ? Number(el.anchorY) / 100 : 0.5,
         }),
       }),
       type: 'raster',
       assetId,
       cutoutMotion: el.motion || defaultCutoutMotion(),
+      mediaMapping: {
+        kind: 'cutout-rect',
+        legacyKind: 'element',
+        x: Number(el.x) || 0,
+        y: Number(el.y) || 0,
+        w: Number(el.w) || 0,
+        h: Number(el.h) || 0,
+        amplitude: el.amplitude != null ? Number(el.amplitude) : 5,
+        speed: el.speed != null ? Number(el.speed) : 1,
+        depth: el.depth != null ? Number(el.depth) : 50,
+        anchorX: el.anchorX != null ? Number(el.anchorX) : 50,
+        anchorY: el.anchorY != null ? Number(el.anchorY) : 50,
+        cutoutMode: el.cutoutMode,
+        engine: el.engine,
+        smart: el.smart,
+        effects: el.effects || null,
+      },
     }
     rootLayerIds.push(id)
   }
@@ -232,6 +253,14 @@ export function migrateLayersFromV1(v1, ctx = {}) {
       }),
       type: 'raster',
       assetId,
+      mediaMapping: {
+        kind: 'overlay',
+        legacyKind: 'overlay',
+        x: Number(ov.x) || 0,
+        y: Number(ov.y) || 0,
+        scale: Number(ov.scale) || 100,
+        url: ov.url && !String(ov.url).startsWith('blob:') ? ov.url : null,
+      },
     }
     rootLayerIds.push(id)
   }

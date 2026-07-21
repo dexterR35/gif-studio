@@ -27,7 +27,7 @@ export function getStudioTaskManager() {
 
 export function syncTaskRevisionFromStore() {
   const state = useStudioStore.getState()
-  const doc = state.projectV2 || state.project
+  const doc = state.project
   const rev = projectRevision(doc || {})
   getStudioTaskManager().setCurrentRevision(rev)
   return rev

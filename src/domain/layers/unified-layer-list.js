@@ -1,41 +1,29 @@
 /**
- * Build a UI-facing layer list from Project V2 document order (front = end of rootLayerIds).
- * Maps back to legacy V1 entity kinds for existing StudioProvider actions.
+ * Build a UI-facing layer list from Project document order (front = end of rootLayerIds).
+ * Joins V2 layer metadata with runtime editor session entities for actions/thumbs.
  */
 
 import { flattenLayerOrder } from './layer-order.js'
 
 /**
- * @param {object | null | undefined} projectV2
+ * @param {object | null | undefined} project
  * @param {{
  *   elements?: object[],
  *   overlays?: object[],
  *   textLayers?: object[],
  *   enhancedLayer?: object | null,
- * }} v1
- * @returns {Array<{
- *   id: string,
- *   v2Type: string,
- *   legacyKind: 'element'|'overlay'|'text'|'background'|'enhanced'|'pixelate'|'redaction'|'other',
- *   legacyId: string | null,
- *   name: string,
- *   visible: boolean,
- *   locked: boolean,
- *   subtitle: string,
- *   legacyEntity: object | null,
- * }>}
+ * }} editorSession
  */
-export function buildUnifiedLayerList(projectV2, v1 = {}) {
-  if (!projectV2 || projectV2.schemaVersion !== 2) return []
+export function buildUnifiedLayerList(project, editorSession = {}) {
+  if (!project || project.schemaVersion !== 2) return []
 
-  const layers = projectV2.layers || {}
-  const order = flattenLayerOrder(projectV2.rootLayerIds || [], layers)
-  // Front of stack at top of panel (reverse of document bottom→top composite order)
+  const layers = project.layers || {}
+  const order = flattenLayerOrder(project.rootLayerIds || [], layers)
   const frontFirst = [...order].reverse()
 
-  const elementsById = Object.fromEntries((v1.elements || []).map((e) => [e.id, e]))
-  const overlaysById = Object.fromEntries((v1.overlays || []).map((o) => [o.id, o]))
-  const textById = Object.fromEntries((v1.textLayers || []).map((t) => [t.id, t]))
+  const elementsById = Object.fromEntries((editorSession.elements || []).map((e) => [e.id, e]))
+  const overlaysById = Object.fromEntries((editorSession.overlays || []).map((o) => [o.id, o]))
+  const textById = Object.fromEntries((editorSession.textLayers || []).map((t) => [t.id, t]))
 
   return frontFirst.map((id) => {
     const layer = layers[id]
@@ -121,13 +109,13 @@ export function buildUnifiedLayerList(projectV2, v1 = {}) {
           v2Type: 'raster',
           legacyKind: 'enhanced',
           legacyId: null,
-          name: v1.enhancedLayer?.name || name || 'Enhanced',
-          visible: v1.enhancedLayer ? v1.enhancedLayer.visible !== false : visible,
+          name: editorSession.enhancedLayer?.name || name || 'Enhanced',
+          visible: editorSession.enhancedLayer ? editorSession.enhancedLayer.visible !== false : visible,
           locked,
-          subtitle: v1.enhancedLayer
-            ? `${v1.enhancedLayer.width}×${v1.enhancedLayer.height}`
+          subtitle: editorSession.enhancedLayer
+            ? `${editorSession.enhancedLayer.width}×${editorSession.enhancedLayer.height}`
             : 'Enhanced',
-          legacyEntity: v1.enhancedLayer || null,
+          legacyEntity: editorSession.enhancedLayer || null,
         }
       }
 

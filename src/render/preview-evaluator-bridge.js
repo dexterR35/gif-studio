@@ -20,7 +20,7 @@ export function evaluatePreviewPlan(progress = 0) {
     return null
   }
   const state = useStudioStore.getState()
-  const project = state.projectV2
+  const project = state.project
   if (!project || project.schemaVersion !== 2) {
     lastPlan = null
     return null

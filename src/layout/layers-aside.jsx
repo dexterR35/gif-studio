@@ -2,20 +2,19 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Frame, ImageIcon, Layers3, Maximize2, Type, Shield, Grid3x3 } from 'lucide-react'
 import { EmptyState, LayerRow } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
-import { useStudioStore } from '../store/studio-store'
-import { isFeatureEnabled } from '../domain/feature-flags'
+import { useStudioStore, getActiveProjectDocument } from '../store/studio-store'
 import { buildUnifiedLayerList } from '../domain/layers/unified-layer-list'
 
 /**
  * Third sidebar — Photoshop-style layers (front at top · drag to reorder).
- * When unifiedLayers is on, order comes from Project V2 rootLayerIds.
+ * When unifiedLayers is on, order comes from the active Project V2 document.
  */
 export function LayersAside() {
-  const elements = useStudioStore((s) => s.project.elements)
-  const overlays = useStudioStore((s) => s.project.overlays)
-  const textLayers = useStudioStore((s) => s.project.textLayers)
-  const enhancedLayer = useStudioStore((s) => s.project.enhancedLayer)
-  const projectV2 = useStudioStore((s) => s.projectV2)
+  const elements = useStudioStore((s) => s.editor.elements)
+  const overlays = useStudioStore((s) => s.editor.overlays)
+  const textLayers = useStudioStore((s) => s.editor.textLayers)
+  const enhancedLayer = useStudioStore((s) => s.editor.enhancedLayer)
+  const project = useStudioStore((s) => s.project)
   const selectedElements = useStudioStore((s) => s.selection.selectedElements)
   const selectedOverlay = useStudioStore((s) => s.selection.selectedOverlay)
   const selectedText = useStudioStore((s) => s.selection.selectedText)
@@ -33,7 +32,11 @@ export function LayersAside() {
   const setPlaying = useStudioStore((s) => s.setPlaying)
 
   const selectedElement = selectedElements.length ? selectedElements[selectedElements.length - 1] : null
-  const unified = isFeatureEnabled('unifiedLayers') && projectV2?.schemaVersion === 2
+  const activeDoc = useMemo(
+    () => getActiveProjectDocument({ project }),
+    [project],
+  )
+  const unified = activeDoc?.schemaVersion === 2
 
   const {
     selectLayer, selectBaseImage, toggleImageLock,
@@ -50,9 +53,9 @@ export function LayersAside() {
 
   const unifiedRows = useMemo(() => (
     unified
-      ? buildUnifiedLayerList(projectV2, { elements, overlays, textLayers, enhancedLayer })
+      ? buildUnifiedLayerList(activeDoc, { elements, overlays, textLayers, enhancedLayer })
       : []
-  ), [unified, projectV2, elements, overlays, textLayers, enhancedLayer])
+  ), [unified, activeDoc, elements, overlays, textLayers, enhancedLayer])
 
   const layerCount = unified
     ? unifiedRows.length

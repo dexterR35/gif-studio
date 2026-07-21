@@ -41,9 +41,9 @@ export default function TimelinePage() {
     goToWorkspace, progress, setProgress, setPlaying, draw, actualDuration,
   } = useStudio()
 
-  const keyframes = useStudioStore((s) => s.project.keyframes)
+  const keyframes = useStudioStore((s) => s.editor.keyframes)
   const setKeyframes = useStudioStore((s) => s.setKeyframes)
-  const selectedKeyframe = useStudioStore((s) => s.project._selectedKeyframeId)
+  const selectedKeyframe = useStudioStore((s) => s.editor._selectedKeyframeId)
   const patchProject = useStudioStore((s) => s.patchProject)
 
   const clips = settings.motionEffects || []

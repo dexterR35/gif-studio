@@ -1,11 +1,15 @@
 import { create } from 'zustand'
-import { createEmptyProject, projectFromJson, serializeProject } from '../lib/project-document'
+import { serializeProject } from '../lib/project-document'
 import {
-  ensureProjectV2,
+  commitEditorPatch,
+  commitElements,
+  commitOverlays,
+  commitTextLayers,
+  createEmptyProjectPair,
   getActiveProjectDocument,
   loadProjectPair,
-  syncProjectV2FromV1,
 } from './project-v2-bridge'
+import { layerBitmapRegistry } from '../runtime/layer-bitmap-registry'
 
 const apply = (prev, updater) => (typeof updater === 'function' ? updater(prev) : updater)
 
@@ -90,18 +94,15 @@ const INITIAL_SESSION = {
   busyLabel: '',
 }
 
-const patchProject = (state, partial) => ({
-  project: { ...state.project, ...partial, updatedAt: new Date().toISOString() },
-})
+const emptyPair = createEmptyProjectPair()
 
 /**
- * Zustand studio store — project document, selection, tools, UI chrome, session.
- * DOM refs / canvas draw loop / HTMLImageElement / poseRig stay in StudioProvider.
+ * Zustand studio store — durable `project` is always Project V2.
+ * `editor` is the derived session view (arrays + settings) for Konva / StudioProvider.
  */
 export const useStudioStore = create((set, get) => ({
-  project: createEmptyProject(),
-  /** V2 document kept alongside V1 when `projectV2` feature flag is on. */
-  projectV2: ensureProjectV2(createEmptyProject()),
+  project: emptyPair.project,
+  editor: emptyPair.editor,
   selection: { ...INITIAL_SELECTION },
   tools: { ...INITIAL_TOOLS },
   ui: { ...INITIAL_UI },
@@ -131,124 +132,98 @@ export const useStudioStore = create((set, get) => ({
     allowHuggingFace: false,
   },
 
-  // ── Project document ──────────────────────────────────────────────
+  // ── Project document (V2) + editor view ───────────────────────────
   resetProject: () => {
-    const project = createEmptyProject()
-    set({ project, projectV2: ensureProjectV2(project) })
+    layerBitmapRegistry.clear()
+    const pair = createEmptyProjectPair()
+    set({ project: pair.project, editor: pair.editor })
   },
 
   loadProject: (raw) => {
-    const parsed = raw?.schemaVersion === 2 ? raw : projectFromJson(raw)
-    const pair = loadProjectPair(parsed)
-    set({ project: pair.project, projectV2: pair.projectV2 })
+    layerBitmapRegistry.clear()
+    const pair = loadProjectPair(raw)
+    set({ project: pair.project, editor: pair.editor })
   },
 
   patchProject: (partial) => set((state) => {
-    const next = patchProject(state, partial)
-    return {
-      ...next,
-      projectV2: syncProjectV2FromV1(next.project, state.projectV2),
-    }
+    // Legacy API: patch editor session fields
+    return commitEditorPatch(state, partial)
   }),
 
-  setProjectV2: (updater) => set((state) => ({
-    projectV2: typeof updater === 'function' ? updater(state.projectV2) : updater,
-  })),
+  setProject: (updater) => set((state) => {
+    const project = typeof updater === 'function' ? updater(state.project) : updater
+    if (!project || project.schemaVersion !== 2) return state
+    const pair = loadProjectPair(project)
+    return { project: pair.project, editor: pair.editor }
+  }),
 
   setSource: (updater) => set((state) => {
-    const source = apply(state.project.source, updater)
-    const next = patchProject(state, {
+    const source = apply(state.editor.source, updater)
+    return commitEditorPatch(state, {
       source,
-      name: source?.name ? source.name.replace(/\.[^.]+$/, '') : state.project.name,
+      name: source?.name ? source.name.replace(/\.[^.]+$/, '') : state.editor.name,
     })
-    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
   }),
 
   setSettings: (updater) => set((state) => {
-    const prev = state.project.settings
+    const prev = state.editor.settings
     const nextSettings = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
-    const next = patchProject(state, { settings: nextSettings })
-    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
+    return commitEditorPatch(state, { settings: nextSettings })
   }),
 
-  setElements: (updater) => set((state) => {
-    const next = patchProject(state, { elements: apply(state.project.elements, updater) })
-    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
-  }),
+  setElements: (updater) => set((state) => commitElements(state, updater)),
 
-  setOverlays: (updater) => set((state) => {
-    const next = patchProject(state, { overlays: apply(state.project.overlays, updater) })
-    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
-  }),
+  setOverlays: (updater) => set((state) => commitOverlays(state, updater)),
 
-  setTextLayers: (updater) => set((state) => {
-    const next = patchProject(state, { textLayers: apply(state.project.textLayers, updater) })
-    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
-  }),
+  setTextLayers: (updater) => set((state) => commitTextLayers(state, updater)),
 
   setEnhancedLayer: (updater) => set((state) => {
-    const next = patchProject(state, { enhancedLayer: apply(state.project.enhancedLayer, updater) })
-    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
+    const enhancedLayer = apply(state.editor.enhancedLayer, updater)
+    return commitEditorPatch(state, { enhancedLayer })
   }),
 
   setGifEffects: (updater) => set((state) => {
-    const prev = state.project.gifEffects
-    const nextEffects = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
-    const next = patchProject(state, { gifEffects: nextEffects })
-    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
+    const prev = state.editor.gifEffects
+    const gifEffects = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
+    return commitEditorPatch(state, { gifEffects })
   }),
 
   setImageEdits: (updater) => set((state) => {
-    const prev = state.project.imageEdits
-    const nextEdits = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
-    const next = patchProject(state, { imageEdits: nextEdits })
-    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
+    const prev = state.editor.imageEdits
+    const imageEdits = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
+    return commitEditorPatch(state, { imageEdits })
   }),
 
   setCensor: (updater) => set((state) => {
-    const prev = state.project.censor
-    const nextCensor = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
-    const project = { ...state.project, censor: nextCensor }
-    return { project, projectV2: syncProjectV2FromV1(project, state.projectV2) }
+    const prev = state.editor.censor
+    const censor = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
+    return commitEditorPatch(state, { censor })
   }),
 
   setParallax: (updater) => set((state) => {
-    const prev = state.project.parallax
-    const nextParallax = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
-    const project = { ...state.project, parallax: nextParallax }
-    return { project, projectV2: syncProjectV2FromV1(project, state.projectV2) }
+    const prev = state.editor.parallax
+    const parallax = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
+    return commitEditorPatch(state, { parallax })
   }),
 
   setFontOptions: (updater) => set((state) => {
-    const next = patchProject(state, { fontOptions: apply(state.project.fontOptions, updater) })
-    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
+    const fontOptions = apply(state.editor.fontOptions, updater)
+    return commitEditorPatch(state, { fontOptions })
   }),
 
-  setKeyframes: (keyframes) => set((state) => {
-    const next = patchProject(state, { keyframes })
-    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
-  }),
+  setKeyframes: (keyframes) => set((state) => commitEditorPatch(state, { keyframes })),
 
-  addKeyframe: (kf) => set((state) => {
-    const next = patchProject(state, {
-      keyframes: [...(state.project.keyframes || []), kf],
-    })
-    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
-  }),
+  addKeyframe: (kf) => set((state) => commitEditorPatch(state, {
+    keyframes: [...(state.editor.keyframes || []), kf],
+  })),
 
-  updateKeyframe: (id, patch) => set((state) => {
-    const next = patchProject(state, {
-      keyframes: (state.project.keyframes || []).map((k) => (k.id === id ? { ...k, ...patch } : k)),
-    })
-    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
-  }),
+  updateKeyframe: (id, patch) => set((state) => commitEditorPatch(state, {
+    keyframes: (state.editor.keyframes || []).map((k) => (k.id === id ? { ...k, ...patch } : k)),
+  })),
 
-  removeKeyframe: (id) => set((state) => {
-    const next = patchProject(state, {
-      keyframes: (state.project.keyframes || []).filter((k) => k.id !== id),
-    })
-    return { ...next, projectV2: syncProjectV2FromV1(next.project, state.projectV2) }
-  }),
+  removeKeyframe: (id) => set((state) => commitEditorPatch(state, {
+    keyframes: (state.editor.keyframes || []).filter((k) => k.id !== id),
+  })),
 
   // ── Selection / layers chrome ─────────────────────────────────────
   setSelectedElements: (updater) => set((state) => ({
@@ -424,10 +399,11 @@ export const useStudioStore = create((set, get) => ({
   /** Clear project + selection/tools/session UI (keeps API capability probe). */
   resetStudio: () => {
     const { apiAvailable, apiInfo } = get().session
-    const project = createEmptyProject()
+    layerBitmapRegistry.clear()
+    const pair = createEmptyProjectPair()
     set({
-      project,
-      projectV2: ensureProjectV2(project),
+      project: pair.project,
+      editor: pair.editor,
       selection: { ...INITIAL_SELECTION },
       tools: { ...INITIAL_TOOLS },
       ui: { ...INITIAL_UI },
@@ -437,17 +413,17 @@ export const useStudioStore = create((set, get) => ({
 
   exportDocument: (opts) => serializeProject(get().project, opts),
 
-  /** Prefer V2 when flag on; else V1. */
+  /** Durable Project V2 document. */
   getActiveProjectDocument: () => getActiveProjectDocument(get()),
 }))
 
 /** Selector helpers — prefer these in components over useStudio() for new code. */
 export const selectProject = (s) => s.project
-export const selectProjectV2 = (s) => s.projectV2
-export const selectSettings = (s) => s.project.settings
-export const selectElements = (s) => s.project.elements
-export const selectOverlays = (s) => s.project.overlays
-export const selectTextLayers = (s) => s.project.textLayers
+export const selectEditor = (s) => s.editor
+export const selectSettings = (s) => s.editor.settings
+export const selectElements = (s) => s.editor.elements
+export const selectOverlays = (s) => s.editor.overlays
+export const selectTextLayers = (s) => s.editor.textLayers
 export const selectSelection = (s) => s.selection
 export const selectTools = (s) => s.tools
 export const selectUi = (s) => s.ui

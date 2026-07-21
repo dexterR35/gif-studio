@@ -8,7 +8,7 @@ import { useStudio } from '../context/studio-provider'
 import { useStudioStore } from '../store/studio-store'
 
 export default function MotionPage() {
-  const settings = useStudioStore((s) => s.project.settings)
+  const settings = useStudioStore((s) => s.editor.settings)
   const setSelectedMotionEffect = useStudioStore((s) => s.setSelectedMotionEffect)
   const {
     update, applyPreset, setAmplitude, setSpeed, overlayFileRef, addOverlay,

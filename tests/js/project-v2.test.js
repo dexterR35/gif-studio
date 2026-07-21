@@ -1,26 +1,16 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createEmptyProject } from '../../src/lib/project-document.js'
+import { createLegacyImportFixture } from '../../src/lib/project-document.js'
 import {
   createEmptyProjectV2,
   validateProjectV2,
   migrateV1ToV2,
   projectRevision,
   resetFeatureFlags,
-  setFeatureFlags,
-  isFeatureEnabled,
 } from '../../src/domain/index.js'
 
 describe('ProjectDocumentV2', () => {
   beforeEach(() => {
     resetFeatureFlags()
-  })
-
-  it('feature flags default projectV2 on for new domain paths', () => {
-    expect(isFeatureEnabled('projectV2')).toBe(true)
-    setFeatureFlags({ projectV2: false })
-    expect(isFeatureEnabled('projectV2')).toBe(false)
-    setFeatureFlags({ projectV2: true })
-    expect(isFeatureEnabled('projectV2')).toBe(true)
   })
 
   it('empty v2 validates', () => {
@@ -31,11 +21,11 @@ describe('ProjectDocumentV2', () => {
     expect(result.project.timeline.durationUs).toBeGreaterThan(0)
   })
 
-  it('v1 migrates to v2 with backup note', () => {
-    const v1 = createEmptyProject()
-    v1.name = 'Legacy'
-    v1.settings = { ...v1.settings, width: 320, height: 200, duration: 2, fps: 12 }
-    v1.source = {
+  it('legacy import migrates to v2 with backup note', () => {
+    const legacy = createLegacyImportFixture()
+    legacy.name = 'Legacy'
+    legacy.settings = { ...legacy.settings, width: 320, height: 200, duration: 2, fps: 12 }
+    legacy.source = {
       storageKey: 'fixtures/static_opaque.png',
       mimeType: 'image/png',
       width: 320,
@@ -43,7 +33,7 @@ describe('ProjectDocumentV2', () => {
       byteLength: 100,
       checksumSha256: 'abc',
     }
-    v1.enhancedLayer = {
+    legacy.enhancedLayer = {
       storageKey: 'fixtures/enhanced.png',
       mimeType: 'image/png',
       width: 640,
@@ -51,8 +41,8 @@ describe('ProjectDocumentV2', () => {
       byteLength: 200,
       checksumSha256: 'def',
     }
-    v1.censor = { enabled: true, x: 10, y: 10, w: 20, h: 20, pixelSize: 8 }
-    v1.textLayers = [{
+    legacy.censor = { enabled: true, x: 10, y: 10, w: 20, h: 20, pixelSize: 8 }
+    legacy.textLayers = [{
       id: 't1',
       text: 'Hello',
       font: 'Arial',
@@ -62,7 +52,7 @@ describe('ProjectDocumentV2', () => {
       opacity: 100,
     }]
 
-    const { project, backup, notes, warnings } = migrateV1ToV2(v1)
+    const { project, backup, notes, warnings } = migrateV1ToV2(legacy)
     expect(backup.schemaVersion).toBe(1)
     expect(notes.some((n) => n.includes('backup'))).toBe(true)
     expect(project.schemaVersion).toBe(2)
@@ -85,15 +75,15 @@ describe('ProjectDocumentV2', () => {
       toDataURL() { return 'data:image/png;base64,xx' },
     })
 
-    const v1 = createEmptyProject()
-    v1.source = {
+    const legacy = createLegacyImportFixture()
+    legacy.source = {
       name: 'shot.png',
       width: 64,
       height: 48,
       url: 'blob:http://localhost/abc',
       kind: 'image',
     }
-    v1.elements = [{
+    legacy.elements = [{
       id: 'cut-lasso-1',
       name: 'Lasso cut',
       x: 4,
@@ -126,7 +116,7 @@ describe('ProjectDocumentV2', () => {
     }
 
     try {
-      const { project, backup } = migrateV1ToV2(v1)
+      const { project, backup } = migrateV1ToV2(legacy)
       expect(project.schemaVersion).toBe(2)
       expect(project.layers['layer-background']).toBeTruthy()
       expect(project.layers['cut-lasso-1']).toBeTruthy()

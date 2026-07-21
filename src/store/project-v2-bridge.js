@@ -1,90 +1,346 @@
 /**
- * Thin V1 ↔ V2 project bridge for strangler migration (Phases 1–14).
- * Does not rewrite StudioProvider — keeps V2 alongside V1 when flagged.
+ * Project store bridge — durable document is always Project V2.
+ * `editor` is a derived session view for Konva / StudioProvider.
+ * Legacy saved files (schemaVersion 1) are migrated once on load.
  */
 
+import { createEmptyProjectV2, migrateV1ToV2 } from '../domain/index.js'
 import {
-  isFeatureEnabled,
-  createEmptyProjectV2,
-  migrateV1ToV2,
-} from '../domain/index.js'
-import { createEmptyProject } from '../lib/project-document.js'
+  applyElementsToProjectV2,
+  applyOverlaysToProjectV2,
+  applyTextLayersToProjectV2,
+} from '../domain/layers/apply-elements-to-v2.js'
+import { projectToEditorView } from '../domain/project/project-to-editor-view.js'
+import { msToUs } from '../domain/timeline/time.js'
+import { createEmptyEditorSession } from '../lib/editor-session.js'
+import { layerBitmapRegistry } from '../runtime/layer-bitmap-registry.js'
+
+export {
+  projectToEditorView,
+  applyElementsToProjectV2,
+  applyOverlaysToProjectV2,
+  applyTextLayersToProjectV2,
+}
 
 /**
- * @param {object | null | undefined} v1
- * @param {object | null | undefined} [previousV2] keep on failure so Layers panel is not wiped
- * @returns {object | null}
+ * @param {object | null | undefined} project
+ * @param {object | null | undefined} [previousEditor]
  */
-export function ensureProjectV2(v1, previousV2 = null) {
-  if (!isFeatureEnabled('projectV2')) {
-    return null
+export function buildEditorView(project, previousEditor = null) {
+  const previous = previousEditor && typeof previousEditor === 'object'
+    ? previousEditor
+    : createEmptyEditorSession()
+  return projectToEditorView(project, {
+    previousEditor: previous,
+    registry: layerBitmapRegistry,
+  })
+}
+
+/**
+ * @param {object} project
+ * @param {object} editor
+ */
+export function applyEditorSessionToV2(project, editor) {
+  if (!project || project.schemaVersion !== 2) return project
+  const settings = editor?.settings || {}
+  const durationSec = Number(settings.duration) || 10
+  const width = Number(settings.width) || project.canvas?.width || 480
+  const height = Number(settings.height) || project.canvas?.height || 300
+
+  return {
+    ...project,
+    id: editor?.id || project.id,
+    metadata: {
+      ...project.metadata,
+      name: editor?.name || project.metadata?.name || 'Untitled',
+      updatedAt: new Date().toISOString(),
+      createdAt: editor?.createdAt || project.metadata?.createdAt,
+    },
+    canvas: {
+      ...project.canvas,
+      width,
+      height,
+      background: settings.transparent
+        ? { kind: 'transparent' }
+        : { kind: 'solid', color: settings.background || '#111114' },
+    },
+    timeline: {
+      ...project.timeline,
+      durationUs: msToUs(durationSec * 1000),
+      loopMode: settings.loop === 1 ? 'once' : (project.timeline?.loopMode || 'loop'),
+    },
+    exportSettings: {
+      ...project.exportSettings,
+      fps: Number(settings.fps) || 24,
+      quality: settings.quality || 'High quality',
+      loop: Number.isFinite(Number(settings.loop)) ? Number(settings.loop) : 0,
+      paletteSize: Number(settings.palette) || 256,
+      dither: settings.dither !== false,
+      disposal: Number(settings.disposal) || 2,
+      transparent: Boolean(settings.transparent),
+    },
+    extensions: {
+      ...(project.extensions || {}),
+      legacyFontOptions: editor?.fontOptions,
+      legacySettings: {
+        preset: settings.preset,
+        fit: settings.fit,
+        motion: settings.motion || 'None',
+        motionEffects: settings.motionEffects,
+      },
+      editorSession: {
+        source: editor?.source
+          ? {
+              name: editor.source.name,
+              kind: editor.source.kind,
+              width: editor.source.width,
+              height: editor.source.height,
+              mimeType: editor.source.mimeType,
+              frameCount: editor.source.frameCount,
+              storageKey: editor.source.storageKey,
+              url: editor.source.url && !String(editor.source.url).startsWith('blob:')
+                ? editor.source.url
+                : null,
+            }
+          : null,
+        gifEffects: editor?.gifEffects || null,
+        imageEdits: editor?.imageEdits || null,
+        censor: editor?.censor || null,
+        parallax: editor?.parallax || null,
+        enhancedLayer: editor?.enhancedLayer
+          ? {
+              name: editor.enhancedLayer.name,
+              width: editor.enhancedLayer.width,
+              height: editor.enhancedLayer.height,
+              visible: editor.enhancedLayer.visible,
+              storageKey: editor.enhancedLayer.storageKey,
+            }
+          : null,
+        keyframes: Array.isArray(editor?.keyframes) ? editor.keyframes : [],
+      },
+    },
   }
-  if (v1 && typeof v1 === 'object' && v1.schemaVersion === 2) {
-    return v1
+}
+
+function withSessionFromExtensions(editor, project) {
+  const session = project?.extensions?.editorSession || {}
+  return {
+    ...editor,
+    source: editor.source ?? session.source ?? null,
+    gifEffects: editor.gifEffects ?? session.gifEffects ?? editor.gifEffects,
+    imageEdits: editor.imageEdits ?? session.imageEdits ?? editor.imageEdits,
+    censor: editor.censor ?? session.censor ?? editor.censor,
+    parallax: editor.parallax ?? session.parallax ?? editor.parallax,
+    enhancedLayer: editor.enhancedLayer ?? session.enhancedLayer ?? null,
+    keyframes: editor.keyframes?.length ? editor.keyframes : (session.keyframes || []),
+    fontOptions: editor.fontOptions || project?.extensions?.legacyFontOptions || editor.fontOptions,
   }
+}
+
+export function getActiveProjectDocument(state) {
+  if (state?.project?.schemaVersion === 2) return state.project
+  return createEmptyProjectV2()
+}
+
+function ensureProject(state) {
+  return state.project?.schemaVersion === 2 ? state.project : createEmptyProjectV2()
+}
+
+function emptyPair() {
+  const project = createEmptyProjectV2()
+  const editor = buildEditorView(project)
+  return { project, editor }
+}
+
+export function commitElements(state, updater) {
+  const prev = state.editor?.elements || []
+  const next = typeof updater === 'function' ? updater(prev) : updater
+  const list = Array.isArray(next) ? next : prev
+
+  layerBitmapRegistry.syncFromElements(list)
+  const withBitmaps = layerBitmapRegistry.attachToElements(list)
+
+  let project = ensureProject(state)
+  project = applyElementsToProjectV2(project, withBitmaps)
+  project = applyEditorSessionToV2(project, { ...state.editor, elements: withBitmaps })
+
+  const editor = withSessionFromExtensions(
+    buildEditorView(project, { ...state.editor, elements: withBitmaps }),
+    project,
+  )
+
+  return { project, editor }
+}
+
+export function commitOverlays(state, updater) {
+  const prev = state.editor?.overlays || []
+  const next = typeof updater === 'function' ? updater(prev) : updater
+  const list = Array.isArray(next) ? next : prev
+
+  layerBitmapRegistry.syncFromOverlays(list)
+  const withRuntime = layerBitmapRegistry.attachToOverlays(list)
+
+  let project = ensureProject(state)
+  project = applyOverlaysToProjectV2(project, withRuntime)
+  project = applyEditorSessionToV2(project, { ...state.editor, overlays: withRuntime })
+
+  const editor = withSessionFromExtensions(
+    buildEditorView(project, { ...state.editor, overlays: withRuntime }),
+    project,
+  )
+
+  return { project, editor }
+}
+
+export function commitTextLayers(state, updater) {
+  const prev = state.editor?.textLayers || []
+  const next = typeof updater === 'function' ? updater(prev) : updater
+  const list = Array.isArray(next) ? next : prev
+
+  let project = ensureProject(state)
+  project = applyTextLayersToProjectV2(project, list)
+  project = applyEditorSessionToV2(project, { ...state.editor, textLayers: list })
+
+  const editor = withSessionFromExtensions(
+    buildEditorView(project, { ...state.editor, textLayers: list }),
+    project,
+  )
+
+  return { project, editor }
+}
+
+export function commitEditorPatch(state, editorPatch) {
+  const editor = { ...state.editor, ...editorPatch, updatedAt: new Date().toISOString() }
+  let project = ensureProject(state)
+
+  if (editorPatch.elements) {
+    layerBitmapRegistry.syncFromElements(editor.elements)
+    project = applyElementsToProjectV2(project, layerBitmapRegistry.attachToElements(editor.elements))
+  }
+  if (editorPatch.overlays) {
+    layerBitmapRegistry.syncFromOverlays(editor.overlays)
+    project = applyOverlaysToProjectV2(project, layerBitmapRegistry.attachToOverlays(editor.overlays))
+  }
+  if (editorPatch.textLayers) {
+    project = applyTextLayersToProjectV2(project, editor.textLayers)
+  }
+
+  if (editorPatch.source !== undefined || editorPatch.settings || editorPatch.censor
+      || editorPatch.name || editorPatch.gifEffects || editorPatch.imageEdits
+      || editorPatch.parallax || editorPatch.enhancedLayer || editorPatch.fontOptions
+      || editorPatch.keyframes) {
+    if (editorPatch.source !== undefined || editorPatch.censor !== undefined || editorPatch.enhancedLayer !== undefined) {
+      try {
+        const { project: migrated } = migrateV1ToV2(editor)
+        project = {
+          ...migrated,
+          layers: { ...migrated.layers, ...pickManagedLayers(state.project) },
+          rootLayerIds: mergeRootIds(migrated.rootLayerIds, state.project?.rootLayerIds, migrated.layers),
+          assets: { ...migrated.assets, ...(state.project?.assets || {}) },
+        }
+        project = applyElementsToProjectV2(project, editor.elements || [])
+        project = applyOverlaysToProjectV2(project, editor.overlays || [])
+        project = applyTextLayersToProjectV2(project, editor.textLayers || [])
+      } catch (err) {
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn('[project] session layer rebuild failed', err)
+        }
+      }
+    }
+    project = applyEditorSessionToV2(project, editor)
+  }
+
+  const nextEditor = withSessionFromExtensions(buildEditorView(project, editor), project)
+  if (editor.source) nextEditor.source = editor.source
+  if (editor.enhancedLayer) nextEditor.enhancedLayer = editor.enhancedLayer
+  if (editor.gifEffects) nextEditor.gifEffects = editor.gifEffects
+  if (editor.imageEdits) nextEditor.imageEdits = editor.imageEdits
+  if (editor.censor) nextEditor.censor = editor.censor
+  if (editor.parallax) nextEditor.parallax = editor.parallax
+  if (editor.fontOptions) nextEditor.fontOptions = editor.fontOptions
+  if (editor.keyframes) nextEditor.keyframes = editor.keyframes
+  if (editor.settings) nextEditor.settings = { ...nextEditor.settings, ...editor.settings }
+  if (editor.name) nextEditor.name = editor.name
+
+  return { project, editor: nextEditor }
+}
+
+function pickManagedLayers(project) {
+  if (!project?.layers) return {}
+  const out = {}
+  for (const [id, layer] of Object.entries(project.layers)) {
+    if (id === 'layer-background' || id === 'layer-pixelate-censor') continue
+    if (layer?.rollbackAssetId) continue
+    out[id] = layer
+  }
+  return out
+}
+
+function mergeRootIds(migratedRoots, prevRoots, layers) {
+  const roots = []
+  const seen = new Set()
+  for (const id of migratedRoots || []) {
+    if (layers[id] && !seen.has(id)) {
+      seen.add(id)
+      roots.push(id)
+    }
+  }
+  for (const id of prevRoots || []) {
+    if (layers[id] && !seen.has(id)) {
+      seen.add(id)
+      roots.push(id)
+    }
+  }
+  for (const id of Object.keys(layers || {})) {
+    if (!seen.has(id)) {
+      seen.add(id)
+      roots.push(id)
+    }
+  }
+  return roots
+}
+
+export function loadProjectPair(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return emptyPair()
+  }
+
+  if (raw.schemaVersion === 2) {
+    const project = raw
+    layerBitmapRegistry.clear()
+    let editor = buildEditorView(project)
+    editor = withSessionFromExtensions(editor, project)
+    const session = project.extensions?.editorSession
+    if (session?.source && !editor.source) editor.source = session.source
+    if (session?.gifEffects) editor.gifEffects = { ...editor.gifEffects, ...session.gifEffects }
+    if (session?.imageEdits) editor.imageEdits = { ...editor.imageEdits, ...session.imageEdits }
+    if (session?.censor) editor.censor = { ...editor.censor, ...session.censor }
+    if (session?.parallax) editor.parallax = { ...editor.parallax, ...session.parallax }
+    if (session?.enhancedLayer) editor.enhancedLayer = session.enhancedLayer
+    if (session?.keyframes) editor.keyframes = session.keyframes
+    return { project, editor }
+  }
+
+  // Legacy saved file (schemaVersion 1) — migrate once
+  layerBitmapRegistry.syncFromElements(raw.elements || [])
+  layerBitmapRegistry.syncFromOverlays(raw.overlays || [])
   try {
-    const { project } = migrateV1ToV2(v1 || createEmptyProject())
-    return project
+    const { project } = migrateV1ToV2(raw)
+    const withSession = applyEditorSessionToV2(project, raw)
+    const editor = withSessionFromExtensions(buildEditorView(withSession, raw), withSession)
+    editor.source = raw.source || editor.source
+    editor.enhancedLayer = raw.enhancedLayer || editor.enhancedLayer
+    editor.elements = layerBitmapRegistry.attachToElements(editor.elements)
+    editor.overlays = layerBitmapRegistry.attachToOverlays(editor.overlays)
+    return { project: withSession, editor }
   } catch (err) {
     if (typeof console !== 'undefined' && console.warn) {
-      console.warn('[project-v2] migrateV1ToV2 failed; keeping previous projection', err)
+      console.warn('[project] legacy import migrate failed', err)
     }
-    if (previousV2 && previousV2.schemaVersion === 2) {
-      return previousV2
-    }
-    return createEmptyProjectV2({
-      name: v1?.name,
-      width: v1?.settings?.width,
-      height: v1?.settings?.height,
-    })
+    return emptyPair()
   }
 }
 
-/**
- * Active document for new code paths.
- * When projectV2 flag is on and a V2 doc exists, return it; else V1.
- *
- * @param {{ project?: object, projectV2?: object | null }} state
- * @returns {object}
- */
-export function getActiveProjectDocument(state) {
-  if (!state) return createEmptyProject()
-  if (isFeatureEnabled('projectV2') && state.projectV2 && state.projectV2.schemaVersion === 2) {
-    return state.projectV2
-  }
-  return state.project || createEmptyProject()
-}
-
-/**
- * Sync helper after V1 mutations: refresh V2 projection when flag is on.
- * @param {object} v1
- * @param {object | null | undefined} previousV2
- * @returns {object | null}
- */
-export function syncProjectV2FromV1(v1, previousV2) {
-  if (!isFeatureEnabled('projectV2')) return previousV2 ?? null
-  return ensureProjectV2(v1, previousV2)
-}
-
-/**
- * Load raw JSON into { project (V1), projectV2 }.
- * @param {object} raw
- * @returns {{ project: object, projectV2: object | null }}
- */
-export function loadProjectPair(raw) {
-  if (raw && raw.schemaVersion === 2) {
-    const v2 = raw
-    // Keep legacy V1 slot as empty shell + name; UI still reads V1 arrays until strangler completes.
-    const v1 = createEmptyProject()
-    v1.name = v2.metadata?.name || v1.name
-    v1.id = v2.id || v1.id
-    if (isFeatureEnabled('projectV2')) {
-      return { project: v1, projectV2: v2 }
-    }
-    return { project: v1, projectV2: null }
-  }
-
-  const project = raw && typeof raw === 'object' ? raw : createEmptyProject()
-  const projectV2 = isFeatureEnabled('projectV2') ? ensureProjectV2(project) : null
-  return { project, projectV2 }
+export function createEmptyProjectPair() {
+  return emptyPair()
 }

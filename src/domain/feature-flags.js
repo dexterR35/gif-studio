@@ -4,7 +4,6 @@
  */
 
 const DEFAULT_FLAGS = Object.freeze({
-  projectV2: true,
   unifiedLayers: true,
   commandHistory: true,
   sceneEvaluatorV2: true,

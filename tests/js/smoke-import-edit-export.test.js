@@ -14,7 +14,7 @@ import {
 } from '../../src/commands/index.js'
 import { evaluate } from '../../src/render/scene-evaluator.js'
 import { runExportPreflight } from '../../src/export/export-preflight.js'
-import { createEmptyProject } from '../../src/lib/project-document.js'
+import { createLegacyImportFixture } from '../../src/lib/project-document.js'
 import { resetFeatureFlags, setFeatureFlags } from '../../src/domain/feature-flags.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -24,7 +24,6 @@ describe('smoke import → edit → export', () => {
   beforeEach(() => {
     resetFeatureFlags()
     setFeatureFlags({
-      projectV2: true,
       unifiedLayers: true,
       commandHistory: true,
       sceneEvaluatorV2: true,
@@ -44,16 +43,16 @@ describe('smoke import → edit → export', () => {
     expect(gif.byteLength).toBeGreaterThan(0)
   })
 
-  it('migrates V1, edits via commands, evaluates, preflights export', () => {
-    const v1 = createEmptyProject()
-    v1.source = {
+  it('migrates legacy import, edits via commands, evaluates, preflights export', () => {
+    const legacy = createLegacyImportFixture()
+    legacy.source = {
       kind: 'image',
       name: 'static_opaque.png',
       width: 64,
       height: 64,
       url: null,
     }
-    v1.elements = [
+    legacy.elements = [
       {
         id: 'el1',
         name: 'Cutout',
@@ -66,7 +65,7 @@ describe('smoke import → edit → export', () => {
       },
     ]
 
-    const { project: v2 } = migrateV1ToV2(v1)
+    const { project: v2 } = migrateV1ToV2(legacy)
     expect(v2.schemaVersion).toBe(2)
     expect(validateProjectV2(v2).ok).toBe(true)
 
