@@ -54,14 +54,6 @@ SAM2_URLS = {
     ),
 }
 
-# Ultralytics release assets — https://github.com/ultralytics/ultralytics
-YOLO_URLS = {
-    "yolov8n.pt": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt",
-    "yolov8s.pt": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8s.pt",
-    "yolov8m.pt": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8m.pt",
-    "yolo11n.pt": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt",
-}
-
 GROUNDING_DINO = [
     {
         "file": "groundingdino_swint_ogc.pth",
@@ -123,16 +115,6 @@ def setup_sam2(tiny_only: bool) -> None:
     print("  install package: pip install 'git+https://github.com/facebookresearch/sam2.git'")
 
 
-def setup_yolo(tiny_only: bool) -> None:
-    print("\n[YOLO] Ultralytics → models/yolo/  (https://github.com/ultralytics/ultralytics)")
-    items = list(YOLO_URLS.items())
-    if tiny_only:
-        items = [("yolov8n.pt", YOLO_URLS["yolov8n.pt"])]
-    for name, url in items:
-        download(url, MODELS / "yolo" / name)
-    print("  install package: pip install ultralytics")
-
-
 def setup_matte_dirs() -> None:
     print("\n[Matte] BiRefNet / RMBG via rembg — models/matte/")
     (MODELS / "matte").mkdir(parents=True, exist_ok=True)
@@ -160,18 +142,10 @@ def setup_depth(tiny_only: bool = True) -> None:
     del tiny_only
 
 
-def setup_lama_dirs() -> None:
-    print("\n[Inpaint] LaMa slot → models/lama/")
-    (MODELS / "lama").mkdir(parents=True, exist_ok=True)
-    print("  Place big-lama.pt here; OpenCV Telea always works without it")
-    print("  optional: pip install simple-lama-inpainting")
-
-
 def setup_slots() -> None:
-    print("\n[Slots] FILM / GFPGAN / SAM3 dirs")
-    for name in ("film", "gfpgan", "sam3"):
+    print("\n[Slots] GFPGAN / SAM3 dirs")
+    for name in ("gfpgan", "sam3"):
         (MODELS / name).mkdir(parents=True, exist_ok=True)
-    print("  film/     — FILM interpolate weights (not wired yet)")
     print("  gfpgan/   — GFPGANv1.4.pth face polish slot")
     print("  sam3/     — use --with-sam3 after HF access is granted")
 
@@ -349,12 +323,11 @@ def setup_rife(hf_repo: str | None) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-rife", action="store_true")
-    parser.add_argument("--skip-yolo", action="store_true")
     parser.add_argument("--skip-depth", action="store_true")
     parser.add_argument(
         "--tiny-only",
         action="store_true",
-        help="Smaller set: SAM2 tiny + DINO Swin-T + YOLOv8n + depth small",
+        help="Smaller set: SAM2 tiny + DINO Swin-T + depth small",
     )
     parser.add_argument(
         "--no-install-dino",
@@ -385,12 +358,9 @@ def main() -> int:
         tiny_only=args.tiny_only,
         install_pkg=not args.no_install_dino,
     )
-    if not args.skip_yolo:
-        setup_yolo(tiny_only=args.tiny_only)
     setup_matte_dirs()
     if not args.skip_depth:
         setup_depth(tiny_only=args.tiny_only)
-    setup_lama_dirs()
     setup_slots()
     if args.with_sam3:
         setup_sam3()
@@ -400,7 +370,7 @@ def main() -> int:
     print("\nDone. Local-only inference (GIF_STUDIO_ALLOW_HF unset).")
     print("  pip install -r requirements-ai.txt")
     print("  pip install 'git+https://github.com/facebookresearch/sam2.git'")
-    print("  pip install ultralytics rembg")
+    print("  pip install rembg")
     print("  See docs/GIF_STUDIO_MEGA_SENIOR_BUILD.md (§10 AI subsystem).")
     print("Device auto-selects CUDA → MPS → CPU (override: GIF_STUDIO_TORCH_DEVICE).")
     print("Check /api/health for device + models.*.ready flags.")

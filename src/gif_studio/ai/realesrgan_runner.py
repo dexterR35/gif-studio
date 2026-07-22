@@ -1,7 +1,7 @@
-"""Upscale engines: Bicubic, ESRGAN, Real-ESRGAN, A-ESRGAN (anime).
+"""Upscale engines: ESRGAN, Real-ESRGAN, A-ESRGAN (anime).
 
 Real-ESRGAN / ESRGAN / A-ESRGAN use xinntao weights via Spandrel or
-realesrgan+basicsr. Bicubic is always available (OpenCV).
+realesrgan+basicsr. Missing weights or packages raise.
 
 Guards: refuse output > 5k px on a side; refuse if estimated peak RAM > 20 GB;
 tile + limit torch/OMP threads so upscale does not freeze the machine.
@@ -71,7 +71,6 @@ MODEL_SPECS: dict[str, dict[str, Any]] = {
 }
 
 ALIASES = {
-    "bicubic": "bicubic",
     "esrgan": "esrgan",
     "real-esrgan": "realesrgan",
     "realesrgan": "realesrgan",
@@ -84,7 +83,10 @@ ALIASES = {
 
 def normalize_model(model: str | None) -> str:
     key = (model or "realesrgan").strip().lower().replace("_", "-")
-    return ALIASES.get(key, "realesrgan")
+    if key not in ALIASES:
+        known = ", ".join(sorted(set(ALIASES.values())))
+        raise RuntimeError(f"Unknown upscale model {model!r}. Supported: {known}.")
+    return ALIASES[key]
 
 
 def estimate_upscale_memory_bytes(width: int, height: int, scale: int) -> int:
@@ -248,9 +250,10 @@ def realesrgan_ready() -> bool:
 
 
 def upscale_available(model: str | None = None) -> bool:
-    mid = normalize_model(model)
-    if mid == "bicubic":
-        return True
+    try:
+        mid = normalize_model(model)
+    except RuntimeError:
+        return False
     if not realesrgan_ready():
         return False
     try:
@@ -258,16 +261,6 @@ def upscale_available(model: str | None = None) -> bool:
         return path.exists() and path.stat().st_size > 1024
     except Exception:
         return False
-
-
-def _upscale_bicubic(image: np.ndarray, scale: int) -> tuple[bytes, str]:
-    h, w = image.shape[:2]
-    out = cv2.resize(
-        image,
-        (max(1, int(w * scale)), max(1, int(h * scale))),
-        interpolation=cv2.INTER_CUBIC,
-    )
-    return encode_png(out), "bicubic"
 
 
 def _spec_key(model: str) -> str:
@@ -342,11 +335,11 @@ def upscale_with_realesrgan(
     check_upscale_limits(w, h, scale)
 
     with _upscale_resource_limits():
-        if mid == "bicubic":
-            return _upscale_bicubic(image, scale)
-
         if mid not in MODEL_SPECS and mid != "realesrgan-x2":
-            mid = "realesrgan"
+            raise RuntimeError(
+                f"Unknown upscale model {model!r}. "
+                f"Supported: {', '.join(sorted(set(ALIASES.values())))}."
+            )
 
         # Prefer Spandrel — works on modern Python without broken basicsr builds.
         if spandrel_ready():
@@ -369,7 +362,7 @@ def upscale_with_realesrgan(
 
     raise RuntimeError(
         "AI upscale not available. Install with: pip install spandrel torch "
-        "(or realesrgan + basicsr on older Python). Bicubic works without AI."
+        "(or realesrgan + basicsr on older Python) and place weights under models/realesrgan/."
     )
 
 

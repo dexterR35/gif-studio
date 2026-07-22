@@ -12,9 +12,7 @@ export const EVAL_ORDER_STEPS = Object.freeze([
   'additive-tracks-procedural',
   'parallax',
   'pose-mesh-warp',
-  'per-layer-effects',
   'composite-by-layer-order',
-  'global-adjustment-effects',
   'secure-redaction-last',
   'export-color-palette',
 ])

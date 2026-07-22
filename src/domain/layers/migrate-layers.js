@@ -1,4 +1,3 @@
-import { unifyEffectNodes } from '../effects/effect-nodes.js'
 import { defaultCutoutMotion } from '../timeline/procedural-motion.js'
 import { msToUs } from '../timeline/time.js'
 
@@ -140,14 +139,12 @@ export function migrateLayersFromV1(v1, ctx = {}) {
     activeAssetId = enhancedId
   }
 
-  const globalEffects = unifyEffectNodes(v1?.imageEdits, v1?.gifEffects)
-
   if (activeAssetId) {
     const bgId = 'layer-background'
     layers[bgId] = {
       ...visualCommon(bgId, 'Background', {
         locked: true,
-        effects: globalEffects,
+        effects: [],
         transform: identityTransform({
           flipX: Boolean(v1?.imageEdits?.flipX),
           flipY: Boolean(v1?.imageEdits?.flipY),
@@ -214,7 +211,6 @@ export function migrateLayersFromV1(v1, ctx = {}) {
         cutoutMode: el.cutoutMode,
         engine: el.engine,
         smart: el.smart,
-        effects: el.effects || null,
       },
     }
     rootLayerIds.push(id)

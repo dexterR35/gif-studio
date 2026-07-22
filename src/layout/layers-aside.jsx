@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Frame, ImageIcon, Layers3, Maximize2, Type, Shield, Grid3x3 } from 'lucide-react'
 import { EmptyState, LayerRow } from '../components/ui'
+import { cn } from '../lib/cn'
 import { useStudio } from '../context/studio-provider'
 import { useStudioStore, getActiveProjectDocument } from '../store/studio-store'
 import { buildUnifiedLayerList } from '../domain/layers/unified-layer-list'
@@ -9,7 +10,7 @@ import { buildUnifiedLayerList } from '../domain/layers/unified-layer-list'
  * Third sidebar — Photoshop-style layers (front at top · drag to reorder).
  * When unifiedLayers is on, order comes from the active Project V2 document.
  */
-export function LayersAside() {
+export function LayersAside({ floating = false }) {
   const elements = useStudioStore((s) => s.editor.elements)
   const overlays = useStudioStore((s) => s.editor.overlays)
   const textLayers = useStudioStore((s) => s.editor.textLayers)
@@ -314,13 +315,20 @@ export function LayersAside() {
   return (
     <aside
       aria-label="Layers"
-      className="scrollbar flex h-full w-[200px] shrink-0 flex-col overflow-y-auto overscroll-contain border-l border-white/[.06] bg-panel"
+      className={cn(
+        'scrollbar flex flex-col overflow-y-auto overscroll-contain',
+        floating
+          ? 'h-full w-full bg-transparent'
+          : 'h-full w-[200px] shrink-0 border-l border-white/[.06] bg-panel',
+      )}
     >
-      <div className="flex h-11 shrink-0 items-center border-b border-white/[.06] px-3">
-        <span className="text-[10px] font-semibold uppercase tracking-[.14em] text-zinc-500">
-          Layers · {layerCount}{unified ? ' · V2' : ''}
-        </span>
-      </div>
+      {!floating && (
+        <div className="flex h-11 shrink-0 items-center border-b border-white/[.06] px-3">
+          <span className="text-[10px] font-semibold uppercase tracking-[.14em] text-zinc-500">
+            Layers · {layerCount}{unified ? ' · V2' : ''}
+          </span>
+        </div>
+      )}
 
       <div className="flex flex-col gap-1 p-2">
         {!layerCount && (

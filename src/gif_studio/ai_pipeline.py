@@ -1,8 +1,7 @@
-"""Server-side AI pipeline: select / matte / depth / inpaint / upscale / interpolate.
+"""Server-side AI pipeline: select / matte / depth / upscale / interpolate.
 
 Heavy models run through gif_studio.ai.* runners when packages + weights are
-available. Missing engines raise — no substitute algorithms (except documented
-OpenCV fallbacks for inpaint).
+available. Missing engines raise — no substitute algorithms.
 """
 
 from __future__ import annotations
@@ -48,15 +47,6 @@ def grounding_dino_available() -> bool:
         )
 
 
-def yolo_available() -> bool:
-    try:
-        from .ai.yolo_runner import yolo_ready
-
-        return yolo_ready()
-    except Exception:
-        return False
-
-
 def matte_available(model: str | None = None) -> bool:
     try:
         from .ai.matte_runner import matte_ready
@@ -71,24 +61,6 @@ def depth_available() -> bool:
         from .ai.depth_runner import depth_ready
 
         return depth_ready()
-    except Exception:
-        return False
-
-
-def inpaint_available(model: str | None = None) -> bool:
-    try:
-        from .ai.lama_runner import inpaint_ready
-
-        return inpaint_ready(model)
-    except Exception:
-        return True
-
-
-def lama_available() -> bool:
-    try:
-        from .ai.lama_runner import lama_ready
-
-        return lama_ready()
     except Exception:
         return False
 
@@ -111,15 +83,6 @@ def rife_available() -> bool:
         return False
 
 
-def film_available() -> bool:
-    """FILM slot — not wired yet; catalog may show ready when weights exist."""
-    from pathlib import Path
-    from .ai.paths import models_dir
-
-    root = models_dir() / "film"
-    return root.is_dir() and any(root.iterdir())
-
-
 def gfpgan_available() -> bool:
     from pathlib import Path
     from .ai.paths import models_dir
@@ -133,67 +96,27 @@ def rembg_available() -> bool:
     return importlib.util.find_spec("rembg") is not None
 
 
-def _segment_family(model: str | None) -> str:
-    mid = (model or "").strip().lower()
-    if mid.startswith("sam3") or mid in {"sam3", "sam3.1"}:
-        return "sam3"
-    return "sam2"
-
-
-def segment_sam2(
-    payload: bytes,
-    point: tuple[float, float] | None = None,
-    box: tuple[float, float, float, float] | None = None,
-    model: str | None = None,
-) -> dict[str, Any]:
-    """Run SAM2 or SAM3 segmentation based on model id."""
-    family = _segment_family(model)
-    if family == "sam3":
-        if not sam3_available():
-            raise RuntimeError(
-                "SAM3 is not available. Install facebookresearch/sam3 and place "
-                "weights under models/sam3/."
-            )
-        from .ai.sam3_runner import segment_with_sam3
-
-        return segment_with_sam3(payload, point=point, box=box, model=model)
-
-    if not sam2_available():
-        raise RuntimeError(
-            "SAM2 is not available. Install SAM2 and place weights under models/sam2 "
-            "(python scripts/setup_ai_models.py)."
-        )
-    from .ai.sam2_runner import segment_with_sam2
-
-    return segment_with_sam2(payload, point=point, box=box, model=model)
-
-
 def _resolve_detect_engine(engine: str | None) -> str:
-    """Return ``sam3``, ``grounding_dino``, or ``yolo``.
+    """Return ``sam3`` or ``grounding_dino``.
 
-    ``auto`` prefers SAM3 (text→mask upgrade) when ready, else DINO, else YOLO.
+    ``auto`` prefers SAM3 (text→mask) when ready, else Grounding DINO.
     """
     wanted = (engine or "auto").strip().lower().replace("-", "_")
     aliases = {
         "dino": "grounding_dino",
         "groundingdino": "grounding_dino",
-        "ultralytics": "yolo",
-        "yolov8": "yolo",
-        "yolo11": "yolo",
         "sam_3": "sam3",
         "sam3.1": "sam3",
     }
     wanted = aliases.get(wanted, wanted)
-    if wanted in {"sam3", "grounding_dino", "yolo"}:
+    if wanted in {"sam3", "grounding_dino"}:
         return wanted
     if sam3_available():
         return "sam3"
     if grounding_dino_available():
         return "grounding_dino"
-    if yolo_available():
-        return "yolo"
     raise RuntimeError(
-        "No detect engine ready. Install SAM3, Grounding DINO, and/or Ultralytics YOLO "
+        "No detect engine ready. Install SAM3 and/or Grounding DINO "
         "with local weights (python scripts/setup_ai_models.py)."
     )
 
@@ -270,7 +193,7 @@ def _refine_with_sam2(
     top: dict[str, Any],
     sam2_model: str | None,
 ) -> dict[str, Any]:
-    """Box → mask via SAM2 only (DINO/YOLO refine). SAM3 is a separate detect engine."""
+    """Box → mask via SAM2 only (DINO refine). SAM3 is a separate detect engine."""
     if not sam2_available():
         raise RuntimeError("SAM2 not available for mask refine")
     from .ai.sam2_runner import segment_with_sam2
@@ -296,10 +219,9 @@ def detect_objects(
     dino_model: str | None = None,
     sam2_model: str | None = None,
     engine: str | None = "auto",
-    yolo_model: str | None = None,
     sam3_model: str | None = None,
 ) -> dict[str, Any]:
-    """Detect via SAM3 (text→mask), Grounding DINO + SAM2 refine, or YOLO + SAM2 refine.
+    """Detect via SAM3 (text→mask) or Grounding DINO + SAM2 refine.
 
     SAM3 is the upgrade path that *replaces* DINO+SAM2 — never stacked on both.
     """
@@ -313,31 +235,18 @@ def detect_objects(
             payload, prompt, sam3_model=sam3_model or sam2_model,
         )
 
-    if chosen == "yolo":
-        if not yolo_available():
-            raise RuntimeError(
-                "YOLO is not available. pip install ultralytics and place weights "
-                "under models/yolo/ (python scripts/setup_ai_models.py). "
-                "See https://github.com/ultralytics/ultralytics"
-            )
-        from .ai.yolo_runner import detect_with_yolo
-
-        result = detect_with_yolo(
-            payload, prompt=prompt, confidence=confidence, model=yolo_model,
+    if not grounding_dino_available():
+        raise RuntimeError(
+            "Grounding DINO is not available. Install the official package + local "
+            "weights (python scripts/setup_ai_models.py)."
         )
-    else:
-        if not grounding_dino_available():
-            raise RuntimeError(
-                "Grounding DINO is not available. Install the official package + local "
-                "weights (python scripts/setup_ai_models.py)."
-            )
-        if not prompt:
-            raise ValueError("A text prompt is required for Grounding DINO detection.")
-        from .ai.grounding_dino_runner import detect_with_grounding_dino
+    if not prompt:
+        raise ValueError("A text prompt is required for Grounding DINO detection.")
+    from .ai.grounding_dino_runner import detect_with_grounding_dino
 
-        result = detect_with_grounding_dino(
-            payload, prompt, confidence=confidence, model=dino_model,
-        )
+    result = detect_with_grounding_dino(
+        payload, prompt, confidence=confidence, model=dino_model,
+    )
 
     result = {**result, "detect_engine": chosen}
     boxes = result.get("boxes") or []
@@ -347,7 +256,7 @@ def detect_objects(
     if top is not None:
         result = {**result, "selected_box": top, "selected_label": top.get("label")}
 
-    # DINO/YOLO boxes → SAM2 mask. SAM3 is never used as a refine step.
+    # DINO boxes → SAM2 mask. SAM3 is never used as a refine step.
     if not refine_sam2 or not boxes or top is None:
         return result
     if not sam2_available():
@@ -397,24 +306,8 @@ def depth_image(payload: bytes, model: str | None = None) -> dict[str, Any]:
     return estimate_depth(payload, model=model)
 
 
-def inpaint_image(
-    payload: bytes,
-    mask_payload: bytes | None = None,
-    mask_png_base64: str | None = None,
-    model: str | None = "auto",
-) -> dict[str, Any]:
-    from .ai.lama_runner import inpaint_image as _inpaint
-
-    return _inpaint(
-        payload,
-        mask_payload=mask_payload,
-        mask_png_base64=mask_png_base64,
-        model=model,
-    )
-
-
 def upscale_image(payload: bytes, scale: int = 2, model: str = "realesrgan") -> tuple[bytes, str]:
-    """Return (png_bytes, engine_name). Bicubic always works; GAN models need RealESRGAN stack."""
+    """Return (png_bytes, engine_name). Real-ESRGAN family only."""
     mid = (model or "realesrgan").strip().lower()
     if mid == "gfpgan":
         if not gfpgan_available():
@@ -430,9 +323,8 @@ def upscale_image(payload: bytes, scale: int = 2, model: str = "realesrgan") -> 
     nid = normalize_model(model)
     if not upscale_available(nid):
         raise RuntimeError(
-            "AI upscale is not available. Install spandrel/basicsr and place weights "
-            "under models/realesrgan, or set REALESRGAN_MODEL / GIF_STUDIO_REALESRGAN. "
-            "Bicubic works without AI packages."
+            "AI upscale is not available. Install spandrel (or realesrgan+basicsr) and place "
+            "weights under models/realesrgan, or set REALESRGAN_MODEL / GIF_STUDIO_REALESRGAN."
         )
 
     return upscale_with_realesrgan(payload, scale=scale, model=nid)
@@ -443,14 +335,10 @@ def interpolate_frames(
     factor: int = 2,
     model: str | None = "rife",
 ) -> tuple[list[bytes], str]:
-    """Return (frame_pngs, engine_name). RIFE live; FILM slot raises until wired."""
+    """Return (frame_pngs, engine_name). RIFE only."""
     mid = (model or "rife").strip().lower()
-    if mid == "film":
-        if not film_available():
-            raise RuntimeError("FILM weights not found under models/film/.")
-        raise RuntimeError(
-            "FILM interpolate slot is not wired yet — use model=rife."
-        )
+    if mid != "rife":
+        raise RuntimeError(f"Unknown interpolate model {model!r}. Supported: rife.")
     if not rife_available():
         raise RuntimeError(
             "RIFE is not available. Install the RIFE package and place weights "
@@ -481,14 +369,10 @@ def capability_flags() -> dict[str, Any]:
         "sam2": sam2_available(),
         "sam3": sam3_available(),
         "grounding_dino": grounding_dino_available(),
-        "yolo": yolo_available(),
         "matte": matte_available(),
         "depth": depth_available(),
-        "lama": lama_available(),
-        "inpaint": True,
         "realesrgan": realesrgan_available(),
         "rife": rife_available(),
-        "film": film_available(),
         "gfpgan": gfpgan_available(),
         "rembg": rembg_available(),
         "mediapipe_server": False,
@@ -497,13 +381,10 @@ def capability_flags() -> dict[str, Any]:
         "models": {
             "sam2": models["sam2"],
             "sam3": models["sam3"],
-            "select_segment": models["select_segment"],
             "select_detect": models.get("select_detect") or [],
             "grounding_dino": models["grounding_dino"],
-            "yolo": models["yolo"],
             "matte": models["matte"],
             "depth": models["depth"],
-            "inpaint": models["inpaint"],
             "interpolate": models["interpolate"],
             "upscale": models["upscale"],
             "models_dir": models["models_dir"],
@@ -515,7 +396,7 @@ def capability_flags() -> dict[str, Any]:
 def active_engines() -> list[str]:
     """Honest list of engines that can actually run right now."""
     caps = capability_flags()
-    engines = ["OpenCV GrabCut", "ImageIO", "Pillow", "OpenCV inpaint"]
+    engines = ["OpenCV GrabCut", "ImageIO", "Pillow"]
     if shutil_which_gifsicle():
         engines.append("gifsicle")
     if caps["rembg"]:
@@ -528,18 +409,12 @@ def active_engines() -> list[str]:
         engines.append("SAM3")
     if caps["grounding_dino"]:
         engines.append("Grounding DINO")
-    if caps["yolo"]:
-        engines.append("YOLO")
     if caps["depth"]:
         engines.append("Depth Anything V2")
-    if caps["lama"]:
-        engines.append("LaMa")
     if caps["realesrgan"]:
         engines.append("RealESRGAN")
     if caps["rife"]:
         engines.append("RIFE")
-    if caps["film"]:
-        engines.append("FILM (weights only)")
     if caps["gfpgan"]:
         engines.append("GFPGAN (weights only)")
     engines.append("MediaPipe (browser)")

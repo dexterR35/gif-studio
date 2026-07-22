@@ -103,7 +103,6 @@ export function applyEditorSessionToV2(project, editor) {
                 : null,
             }
           : null,
-        gifEffects: editor?.gifEffects || null,
         imageEdits: editor?.imageEdits || null,
         censor: editor?.censor || null,
         parallax: editor?.parallax || null,
@@ -127,7 +126,6 @@ function withSessionFromExtensions(editor, project) {
   return {
     ...editor,
     source: editor.source ?? session.source ?? null,
-    gifEffects: editor.gifEffects ?? session.gifEffects ?? editor.gifEffects,
     imageEdits: editor.imageEdits ?? session.imageEdits ?? editor.imageEdits,
     censor: editor.censor ?? session.censor ?? editor.censor,
     parallax: editor.parallax ?? session.parallax ?? editor.parallax,
@@ -226,7 +224,7 @@ export function commitEditorPatch(state, editorPatch) {
   }
 
   if (editorPatch.source !== undefined || editorPatch.settings || editorPatch.censor
-      || editorPatch.name || editorPatch.gifEffects || editorPatch.imageEdits
+      || editorPatch.name || editorPatch.imageEdits
       || editorPatch.parallax || editorPatch.enhancedLayer || editorPatch.fontOptions
       || editorPatch.keyframes) {
     if (editorPatch.source !== undefined || editorPatch.censor !== undefined || editorPatch.enhancedLayer !== undefined) {
@@ -253,7 +251,6 @@ export function commitEditorPatch(state, editorPatch) {
   const nextEditor = withSessionFromExtensions(buildEditorView(project, editor), project)
   if (editor.source) nextEditor.source = editor.source
   if (editor.enhancedLayer) nextEditor.enhancedLayer = editor.enhancedLayer
-  if (editor.gifEffects) nextEditor.gifEffects = editor.gifEffects
   if (editor.imageEdits) nextEditor.imageEdits = editor.imageEdits
   if (editor.censor) nextEditor.censor = editor.censor
   if (editor.parallax) nextEditor.parallax = editor.parallax
@@ -312,7 +309,6 @@ export function loadProjectPair(raw) {
     editor = withSessionFromExtensions(editor, project)
     const session = project.extensions?.editorSession
     if (session?.source && !editor.source) editor.source = session.source
-    if (session?.gifEffects) editor.gifEffects = { ...editor.gifEffects, ...session.gifEffects }
     if (session?.imageEdits) editor.imageEdits = { ...editor.imageEdits, ...session.imageEdits }
     if (session?.censor) editor.censor = { ...editor.censor, ...session.censor }
     if (session?.parallax) editor.parallax = { ...editor.parallax, ...session.parallax }

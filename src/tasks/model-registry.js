@@ -8,14 +8,10 @@ const ENGINE_KEYS = [
   'sam2',
   'sam3',
   'grounding_dino',
-  'yolo',
   'matte',
   'depth',
-  'lama',
-  'inpaint',
   'realesrgan',
   'rife',
-  'film',
   'gfpgan',
   'gifsicle',
   'oxipng',
@@ -131,13 +127,9 @@ function taskForEngine(id) {
     sam2: 'segment',
     sam3: 'segment',
     grounding_dino: 'detect',
-    yolo: 'detect',
     depth: 'depth',
-    lama: 'inpaint',
-    inpaint: 'inpaint',
     realesrgan: 'upscale',
     rife: 'interpolate',
-    film: 'interpolate',
     gfpgan: 'enhance',
     gifsicle: 'export',
     oxipng: 'optimize',
@@ -147,12 +139,12 @@ function taskForEngine(id) {
 
 function qualityForEngine(id) {
   if (id === 'realesrgan' || id === 'sam2' || id === 'sam3' || id === 'matte') return 'best'
-  if (id === 'rife' || id === 'depth' || id === 'lama') return 'balanced'
+  if (id === 'rife' || id === 'depth') return 'balanced'
   return 'fast'
 }
 
 function animatedSupport(id) {
-  return id === 'rife' || id === 'film' || id === 'gifsicle' || id === 'realesrgan'
+  return id === 'rife' || id === 'gifsicle' || id === 'realesrgan'
 }
 
 /**

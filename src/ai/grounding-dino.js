@@ -1,10 +1,9 @@
 /**
- * Text / class detect — SAM3 (text→mask), Grounding DINO + SAM2 refine, or YOLO.
+ * Text / class detect — SAM3 (text→mask) or Grounding DINO + SAM2 refine.
  *
  * Roles (not a stack):
  * - sam3: replaces DINO + SAM2 refine
  * - grounding_dino: open-vocab box → SAM2 contour
- * - yolo: cheap COCO → optional SAM2 contour
  */
 import { getOnnxSession, imageDataToFloatTensor } from './onnx'
 
@@ -20,7 +19,6 @@ async function viaServer(imageBlob, prompt, {
   engine = 'auto',
   dinoModel,
   sam2Model,
-  yoloModel,
   sam3Model,
 } = {}) {
   const form = new FormData()
@@ -31,7 +29,6 @@ async function viaServer(imageBlob, prompt, {
   form.append('engine', engine || 'auto')
   if (dinoModel) form.append('dino_model', dinoModel)
   if (sam2Model) form.append('sam2_model', sam2Model)
-  if (yoloModel) form.append('yolo_model', yoloModel)
   if (sam3Model) form.append('sam3_model', sam3Model)
   const res = await fetch('/api/ai/detect', { method: 'POST', body: form })
   if (!res.ok) throw new Error(await res.text())
@@ -50,14 +47,13 @@ export async function detectWithGroundingDino({
   engine = 'auto',
   dinoModel,
   sam2Model,
-  yoloModel,
   sam3Model,
 }) {
   const blob = imageBlob || await new Promise((resolve, reject) => {
     imageCanvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not read canvas'))), 'image/png')
   })
 
-  const serverEngines = new Set(['yolo', 'ultralytics', 'sam3', 'auto', 'grounding_dino', 'dino'])
+  const serverEngines = new Set(['sam3', 'auto', 'grounding_dino', 'dino'])
   if (!groundingDinoConfigured() || serverEngines.has(engine)) {
     return viaServer(blob, prompt, {
       confidence,
@@ -65,7 +61,6 @@ export async function detectWithGroundingDino({
       engine,
       dinoModel,
       sam2Model,
-      yoloModel,
       sam3Model,
     })
   }
@@ -83,7 +78,7 @@ export async function detectWithGroundingDino({
   }
 }
 
-/** Alias — same API; engine selects SAM3 / DINO / YOLO. */
+/** Alias — same API; engine selects SAM3 / DINO. */
 export const detectObjects = detectWithGroundingDino
 
 export async function probeGroundingDino() {
@@ -93,17 +88,6 @@ export async function probeGroundingDino() {
     if (!res.ok) return false
     const info = await res.json()
     return Boolean(info.grounding_dino)
-  } catch {
-    return false
-  }
-}
-
-export async function probeYolo() {
-  try {
-    const res = await fetch('/api/health', { signal: AbortSignal.timeout(1500) })
-    if (!res.ok) return false
-    const info = await res.json()
-    return Boolean(info.yolo)
   } catch {
     return false
   }

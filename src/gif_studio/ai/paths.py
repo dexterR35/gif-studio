@@ -223,16 +223,13 @@ def model_device_policy() -> dict[str, dict[str, Any]]:
 
     return {
         "opencv": row(prefers="cpu", cpu_ok=True, note="Always CPU"),
-        "bicubic": row(prefers="cpu", cpu_ok=True, note="Always CPU"),
         "matte_rembg": row(prefers="cpu", cpu_ok=True, note="ONNX / CPU ok"),
-        "yolo": row(prefers="cuda", cpu_ok=True),
         "grounding_dino": row(prefers="cuda", cpu_ok=True),
         "sam2": row(prefers="cuda", cpu_ok=True),
         "sam3": row(prefers="cuda", cpu_ok=True, note="Heavy on CPU/RAM; gated weights"),
         "depth": row(prefers="cuda", cpu_ok=True),
         "realesrgan": row(prefers="cuda", cpu_ok=True, note="Tiled; 5k / 20 GiB server caps"),
         "rife": row(prefers="cuda", cpu_ok=True),
-        "lama": row(prefers="cuda", cpu_ok=True, note="OpenCV Telea fallback is CPU"),
     }
 
 

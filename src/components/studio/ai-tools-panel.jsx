@@ -17,7 +17,6 @@ const DEPTH_FALLBACK = [
 
 const INTERP_FALLBACK = [
   { id: 'rife', label: 'RIFE' },
-  { id: 'film', label: 'FILM (slot)', ready: false },
 ]
 
 function optionLabel(m) {
@@ -43,7 +42,6 @@ export function AiToolsPanel() {
   } = useStudio()
   const caps = useStudioStore((s) => s.capabilities)
   const [busy, setBusy] = useState('')
-  const [cutoutBody, setCutoutBody] = useState(true)
   const [depthModel, setDepthModel] = useState('depth-anything-v2-small')
   const [interpModel, setInterpModel] = useState('rife')
 
@@ -110,16 +108,9 @@ export function AiToolsPanel() {
             onClick={() => run('RIFE', () => runRifeInterpolate({ factor: 2 }))}
           >
             {busy === 'RIFE' ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <BetweenHorizonalEnd className="h-3.5 w-3.5" />}
-            Interpolate ({interpModel === 'film' ? 'FILM' : 'RIFE'})
+            Interpolate (RIFE)
           </Button>
 
-          <Switch
-            label="Cut out body as layer"
-            checked={cutoutBody}
-            onChange={setCutoutBody}
-            className="mb-1"
-            disabled={locked}
-          />
           <Switch
             label="Show joints in preview"
             checked={poseRig.visible}
@@ -133,7 +124,6 @@ export function AiToolsPanel() {
             full
             disabled={locked}
             onClick={() => run('Pose', () => runPoseDetect({
-              segment: cutoutBody,
               joints: true,
               openPanel: true,
             }))}

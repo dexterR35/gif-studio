@@ -31,12 +31,4 @@ export const TEXT_EXIT_OPTIONS = [
   'None', 'Fade', 'Slide up', 'Slide down', 'Scale out',
 ]
 
-export const COLOR_FILTER_PRESETS = [
-  'None', 'Grayscale', 'Sepia', 'Monochrome', 'Gotham', 'Lomo', 'Nashville', 'Toaster', 'Vignette', 'Polaroid',
-]
-
-export const DISTORTION_TYPES = [
-  'None', 'Bloat', 'Pucker', 'Twirl', 'Push', 'Swirl', 'Implode', 'Wave',
-]
-
 export const HEALTH_TIMEOUT_MS = 1800

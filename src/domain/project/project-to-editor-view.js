@@ -61,7 +61,6 @@ export function layerToCutoutElement(layer) {
     cutoutMode: mm.cutoutMode,
     engine: mm.engine,
     smart: mm.smart,
-    effects: mm.effects || undefined,
     poseJoints: mm.poseJoints || undefined,
   }
 }

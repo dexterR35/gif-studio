@@ -46,8 +46,7 @@ export default function ScalePage() {
   )
 
   useEffect(() => {
-    const readyUp = upscaleOptions.find((m) => m.ready !== false && m.id !== 'bicubic' && m.id !== 'gfpgan')
-      || upscaleOptions.find((m) => m.id === 'bicubic')
+    const readyUp = upscaleOptions.find((m) => m.ready !== false && m.id !== 'gfpgan')
     if (readyUp) {
       setUpscaleModel((id) => (upscaleOptions.some((m) => m.id === id && m.ready !== false) ? id : readyUp.id))
     }

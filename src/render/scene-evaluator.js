@@ -1,7 +1,6 @@
 import { partitionRedactionLast } from '../domain/layers/layer-order.js'
 import { evaluateLayerTracks } from '../domain/timeline/evaluate-tracks.js'
 import { clampTime, mapLoopTime } from '../domain/timeline/time.js'
-import { enabledEffectNodes } from '../domain/effects/effect-nodes.js'
 import { hashSeed } from '../domain/timeline/seeded-random.js'
 import { EVAL_ORDER_STEPS } from './eval-order.js'
 import { appendPass, createRenderPlan } from './render-plan.js'
@@ -57,7 +56,7 @@ export function evaluate(project, timeUs, assetsMeta = {}, opts = {}) {
         layerId,
         payload: {
           scope: layer.scope,
-          effects: enabledEffectNodes(layer.effects),
+          effects: [],
           opacity: layer.opacity ?? 1,
           blendMode: layer.blendMode || 'source-over',
         },
@@ -98,7 +97,7 @@ export function evaluate(project, timeUs, assetsMeta = {}, opts = {}) {
           transform: evaluated.transform,
           opacity: evaluated.opacity,
           blendMode: layer.blendMode || 'source-over',
-          effects: enabledEffectNodes(layer.effects),
+          effects: [],
           mediaMeta: meta
             ? {
                 width: meta.width,
@@ -126,7 +125,7 @@ export function evaluate(project, timeUs, assetsMeta = {}, opts = {}) {
           transform: evaluated.transform,
           opacity: evaluated.opacity,
           blendMode: layer.blendMode || 'source-over',
-          effects: enabledEffectNodes(layer.effects),
+          effects: [],
           seed,
         },
       })

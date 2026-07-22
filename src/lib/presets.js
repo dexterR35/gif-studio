@@ -119,12 +119,3 @@ export const SYSTEM_FONTS = [
   'Georgia', 'Times New Roman', 'Courier New', 'Impact', 'Comic Sans MS',
 ]
 
-export const EFFECT_DEFAULTS = {
-  hue: 0, saturation: 100, lightness: 100, brightness: 0, contrast: 0,
-  preset: 'None', invert: 0, tintColor: '#ff6b6b', tint: 0,
-  transparentEnabled: false, transparentColor: '#ffffff', fuzz: 2, edgeCleanup: 2,
-  blur: 0, sharpen: 0, posterize: 0, solarize: 0, noise: 0, emboss: 0, oilPaint: 0,
-  distortion: 'None', distortionAmount: 0, dither: 'None',
-  distortX: 50, distortY: 50, distortRadius: 50, distortAngle: 0,
-  frame: 'None', frameColor: '#ffffff', frameWidth: 12, rounded: 28,
-}

@@ -12,20 +12,17 @@ models/
   sam2/                # SAM 2.1 checkpoints
   sam3/                # SAM 3 / 3.1 (gated HF — optional)
   groundingdino/       # Grounding DINO + BERT / HF snapshots
-  yolo/                # Ultralytics YOLOv8 / YOLO11
   matte/               # optional BiRefNet / RMBG ONNX (rembg also caches)
   depth/
     v2-small-hf/       # Depth Anything V2 Small (Transformers snapshot)
-  lama/                # big-lama.pt (optional; OpenCV Telea always works)
   rife/train_log/      # RIFE flownet
-  film/                # FILM interpolate slot (not wired yet)
   gfpgan/              # GFPGANv1.4.pth face polish slot
 ```
 
 ```bash
 pip install -r requirements-ai.txt
 pip install 'git+https://github.com/facebookresearch/sam2.git'
-pip install ultralytics rembg
+pip install rembg
 python scripts/setup_ai_models.py --tiny-only
 # SAM3 (optional, gated Hub — request access + hf auth login first):
 # https://huggingface.co/facebook/sam3

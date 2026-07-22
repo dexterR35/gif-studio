@@ -168,88 +168,6 @@ def resolve_grounding_dino(model_id: str | None = None) -> tuple[Path, Path] | N
     return None
 
 
-# --- YOLO (Ultralytics) ---------------------------------------------------
-
-# Official weights: https://github.com/ultralytics/ultralytics
-YOLO_VARIANTS = [
-    {
-        "id": "yolov8n",
-        "label": "YOLOv8n (nano)",
-        "file": "yolov8n.pt",
-        "url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt",
-    },
-    {
-        "id": "yolov8s",
-        "label": "YOLOv8s (small)",
-        "file": "yolov8s.pt",
-        "url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8s.pt",
-    },
-    {
-        "id": "yolov8m",
-        "label": "YOLOv8m (medium)",
-        "file": "yolov8m.pt",
-        "url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8m.pt",
-    },
-    {
-        "id": "yolo11n",
-        "label": "YOLO11n (nano)",
-        "file": "yolo11n.pt",
-        "url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt",
-    },
-]
-
-
-def list_yolo_models() -> list[dict[str, Any]]:
-    root = models_dir() / "yolo"
-    out = []
-    for spec in YOLO_VARIANTS:
-        path = root / spec["file"]
-        out.append({
-            "id": spec["id"],
-            "label": spec["label"],
-            "file": spec["file"],
-            "path": str(path),
-            "ready": path.exists() and path.stat().st_size > 1024,
-        })
-    return out
-
-
-def resolve_yolo(model_id: str | None = None) -> tuple[Path, str] | None:
-    """Return (checkpoint_path, engine_label) for a local Ultralytics .pt."""
-    wanted = (model_id or "").strip()
-    if not wanted:
-        env = (
-            os.environ.get("YOLO_MODEL")
-            or os.environ.get("GIF_STUDIO_YOLO")
-            or os.environ.get("YOLO_MODEL_ID")
-            or "yolov8n"
-        )
-        path = Path(env).expanduser()
-        if path.is_file():
-            return path, f"yolo-local:{path.stem}"
-        wanted = env.strip()
-    root = models_dir() / "yolo"
-    by_id = {s["id"]: s for s in YOLO_VARIANTS}
-    for spec in YOLO_VARIANTS:
-        path = root / spec["file"]
-        if wanted in {spec["id"], spec["file"], Path(spec["file"]).stem} and path.exists():
-            return path, f"yolo-local:{path.stem}"
-    if wanted in by_id:
-        path = root / by_id[wanted]["file"]
-        if path.exists():
-            return path, f"yolo-local:{path.stem}"
-    for spec in YOLO_VARIANTS:
-        path = root / spec["file"]
-        if path.exists() and path.stat().st_size > 1024:
-            return path, f"yolo-local:{path.stem}"
-    # Any .pt dropped into models/yolo/
-    if root.is_dir():
-        for path in sorted(root.glob("*.pt")):
-            if path.stat().st_size > 1024:
-                return path, f"yolo-local:{path.stem}"
-    return None
-
-
 # --- SAM3 -----------------------------------------------------------------
 
 SAM3_VARIANTS = [
@@ -299,7 +217,7 @@ def list_sam3_models() -> list[dict[str, Any]]:
             "file": spec["file"],
             "path": str(found or (root / spec["file"])),
             "ready": found is not None,
-            "job": "select_segment",
+            "job": "select_detect",
             "note": None if found else (
                 "Request access at huggingface.co/facebook/sam3 then: "
                 "python scripts/setup_ai_models.py --with-sam3"
@@ -454,61 +372,10 @@ def resolve_depth(model_id: str | None = None) -> dict[str, Any] | None:
     return None
 
 
-# --- Inpaint (LaMa / OpenCV) ----------------------------------------------
-
-INPAINT_VARIANTS = [
-    {
-        "id": "lama",
-        "label": "LaMa",
-        "file": "big-lama.pt",
-    },
-    {
-        "id": "opencv-telea",
-        "label": "OpenCV Telea (classical)",
-        "file": None,
-    },
-]
-
-
-def list_inpaint_models() -> list[dict[str, Any]]:
-    root = models_dir() / "lama"
-    out = []
-    for spec in INPAINT_VARIANTS:
-        if spec["id"] == "opencv-telea":
-            out.append({**spec, "ready": True, "path": None, "job": "inpaint"})
-            continue
-        path = root / spec["file"]
-        out.append({
-            **spec,
-            "path": str(path),
-            "ready": path.exists() and path.stat().st_size > 1024,
-            "job": "inpaint",
-        })
-    return out
-
-
-def resolve_lama() -> Path | None:
-    env = os.environ.get("LAMA_MODEL") or os.environ.get("GIF_STUDIO_LAMA")
-    if env:
-        p = Path(env).expanduser()
-        if p.is_file():
-            return p
-    path = models_dir() / "lama" / "big-lama.pt"
-    if path.exists() and path.stat().st_size > 1024:
-        return path
-    root = models_dir() / "lama"
-    if root.is_dir():
-        for p in sorted(root.glob("*.pt")):
-            if p.stat().st_size > 1024:
-                return p
-    return None
-
-
-# --- Interpolate (RIFE / FILM) --------------------------------------------
+# --- Interpolate (RIFE) ---------------------------------------------------
 
 INTERPOLATE_VARIANTS = [
     {"id": "rife", "label": "RIFE", "dir": "rife/train_log"},
-    {"id": "film", "label": "FILM (slot)", "dir": "film"},
 ]
 
 
@@ -516,10 +383,7 @@ def list_interpolate_models() -> list[dict[str, Any]]:
     out = []
     for spec in INTERPOLATE_VARIANTS:
         root = models_dir() / spec["dir"]
-        if spec["id"] == "rife":
-            ready = root.is_dir() and any(root.glob("*.pkl"))
-        else:
-            ready = root.is_dir() and any(root.glob("*"))
+        ready = root.is_dir() and any(root.glob("*.pkl"))
         out.append({
             "id": spec["id"],
             "label": spec["label"],
@@ -533,7 +397,6 @@ def list_interpolate_models() -> list[dict[str, Any]]:
 # --- Upscale (+ GFPGAN slot) ----------------------------------------------
 
 UPSCALE_VARIANTS = [
-    {"id": "bicubic", "label": "Bicubic", "file": None},
     {
         "id": "esrgan",
         "label": "ESRGAN",
@@ -550,9 +413,6 @@ def list_upscale_models() -> list[dict[str, Any]]:
     root = models_dir() / "realesrgan"
     out = []
     for spec in UPSCALE_VARIANTS:
-        if spec["id"] == "bicubic":
-            out.append({**spec, "ready": True, "path": None, "job": "upscale"})
-            continue
         base = models_dir() / spec["dir"] if spec.get("dir") else root
         path = base / spec["file"]
         out.append({
@@ -561,14 +421,6 @@ def list_upscale_models() -> list[dict[str, Any]]:
             "ready": path.exists() and path.stat().st_size > 1024,
             "job": "upscale",
         })
-    return out
-
-
-def list_select_segment_models() -> list[dict[str, Any]]:
-    """Interactive click/box select — SAM2 now; SAM3 Tracker later (not SAM3 image)."""
-    out = []
-    for m in list_sam2_models():
-        out.append({**m, "family": "sam2", "job": "select_segment"})
     return out
 
 
@@ -590,13 +442,6 @@ def list_select_detect_engines() -> list[dict[str, Any]]:
             "job": "select_detect",
             "note": "Open-vocab box, then SAM2 contour",
         },
-        {
-            "id": "yolo",
-            "label": "YOLO (COCO, cheap)",
-            "ready": any(m.get("ready") for m in list_yolo_models()),
-            "job": "select_detect",
-            "note": "Closed-set classes; optional SAM2 refine",
-        },
     ]
 
 
@@ -606,22 +451,17 @@ def catalog() -> dict[str, Any]:
         "allow_huggingface": allow_huggingface(),
         "sam2": list_sam2_models(),
         "sam3": list_sam3_models(),
-        "select_segment": list_select_segment_models(),
         "select_detect": list_select_detect_engines(),
         "grounding_dino": list_grounding_dino_models(),
-        "yolo": list_yolo_models(),
         "matte": list_matte_models(),
         "depth": list_depth_models(),
-        "inpaint": list_inpaint_models(),
         "interpolate": list_interpolate_models(),
         "upscale": list_upscale_models(),
         "models_dir": str(models_dir()),
         "jobs": {
-            "select_segment": ["sam2"],  # SAM3 Tracker later
-            "select_detect": ["sam3", "grounding_dino", "yolo"],
+            "select_detect": ["sam3", "grounding_dino"],
             "matte": ["matte"],
             "depth": ["depth"],
-            "inpaint": ["inpaint"],
             "interpolate": ["interpolate"],
             "upscale": ["upscale"],
         },

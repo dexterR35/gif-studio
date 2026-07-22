@@ -2,12 +2,11 @@
  * Runtime editor session shape — arrays + settings for Konva / StudioProvider.
  * Not persisted; durable document is always Project V2 (`schemaVersion: 2`).
  */
-import { EFFECT_DEFAULTS, INITIAL, SYSTEM_FONTS } from './presets'
+import { INITIAL, SYSTEM_FONTS } from './presets'
 
+/** Base-image geometric transforms (flip / rotate). Color filters live nowhere — Effects tab removed. */
 export const IMAGE_EDITS_DEFAULT = {
   rotation: 0, flipX: false, flipY: false,
-  brightness: 100, contrast: 100, saturation: 100,
-  blur: 0, hue: 0, grayscale: 0, sepia: 0,
 }
 
 export const CENSOR_DEFAULT = {
@@ -31,7 +30,6 @@ export function createEmptyEditorSession() {
     overlays: [],
     textLayers: [],
     enhancedLayer: null,
-    gifEffects: { ...EFFECT_DEFAULTS },
     imageEdits: { ...IMAGE_EDITS_DEFAULT },
     censor: { ...CENSOR_DEFAULT },
     parallax: { ...PARALLAX_DEFAULT },

@@ -13,7 +13,12 @@ export function SecondaryAside({
   children,
   className,
   width = 228,
+  floating = false,
 }) {
+  if (floating) {
+    return open ? <div className="px-2 pb-2">{children}</div> : null
+  }
+
   return (
     <aside
       aria-hidden={!open}

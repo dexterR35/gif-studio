@@ -1,4 +1,3 @@
-export { loadOpenCV, applyOpenCVFilter, probeOpenCV } from './opencv-filters'
 export {
   createPixiRenderer, destroyPixiRenderer, setPixiSource, readPixiFrame, probePixi, getPixiApp,
 } from './pixi-renderer'

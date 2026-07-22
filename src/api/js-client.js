@@ -13,10 +13,8 @@ export const API_PATHS = {
   jobResult: (jobId) => `/api/v1/jobs/${encodeURIComponent(jobId)}/result`,
   export: '/api/export',
   aiMatte: '/api/ai/matte',
-  aiSegment: '/api/ai/segment',
   aiDetect: '/api/ai/detect',
   aiDepth: '/api/ai/depth',
-  aiInpaint: '/api/ai/inpaint',
   aiUpscale: '/api/ai/upscale',
   aiInterpolate: '/api/ai/interpolate',
 }

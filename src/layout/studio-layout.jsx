@@ -1,10 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Outlet } from 'react-router-dom'
+import { Layers3, Settings, Wrench } from 'lucide-react'
 import {
   LIVE_REGION_ASSERTIVE_ID,
   LIVE_REGION_POLITE_ID,
 } from '../a11y/live-region'
-import { BusyOverlay, ExportModal, Toast } from '../components/ui'
+import { BusyOverlay, ExportModal, FloatingPanel, Toast } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
 import { LAYER_WORKSPACES } from '../lib/routes'
 import { InspectorAside } from './inspector-aside'
@@ -35,18 +36,19 @@ export function StudioLayout() {
     studioLocked, busyLabel, scaleBusy, downloadBusy, segmenting,
   } = useStudio()
 
+  const [floatingLayers, setFloatingLayers] = useState(false)
+  const [floatingInspector, setFloatingInspector] = useState(false)
+  const [floatingTools, setFloatingTools] = useState(false)
+
   const isFocus = FOCUS_TABS.has(activeTab)
   const isOutput = activeTab === 'output'
   const hasLayers = LAYER_WORKSPACES.has(activeTab)
-  const effectsTab = activeTab === 'edit'
   const showTools = activeTab === 'ai' || activeTab === 'motion'
   const showSelectDetect = !isFocus && Boolean(image)
   const jointsOpen = Boolean(poseRig?.panelOpen && poseRig?.joints?.length)
-  // Effects tab: processing settings stay pinned on the right; Background / Transform on other tabs.
   const inspectorOpen = hasLayers && (
-    effectsTab
-    || maskEditing || selectMode || censorSelecting || jointsOpen || artboardSelected
-    || (!effectsTab && (Boolean(selectedText) || baseImageSelected || selectedElements.length > 0 || Boolean(selectedOverlay)))
+    maskEditing || selectMode || censorSelecting || jointsOpen || artboardSelected
+    || Boolean(selectedText) || baseImageSelected || selectedElements.length > 0 || Boolean(selectedOverlay)
   )
 
   const busyMessage = busyLabel
@@ -120,9 +122,9 @@ export function StudioLayout() {
       <main className="relative flex min-h-0 flex-1 overflow-hidden">
         {!isFocus && (
           <>
-            <ProjectAside />
+            {!floatingTools && <ProjectAside />}
             {showSelectDetect && <SelectDetectAside />}
-            {showTools && <ToolsRail />}
+            {showTools && !floatingTools && <ToolsRail />}
             {(mobilePanel || inspectorOpen) && (
               <button
                 type="button"
@@ -152,11 +154,84 @@ export function StudioLayout() {
           </aside>
         ) : (
           <>
-            <LayersAside />
-            <InspectorAside />
+            {!floatingLayers && <LayersAside />}
+            {!floatingInspector && <InspectorAside />}
           </>
         )}
+
+        {/* Detach/dock buttons */}
+        {!isFocus && (
+          <div className="absolute bottom-2 right-2 z-50 flex gap-1">
+            <button
+              type="button"
+              title={floatingLayers ? 'Dock layers' : 'Float layers'}
+              onClick={() => setFloatingLayers((v) => !v)}
+              className="grid h-6 w-6 place-items-center rounded bg-black/60 text-zinc-400 hover:text-zinc-100 border border-white/10"
+            >
+              <Layers3 className="h-3 w-3" />
+            </button>
+            <button
+              type="button"
+              title={floatingInspector ? 'Dock inspector' : 'Float inspector'}
+              onClick={() => setFloatingInspector((v) => !v)}
+              className="grid h-6 w-6 place-items-center rounded bg-black/60 text-zinc-400 hover:text-zinc-100 border border-white/10"
+            >
+              <Settings className="h-3 w-3" />
+            </button>
+            {showTools && (
+              <button
+                type="button"
+                title={floatingTools ? 'Dock tools' : 'Float tools'}
+                onClick={() => setFloatingTools((v) => !v)}
+                className="grid h-6 w-6 place-items-center rounded bg-black/60 text-zinc-400 hover:text-zinc-100 border border-white/10"
+              >
+                <Wrench className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        )}
       </main>
+
+      {/* Floating panels */}
+      {floatingLayers && !isFocus && (
+        <FloatingPanel
+          id="layers"
+          title="Layers"
+          icon={Layers3}
+          defaultPosition={{ x: window.innerWidth - 260, y: 120 }}
+          defaultSize={{ w: 220, h: 420 }}
+          onClose={() => setFloatingLayers(false)}
+          bodyClassName="p-0"
+        >
+          <LayersAside floating />
+        </FloatingPanel>
+      )}
+
+      {floatingInspector && inspectorOpen && !isFocus && (
+        <FloatingPanel
+          id="inspector"
+          title="Properties"
+          icon={Settings}
+          defaultPosition={{ x: window.innerWidth - 320, y: 140 }}
+          defaultSize={{ w: 280, h: 500 }}
+          onClose={() => setFloatingInspector(false)}
+        >
+          <InspectorAside floating />
+        </FloatingPanel>
+      )}
+
+      {floatingTools && showTools && !isFocus && (
+        <FloatingPanel
+          id="tools"
+          title="Tools"
+          icon={Wrench}
+          defaultPosition={{ x: 20, y: 120 }}
+          defaultSize={{ w: 200, h: 400 }}
+          onClose={() => setFloatingTools(false)}
+        >
+          <ToolsRail floating />
+        </FloatingPanel>
+      )}
 
       <ExportModal open={exporting} frames={frames} progress={progress} />
       <BusyOverlay open={studioLocked && !exporting} message={busyMessage} />

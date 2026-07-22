@@ -142,7 +142,6 @@ function modelsReady() {
   const markers = [
     path.join(root, 'models', 'realesrgan', 'RealESRGAN_x4plus.pth'),
     path.join(root, 'models', 'sam2', 'sam2.1_hiera_tiny.pt'),
-    path.join(root, 'models', 'yolo', 'yolov8n.pt'),
   ]
   return markers.some((file) => existsSync(file))
 }
@@ -229,7 +228,7 @@ runIfNeeded(
 
 if (!minimal) {
   runIfNeeded(
-    'Installing AI dependencies (PyTorch, transformers, ultralytics, …)',
+    'Installing AI dependencies (PyTorch, transformers, …)',
     'AI dependencies (requirements-ai.txt)',
     () => pipRequirementsSatisfied(vpy, 'requirements-ai.txt'),
     vpy,

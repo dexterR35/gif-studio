@@ -38,10 +38,3 @@ export {
   applyTrackPrecedence,
   evaluateLayerTracks,
 } from './timeline/evaluate-tracks.js'
-export {
-  createEffectNode,
-  imageEditsToEffectNodes,
-  gifEffectsToEffectNodes,
-  unifyEffectNodes,
-  enabledEffectNodes,
-} from './effects/effect-nodes.js'

@@ -2,7 +2,7 @@ import { Bone, Crosshair, Eye, EyeOff, ImagePlus, Pause, Play } from 'lucide-rea
 import { useMemo } from 'react'
 import { Button, CanvasViewport, StageHint, Switch, ZoomControls } from '../components/ui'
 import { ContextualTaskBar } from '../components/studio/contextual-task-bar'
-import { EffectTimeline } from '../components/studio/effect-timeline'
+import { StudioTimeline } from '../components/studio/studio-timeline'
 import { StudioKonvaStage } from '../engine/konva-editor'
 import { fmtBytes, MAX_CANVAS, nice, clampNice } from '../lib/format'
 import { applyJointKeys, POSE_KEY_JOINTS } from '../lib/pose'
@@ -27,7 +27,7 @@ export function PreviewStage() {
     gpuPreview, poseRig, setPoseRig,
   } = useStudio()
 
-  const canSelectLayers = activeTab === 'ai' || activeTab === 'motion' || activeTab === 'edit' || activeTab === 'text'
+  const canSelectLayers = activeTab === 'ai' || activeTab === 'motion' || activeTab === 'text'
   const interacting = selectMode || maskEditing || censorSelecting
   const hasPoseJoints = Boolean(poseRig.restJoints?.length || poseRig.joints?.length)
   // Mesh warp runs on the 2D canvas whenever pose data exists (overlay toggle is separate).
@@ -451,9 +451,9 @@ export function PreviewStage() {
           <span className="w-11 font-mono text-[10px] text-zinc-500">{actualDuration.toFixed(1)}s</span>
         </div>
 
-        {(activeTab === 'timeline' || hasPoseJoints) && (
-          <EffectTimeline defaultOpen={activeTab === 'timeline' || poseRig.panelOpen} />
-        )}
+        <div className="mt-2 min-h-[140px] max-h-[250px] flex-1">
+          <StudioTimeline />
+        </div>
 
         <div
           className={`mt-3 border-t border-white/[.05] pt-3 text-[10px] leading-relaxed text-zinc-500 ${

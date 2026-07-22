@@ -21,7 +21,6 @@
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
     "@mediapipe/tasks-vision": "^0.10.35",
-    "@techstark/opencv-js": "^5.0.0-release.1",
     "ajv": "^8.20.0",
     "gifenc": "^1.0.3",
     "gifuct-js": "^2.1.2",

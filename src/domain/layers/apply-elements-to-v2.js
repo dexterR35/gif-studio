@@ -195,7 +195,6 @@ export function elementToV2Layer(el, prevLayer = null) {
       cutoutMode: el.cutoutMode,
       engine: el.engine,
       smart: el.smart,
-      effects: el.effects || null,
       poseJoints: el.poseJoints || null,
     },
   }

@@ -12,8 +12,6 @@ import {
   PenTool,
   RotateCcw,
   RotateCw,
-  Sparkles,
-  User,
 } from 'lucide-react'
 import { useStudio } from '../context/studio-provider'
 import { cn } from '../lib/cn'
@@ -53,7 +51,7 @@ const SELECTION_TOOLS = [
 /**
  * Photoshop-style vertical tool rail — sits after the project aside.
  */
-export function ToolsRail() {
+export function ToolsRail({ floating = false }) {
   const {
     selectMode, setSelectMode, selectionTool, setSelectionTool,
     cancelSelection, setSelection, setSelectionPoints,
@@ -61,7 +59,7 @@ export function ToolsRail() {
     selectedElement, setToast, setBaseImageSelected,
     toggleFlip, rotateSelection, selectionFlip,
     baseImageSelected, censorSelecting, setCensorSelecting,
-    runSam2Segment, runHumanSegment, beginMaskErase, maskBrush, setMaskBrush,
+    beginMaskErase, maskBrush, setMaskBrush,
   } = useStudio()
 
   const erasing = maskEditing && maskBrush.mode === 'Hide'
@@ -144,7 +142,9 @@ export function ToolsRail() {
   return (
     <aside
       aria-label="Tools"
-      className="flex h-full w-11 shrink-0 flex-col items-center gap-0.5 border-r border-white/[.06] bg-panel py-2"
+      className={floating
+        ? 'flex w-full flex-col items-center gap-0.5 py-2'
+        : 'flex h-full w-11 shrink-0 flex-col items-center gap-0.5 border-r border-white/[.06] bg-panel py-2'}
     >
       <ToolButton
         label="Move"
@@ -168,31 +168,6 @@ export function ToolsRail() {
           onClick={() => activateSelection(tool.id)}
         />
       ))}
-
-      <div className="my-1.5 h-px w-6 bg-white/[.08]" />
-
-      <ToolButton
-        label="SAM2 segment"
-        hint="AI object cutout (center point) → new layer"
-        icon={Sparkles}
-        disabled={locked}
-        onClick={() => {
-          activateMove()
-          setPlaying(false)
-          runSam2Segment()
-        }}
-      />
-      <ToolButton
-        label="Human segment"
-        hint="MediaPipe selfie segment → new layer"
-        icon={User}
-        disabled={locked}
-        onClick={() => {
-          activateMove()
-          setPlaying(false)
-          runHumanSegment()
-        }}
-      />
 
       <div className="my-1.5 h-px w-6 bg-white/[.08]" />
 

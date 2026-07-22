@@ -36,7 +36,6 @@ const INITIAL_TOOLS = {
   maskEditing: false,
   maskBrush: { mode: 'Hide', size: 48, hardness: 70, opacity: 100, feather: 8 },
   censorSelecting: false,
-  effectTarget: 'Entire GIF',
   /** Soft-matte rembg id, or ``opencv-grabcut`` for explicit OpenCV GrabCut. */
   cutoutModel: 'birefnet',
 }
@@ -116,12 +115,8 @@ export const useStudioStore = create((set, get) => ({
     sam2: false,
     sam3: false,
     groundingDino: false,
-    yolo: false,
     matte: false,
     depth: false,
-    lama: false,
-    inpaint: true,
-    film: false,
     gfpgan: false,
     realesrgan: false,
     rife: false,
@@ -180,12 +175,6 @@ export const useStudioStore = create((set, get) => ({
   setEnhancedLayer: (updater) => set((state) => {
     const enhancedLayer = apply(state.editor.enhancedLayer, updater)
     return commitEditorPatch(state, { enhancedLayer })
-  }),
-
-  setGifEffects: (updater) => set((state) => {
-    const prev = state.editor.gifEffects
-    const gifEffects = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
-    return commitEditorPatch(state, { gifEffects })
   }),
 
   setImageEdits: (updater) => set((state) => {
@@ -307,9 +296,6 @@ export const useStudioStore = create((set, get) => ({
   }),
   setCensorSelecting: (updater) => set((state) => ({
     tools: { ...state.tools, censorSelecting: apply(state.tools.censorSelecting, updater) },
-  })),
-  setEffectTarget: (updater) => set((state) => ({
-    tools: { ...state.tools, effectTarget: apply(state.tools.effectTarget, updater) },
   })),
   setCutoutModel: (updater) => set((state) => ({
     tools: { ...state.tools, cutoutModel: apply(state.tools.cutoutModel, updater) },

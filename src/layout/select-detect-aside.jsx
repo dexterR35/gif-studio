@@ -3,7 +3,7 @@
  * Opens when a source image is loaded; same panel chrome as Layers.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { LoaderCircle, ScanSearch, Sparkles, User } from 'lucide-react'
+import { LoaderCircle, ScanSearch } from 'lucide-react'
 import { Button, SelectField } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
 import { useStudioStore } from '../store/studio-store'
@@ -25,17 +25,9 @@ const DINO_FALLBACK = [
   { id: 'swinb_cogcoor', label: 'GroundingDINO-B (Swin-B)' },
 ]
 
-const YOLO_FALLBACK = [
-  { id: 'yolov8n', label: 'YOLOv8n (nano)' },
-  { id: 'yolov8s', label: 'YOLOv8s (small)' },
-  { id: 'yolov8m', label: 'YOLOv8m (medium)' },
-  { id: 'yolo11n', label: 'YOLO11n (nano)' },
-]
-
 const DETECT_ENGINES_FALLBACK = [
   { id: 'sam3', label: 'SAM 3 (text → mask)', ready: false },
   { id: 'grounding_dino', label: 'Grounding DINO + SAM2 refine' },
-  { id: 'yolo', label: 'YOLO (COCO, cheap)' },
 ]
 
 function optionLabel(m) {
@@ -55,8 +47,6 @@ export function SelectDetectAside() {
   const {
     image,
     studioLocked,
-    runSam2Segment,
-    runHumanSegment,
     runTextDetect,
     setToast,
   } = useStudio()
@@ -66,12 +56,10 @@ export function SelectDetectAside() {
   const [prompt, setPrompt] = useState('')
   const [segmentModel, setSegmentModel] = useState('sam2.1_hiera_tiny')
   const [dinoModel, setDinoModel] = useState('swint_ogc')
-  const [yoloModel, setYoloModel] = useState('yolov8n')
   const [sam3Model, setSam3Model] = useState('sam3')
   const [detectEngine, setDetectEngine] = useState('grounding_dino')
 
   const segmentOptions = useMemo(() => {
-    if (caps.models?.select_segment?.length) return caps.models.select_segment
     const sam2 = caps.models?.sam2?.length ? caps.models.sam2 : SAM2_FALLBACK
     return sam2.map((m) => ({ ...m, family: 'sam2' }))
   }, [caps.models])
@@ -88,10 +76,6 @@ export function SelectDetectAside() {
     () => (caps.models?.grounding_dino?.length ? caps.models.grounding_dino : DINO_FALLBACK),
     [caps.models],
   )
-  const yoloOptions = useMemo(
-    () => (caps.models?.yolo?.length ? caps.models.yolo : YOLO_FALLBACK),
-    [caps.models],
-  )
   const sam3Options = useMemo(
     () => (caps.models?.sam3?.length ? caps.models.sam3 : SAM3_FALLBACK),
     [caps.models],
@@ -99,39 +83,17 @@ export function SelectDetectAside() {
 
   useEffect(() => { setSegmentModel((id) => pickReady(segmentOptions, id)) }, [segmentOptions])
   useEffect(() => { setDinoModel((id) => pickReady(dinoOptions, id)) }, [dinoOptions])
-  useEffect(() => { setYoloModel((id) => pickReady(yoloOptions, id)) }, [yoloOptions])
   useEffect(() => { setSam3Model((id) => pickReady(sam3Options, id)) }, [sam3Options])
   useEffect(() => { setDetectEngine((id) => pickReady(detectEngines, id)) }, [detectEngines])
 
   const open = Boolean(image)
   const locked = Boolean(busy || studioLocked)
-  const detectNeedsPrompt = detectEngine !== 'yolo'
-  const detectUsesSam2 = detectEngine === 'grounding_dino' || detectEngine === 'yolo'
-  const detectModelOptions = detectEngine === 'sam3'
-    ? sam3Options
-    : detectEngine === 'yolo'
-      ? yoloOptions
-      : dinoOptions
-  const detectModelValue = detectEngine === 'sam3'
-    ? sam3Model
-    : detectEngine === 'yolo'
-      ? yoloModel
-      : dinoModel
-  const setDetectModelValue = detectEngine === 'sam3'
-    ? setSam3Model
-    : detectEngine === 'yolo'
-      ? setYoloModel
-      : setDinoModel
-  const detectModelLabel = detectEngine === 'sam3'
-    ? 'SAM 3 model'
-    : detectEngine === 'yolo'
-      ? 'YOLO model'
-      : 'DINO model'
-  const detectBtnLabel = detectEngine === 'sam3'
-    ? 'Detect → layer'
-    : detectEngine === 'yolo'
-      ? 'YOLO → layer'
-      : 'DINO + SAM2 → layer'
+  const detectUsesSam2 = detectEngine === 'grounding_dino'
+  const detectModelOptions = detectEngine === 'sam3' ? sam3Options : dinoOptions
+  const detectModelValue = detectEngine === 'sam3' ? sam3Model : dinoModel
+  const setDetectModelValue = detectEngine === 'sam3' ? setSam3Model : setDinoModel
+  const detectModelLabel = detectEngine === 'sam3' ? 'SAM 3 model' : 'DINO model'
+  const detectBtnLabel = detectEngine === 'sam3' ? 'Detect → layer' : 'DINO + SAM2 → layer'
   const refineLabel = segmentOptions.find((m) => m.id === segmentModel)?.label || 'SAM 2'
 
   const run = async (label, fn) => {
@@ -159,13 +121,15 @@ export function SelectDetectAside() {
       </div>
 
       <div className="space-y-2 px-3 py-3">
-        <SelectField label="SAM 2 (click / refine)" value={segmentModel} onChange={setSegmentModel}>
-          {segmentOptions.map((m) => (
-            <option key={m.id} value={m.id} disabled={m.ready === false}>
-              {optionLabel(m)}
-            </option>
-          ))}
-        </SelectField>
+        {detectUsesSam2 ? (
+          <SelectField label="SAM 2 refine" value={segmentModel} onChange={setSegmentModel}>
+            {segmentOptions.map((m) => (
+              <option key={m.id} value={m.id} disabled={m.ready === false}>
+                {optionLabel(m)}
+              </option>
+            ))}
+          </SelectField>
+        ) : null}
 
         <SelectField label="Detect engine" value={detectEngine} onChange={setDetectEngine}>
           {detectEngines.map((e) => (
@@ -185,35 +149,20 @@ export function SelectDetectAside() {
 
         {detectUsesSam2 ? (
           <p className="text-[10px] leading-snug text-zinc-600">
-            Refine via <span className="font-medium text-zinc-400">{refineLabel}</span>
+            Boxes from detect · masks via <span className="font-medium text-zinc-400">{refineLabel}</span>
           </p>
         ) : null}
 
         <label className="block">
-          <span className="gs-label">
-            {detectEngine === 'yolo' ? 'Class filter (optional)' : 'Text prompt'}
-          </span>
+          <span className="gs-label">Text prompt</span>
           <input
             className="gs-input w-full normal-case tracking-normal"
             value={prompt}
             disabled={locked}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder={detectEngine === 'yolo' ? 'person . dog . cup' : 'chair . person . dog .'}
+            placeholder="chair . person . dog ."
           />
         </label>
-
-        <Button
-          variant="ghost"
-          size="sm"
-          full
-          disabled={locked}
-          onClick={() => run('Segment', () => runSam2Segment(null, { model: segmentModel }))}
-        >
-          {busy === 'Segment'
-            ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-            : <Sparkles className="h-3.5 w-3.5" />}
-          Segment
-        </Button>
 
         <Button
           variant="accent"
@@ -221,13 +170,12 @@ export function SelectDetectAside() {
           full
           disabled={
             locked
-            || (detectNeedsPrompt && !prompt.trim())
+            || !prompt.trim()
             || (detectEngine === 'sam3' && sam3Options.every((m) => m.ready === false))
           }
           onClick={() => run('Detect', () => runTextDetect(prompt, {
             engine: detectEngine,
             dinoModel,
-            yoloModel,
             sam3Model,
             sam2Model: segmentModel,
           }))}
@@ -236,19 +184,6 @@ export function SelectDetectAside() {
             ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
             : <ScanSearch className="h-3.5 w-3.5" />}
           {detectBtnLabel}
-        </Button>
-
-        <Button
-          variant="ghost"
-          size="sm"
-          full
-          disabled={locked}
-          onClick={() => run('Human', () => runHumanSegment())}
-        >
-          {busy === 'Human'
-            ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-            : <User className="h-3.5 w-3.5" />}
-          Human segment → layer
         </Button>
       </div>
     </aside>

@@ -315,4 +315,185 @@ input[type='number']::-webkit-inner-spin-button { opacity: .35; }
     @apply pointer-events-none absolute inset-y-0 z-[3] w-px bg-acid;
     box-shadow: 0 0 0 1px rgb(0 0 0 / 40%);
   }
+
+  /* ── Studio timeline ─────────────────────────────────────── */
+  .gs-tl-timeline {
+    @apply flex h-full flex-col rounded-xl border border-white/[.08] bg-[#1a1a1e] overflow-hidden;
+  }
+
+  .gs-tl-timeline-body {
+    @apply flex min-h-0 flex-1;
+  }
+
+  /* Layer panel (left) */
+  .gs-tl-layer-panel {
+    @apply flex shrink-0 flex-col border-r border-white/[.08] bg-[#1e1e22];
+  }
+  .gs-tl-layer-header {
+    @apply flex h-6 shrink-0 items-center gap-1.5 border-b border-white/[.06] px-2 text-[9px] font-semibold uppercase tracking-[.12em] text-zinc-500;
+  }
+  .gs-tl-layer-count {
+    @apply ml-auto rounded bg-white/[.06] px-1 py-px text-[8px] font-bold text-zinc-500;
+  }
+  .gs-tl-layer-list {
+    @apply flex-1 overflow-y-auto overflow-x-hidden;
+  }
+
+  .gs-tl-layer-group {}
+
+  .gs-tl-layer-row {
+    @apply flex h-7 cursor-pointer items-center gap-1 border-b border-white/[.04] pr-1 text-[10px] text-zinc-300 transition-colors duration-75;
+  }
+  .gs-tl-layer-row:hover {
+    @apply bg-white/[.04];
+  }
+  .gs-tl-layer-row.is-selected {
+    @apply bg-[#1a3d3a] text-zinc-100;
+    box-shadow: inset 2px 0 0 #2dd4bf;
+  }
+
+  .gs-tl-layer-chevron {
+    @apply grid h-4 w-4 shrink-0 cursor-pointer place-items-center border-0 bg-transparent p-0 text-zinc-500 hover:text-zinc-200;
+  }
+  .gs-tl-layer-chevron-spacer {
+    @apply block h-4 w-4 shrink-0;
+  }
+
+  .gs-tl-layer-name {
+    @apply min-w-0 flex-1 truncate text-[10px] font-medium;
+  }
+
+  .gs-tl-layer-btn {
+    @apply grid h-5 w-5 shrink-0 place-items-center rounded border-0 bg-transparent p-0 text-zinc-500 transition-colors hover:text-zinc-200;
+  }
+  .gs-tl-layer-btn.is-off {
+    @apply text-zinc-700;
+  }
+  .gs-tl-layer-btn.is-locked {
+    @apply text-amber-400/80;
+  }
+
+  /* Property sub-rows — live values   */
+  .gs-tl-prop-row {
+    @apply h-6 text-[9px] text-zinc-500;
+  }
+  .gs-tl-prop-dot {
+    @apply h-1.5 w-1.5 shrink-0 rounded-full;
+  }
+  .gs-tl-prop-label {
+    @apply w-14 shrink-0 text-[9px] font-medium text-zinc-500;
+  }
+  .gs-tl-prop-value {
+    @apply min-w-0 flex-1 truncate font-mono text-[9px] text-zinc-400;
+  }
+  .gs-tl-prop-name {
+    @apply text-[9px] text-zinc-500;
+  }
+
+  /* Track panel (right) */
+  .gs-tl-track-panel {
+    @apply relative flex min-w-0 flex-1 flex-col;
+  }
+
+  .gs-tl-ruler-wrap {
+    @apply relative h-6 shrink-0 cursor-pointer border-b border-white/[.06] bg-[#1e1e22];
+  }
+  .gs-tl-ruler {
+    @apply block;
+  }
+
+  .gs-tl-playhead-handle {
+    @apply absolute top-0 z-10 -translate-x-1/2 cursor-ew-resize;
+  }
+  .gs-tl-playhead-tri {
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,.5));
+  }
+
+  .gs-tl-tracks {
+    @apply relative flex-1 overflow-y-auto overflow-x-hidden;
+  }
+
+  .gs-tl-track-row {
+    @apply relative h-7 border-b border-white/[.04] bg-[#1a1a1e];
+  }
+  .gs-tl-track-row.is-selected {
+    @apply bg-[#143532];
+  }
+  .gs-tl-track-prop {
+    @apply h-6 bg-[#191920];
+  }
+  .gs-tl-prop-track-line {
+    @apply absolute inset-x-0 top-1/2 h-px -translate-y-1/2;
+  }
+
+  /* Clip / duration bars — teal when selected */
+  .gs-tl-clip {
+    @apply absolute top-[4px] bottom-[4px] z-[1] flex cursor-pointer touch-none items-center overflow-hidden rounded-[3px] border-0;
+    background: var(--clip-color, #555);
+    opacity: 0.55;
+  }
+  .gs-tl-clip:hover {
+    opacity: 0.8;
+  }
+  .gs-tl-clip:active {
+    @apply cursor-grabbing;
+  }
+  .gs-tl-clip.is-selected {
+    opacity: 0.95;
+    background: #2dd4bf !important;
+    box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.5);
+  }
+  .gs-tl-clip.is-hidden {
+    opacity: 0.22;
+  }
+  .gs-tl-clip.is-dim {
+    opacity: 0.4;
+  }
+
+  .gs-tl-clip-label {
+    @apply pointer-events-none min-w-0 flex-1 truncate px-1.5 text-[8px] font-semibold tracking-wide;
+    color: rgba(0,0,0,.75);
+  }
+
+  .gs-tl-clip-handle {
+    @apply absolute top-0 bottom-0 z-[2] w-[5px] cursor-ew-resize border-0 bg-white/20 p-0 opacity-0 transition-opacity;
+  }
+  .gs-tl-clip:hover .gs-tl-clip-handle,
+  .gs-tl-clip.is-selected .gs-tl-clip-handle {
+    opacity: 1;
+  }
+  .gs-tl-clip-handle-in { @apply left-0 rounded-l-[4px]; }
+  .gs-tl-clip-handle-out { @apply right-0 rounded-r-[4px]; }
+
+  /* Keyframe diamonds */
+  .gs-tl-keyframe {
+    @apply absolute top-1/2 z-[3] h-[9px] w-[9px] -translate-x-1/2 -translate-y-1/2 rotate-45 cursor-pointer border border-black/50 p-0 transition-shadow;
+  }
+  .gs-tl-keyframe:hover {
+    box-shadow: 0 0 0 2px rgba(255,255,255,.25);
+  }
+  .gs-tl-keyframe.is-selected {
+    box-shadow: 0 0 0 2px var(--color-acid);
+  }
+
+  /* Playhead — orange   */
+  .gs-tl-playhead-line {
+    @apply pointer-events-none absolute inset-y-0 z-[5] w-px;
+    background: #f97316;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.5);
+  }
+
+  /* Footer controls */
+  .gs-tl-timeline-footer {
+    @apply flex h-7 shrink-0 items-center gap-3 border-t border-white/[.06] bg-[#1e1e22] px-3;
+  }
+  .gs-tl-footer-btn {
+    @apply cursor-pointer rounded border-0 bg-white/[.06] px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-zinc-400 transition hover:bg-white/10 hover:text-zinc-200;
+  }
+  .gs-tl-footer-time {
+    @apply font-mono text-[10px] text-zinc-500;
+  }
+  .gs-tl-footer-fps {
+    @apply ml-auto font-mono text-[10px] text-zinc-600;
+  }
 }

@@ -21,7 +21,6 @@ _ROUTE_RESERVE_GIB: dict[str, float] = {
     "detect": 1.25,
     "matte": 0.75,
     "depth": 1.0,
-    "inpaint": 1.0,
     "upscale": 2.0,
     "interpolate": 2.5,
     "export": 1.5,
@@ -177,13 +176,12 @@ def unload_inference_models() -> list[str]:
     notes: list[str] = []
     try:
         from .ai import depth_runner, grounding_dino_runner, realesrgan_runner
-        from .ai import rife_runner, sam2_runner, sam3_runner, yolo_runner
+        from .ai import rife_runner, sam2_runner, sam3_runner
 
         _safe_cache_clear(sam2_runner._predictor, "sam2", notes)
         _safe_cache_clear(sam3_runner._build_processor, "sam3", notes)
         _safe_cache_clear(grounding_dino_runner._official_model, "dino_official", notes)
         _safe_cache_clear(grounding_dino_runner._transformers_model, "dino_hf", notes)
-        _safe_cache_clear(yolo_runner._load_yolo, "yolo", notes)
         _safe_cache_clear(realesrgan_runner._realesrganer, "realesrgan", notes)
         _safe_cache_clear(realesrgan_runner._spandrel_model, "spandrel", notes)
         _safe_cache_clear(rife_runner._load_rife_model, "rife", notes)

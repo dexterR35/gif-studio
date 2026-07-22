@@ -29,15 +29,8 @@ transformers>=4.45
 # SAM 2 — install separately (CUDA extension optional):
 #   pip install "git+https://github.com/facebookresearch/sam2.git"
 
-# Ultralytics YOLO — selectable detect engine (COCO; local weights in models/yolo/)
-# https://github.com/ultralytics/ultralytics
-ultralytics>=8.3.0
-
 # Soft matte (BiRefNet / RMBG / isnet sessions)
 rembg>=2.0.50
-
-# Optional LaMa helper (OpenCV Telea always works without it):
-# simple-lama-inpainting
 
 # SAM3 (gated HF) — install separately:
 #   pip install 'git+https://github.com/facebookresearch/sam3.git'

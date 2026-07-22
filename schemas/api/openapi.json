@@ -186,20 +186,6 @@
         }
       }
     },
-    "/api/ai/segment": {
-      "post": {
-        "operationId": "aiSegment",
-        "summary": "AI segmentation",
-        "responses": {
-          "200": {
-            "description": "Segment result",
-            "content": {
-              "application/json": { "schema": { "type": "object" } }
-            }
-          }
-        }
-      }
-    },
     "/api/ai/detect": {
       "post": {
         "operationId": "aiDetect",
@@ -221,20 +207,6 @@
         "responses": {
           "200": {
             "description": "Depth result",
-            "content": {
-              "application/json": { "schema": { "type": "object" } }
-            }
-          }
-        }
-      }
-    },
-    "/api/ai/inpaint": {
-      "post": {
-        "operationId": "aiInpaint",
-        "summary": "Inpaint",
-        "responses": {
-          "200": {
-            "description": "Inpaint result",
             "content": {
               "application/json": { "schema": { "type": "object" } }
             }

@@ -1,14 +1,15 @@
 /**
- * Upscale — Bicubic (local) or ESRGAN / Real-ESRGAN / A-ESRGAN via local API weights.
- * Size / RAM caps (5k, 20 GiB) are enforced on the Python server only.
+ * Upscale — ESRGAN / Real-ESRGAN / A-ESRGAN via local API weights.
+ * Size / RAM caps (5k, 20 GiB) are enforced on the Python server.
  */
 import { getOnnxSession, imageDataToFloatTensor, ort } from './onnx'
 
 const MODEL_URL = import.meta.env.VITE_REALESRGAN_ONNX || ''
 
+const SUPPORTED = new Set(['esrgan', 'realesrgan', 'realesrgan-x2', 'a-esrgan'])
+
 /** Fallback list when /api/health has not loaded yet. */
 export const UPSCALE_MODELS = [
-  { id: 'bicubic', label: 'Bicubic', ready: true },
   { id: 'esrgan', label: 'ESRGAN', ready: false },
   { id: 'realesrgan', label: 'Real-ESRGAN', ready: false },
   { id: 'realesrgan-x2', label: 'Real-ESRGAN x2', ready: false },
@@ -17,22 +18,6 @@ export const UPSCALE_MODELS = [
 
 export function realesrganConfigured() {
   return Boolean(MODEL_URL)
-}
-
-async function viaBicubic(imageCanvas, scale = 2) {
-  const w = Math.max(1, Math.round(imageCanvas.width * scale))
-  const h = Math.max(1, Math.round(imageCanvas.height * scale))
-  const canvas = document.createElement('canvas')
-  canvas.width = w
-  canvas.height = h
-  const ctx = canvas.getContext('2d')
-  ctx.imageSmoothingEnabled = true
-  ctx.imageSmoothingQuality = 'high'
-  ctx.drawImage(imageCanvas, 0, 0, w, h)
-  const blob = await new Promise((resolve, reject) => {
-    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not encode bicubic image'))), 'image/png')
-  })
-  return { blob, url: URL.createObjectURL(blob), engine: 'bicubic' }
 }
 
 async function viaServer(imageBlob, scale = 2, model = 'realesrgan') {
@@ -104,9 +89,8 @@ export async function upscaleWithRealESRGAN({
   model = 'realesrgan',
 }) {
   const mid = String(model || 'realesrgan').toLowerCase()
-
-  if (mid === 'bicubic' && imageCanvas) {
-    return viaBicubic(imageCanvas, scale)
+  if (!SUPPORTED.has(mid)) {
+    throw new Error(`Unknown upscale model "${model}". Supported: ${[...SUPPORTED].join(', ')}.`)
   }
 
   const blob = imageBlob || await new Promise((resolve, reject) => {
@@ -116,10 +100,6 @@ export async function upscaleWithRealESRGAN({
     }
     imageCanvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not read canvas'))), 'image/png')
   })
-
-  if (mid === 'bicubic') {
-    return viaServer(blob, scale, 'bicubic')
-  }
 
   if (mid === 'realesrgan' && realesrganConfigured() && imageCanvas) {
     const ctx = imageCanvas.getContext('2d', { willReadFrequently: true })
