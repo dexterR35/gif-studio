@@ -95,7 +95,7 @@ edge-based selection and the bundled gifenc path (labeled offline / degraded).
 
 FE unit tests: `npm test` (Vitest). OpenAPI drift: `npm run check:openapi`.
 
-### Optional heavy AI engines (SAM2 · Grounding DINO · Real-ESRGAN · RIFE)
+### Optional heavy AI engines (SAM2 · Grounding DINO · Real-ESRGAN)
 
 Real PyTorch runners live under `src/gif_studio/ai/` and call the official stacks:
 
@@ -104,7 +104,6 @@ Real PyTorch runners live under `src/gif_studio/ai/` and call the official stack
 | **SAM 2** | [facebookresearch/sam2](https://github.com/facebookresearch/sam2) | `pip install git+https://github.com/facebookresearch/sam2.git` (HF weights on first use) |
 | **Grounding DINO** | [IDEA-Research/GroundingDINO](https://github.com/IDEA-Research/GroundingDINO) | `pip install transformers` → `IDEA-Research/grounding-dino-tiny` |
 | **Real-ESRGAN** | [xinntao/Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) | `pip install realesrgan basicsr` (or `spandrel`); weights auto-download |
-| **RIFE** | [hzwer/ECCV2022-RIFE](https://github.com/hzwer/ECCV2022-RIFE) / [Practical-RIFE](https://github.com/hzwer/Practical-RIFE) | clone + `train_log` weights via setup script |
 
 ```bash
 pip install -r requirements-ai.txt
@@ -112,7 +111,7 @@ pip install "git+https://github.com/facebookresearch/sam2.git"
 python scripts/setup_ai_models.py
 ```
 
-Check `/api/health` for `sam2`, `grounding_dino`, `realesrgan`, and `rife` flags.
+Check `/api/health` for `sam2`, `grounding_dino`, and `realesrgan` flags.
 Without weights/packages, those AI endpoints return an error — there are no substitute algorithms.
 
 ## Requirements

@@ -277,6 +277,7 @@ export function textToV2Layer(tl, prevLayer = null) {
       strokeWidth: Number(tl.strokeWidth) || 0,
       letterSpacing: Number(tl.letterSpacing) || 0,
       lineHeight: Number(tl.lineHeight) || 1.1,
+      boxWidth: tl.boxWidth != null ? Number(tl.boxWidth) : null,
     },
   }
 }

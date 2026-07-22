@@ -13,9 +13,6 @@ models/
   sam3/                # SAM 3 / 3.1 (gated HF — optional)
   groundingdino/       # Grounding DINO + BERT / HF snapshots
   matte/               # optional BiRefNet / RMBG ONNX (rembg also caches)
-  depth/
-    v2-small-hf/       # Depth Anything V2 Small (Transformers snapshot)
-  rife/train_log/      # RIFE flownet
   gfpgan/              # GFPGANv1.4.pth face polish slot
 ```
 

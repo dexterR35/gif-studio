@@ -9,9 +9,7 @@ const ENGINE_KEYS = [
   'sam3',
   'grounding_dino',
   'matte',
-  'depth',
   'realesrgan',
-  'rife',
   'gfpgan',
   'gifsicle',
   'oxipng',
@@ -127,9 +125,7 @@ function taskForEngine(id) {
     sam2: 'segment',
     sam3: 'segment',
     grounding_dino: 'detect',
-    depth: 'depth',
     realesrgan: 'upscale',
-    rife: 'interpolate',
     gfpgan: 'enhance',
     gifsicle: 'export',
     oxipng: 'optimize',
@@ -139,12 +135,11 @@ function taskForEngine(id) {
 
 function qualityForEngine(id) {
   if (id === 'realesrgan' || id === 'sam2' || id === 'sam3' || id === 'matte') return 'best'
-  if (id === 'rife' || id === 'depth') return 'balanced'
   return 'fast'
 }
 
 function animatedSupport(id) {
-  return id === 'rife' || id === 'gifsicle' || id === 'realesrgan'
+  return id === 'gifsicle' || id === 'realesrgan'
 }
 
 /**

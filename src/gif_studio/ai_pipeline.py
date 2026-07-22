@@ -1,4 +1,4 @@
-"""Server-side AI pipeline: select / matte / depth / upscale / interpolate.
+"""Server-side AI pipeline: select / matte / upscale.
 
 Heavy models run through gif_studio.ai.* runners when packages + weights are
 available. Missing engines raise — no substitute algorithms.
@@ -56,15 +56,6 @@ def matte_available(model: str | None = None) -> bool:
         return rembg_available()
 
 
-def depth_available() -> bool:
-    try:
-        from .ai.depth_runner import depth_ready
-
-        return depth_ready()
-    except Exception:
-        return False
-
-
 def realesrgan_available() -> bool:
     try:
         from .ai.realesrgan_runner import realesrgan_ready
@@ -72,15 +63,6 @@ def realesrgan_available() -> bool:
         return realesrgan_ready()
     except Exception:
         return bool(_env_model("REALESRGAN_MODEL") or _env_model("GIF_STUDIO_REALESRGAN"))
-
-
-def rife_available() -> bool:
-    try:
-        from .ai.rife_runner import rife_ready
-
-        return rife_ready()
-    except Exception:
-        return False
 
 
 def gfpgan_available() -> bool:
@@ -188,27 +170,269 @@ def _detect_with_sam3(
     }
 
 
+def _segment_family(model: str | None) -> str | None:
+    """Return ``sam2`` / ``sam3`` when ``model`` names that family; else None."""
+    if not model:
+        return None
+    mid = str(model).strip().lower().replace("-", "_")
+    if mid.startswith("sam3") or mid in {"sam_3"}:
+        return "sam3"
+    if mid.startswith("sam2") or "hiera" in mid or mid.startswith("sam_2"):
+        return "sam2"
+    return None
+
+
+def _prefer_sam2_large(sam2_model: str | None) -> str | None:
+    """Use caller model, else prefer SAM 2.1 Large when weights exist on disk."""
+    if sam2_model and _segment_family(sam2_model) == "sam2":
+        return sam2_model
+    try:
+        from .ai.local_models import list_sam2_models
+
+        ready = {m["id"]: m for m in list_sam2_models() if m.get("ready")}
+        for preferred in (
+            "sam2.1_hiera_large",
+            "sam2.1_hiera_base_plus",
+            "sam2.1_hiera_small",
+            "sam2.1_hiera_tiny",
+        ):
+            if preferred in ready:
+                return preferred
+    except Exception:
+        pass
+    return sam2_model if _segment_family(sam2_model) == "sam2" else None
+
+
+def _detect_upscale_scale() -> int:
+    """Upscale factor for DINO→SAM refine. ``0``/``1`` disables. Default 4."""
+    raw = os.environ.get("GIF_STUDIO_DETECT_UPSCALE", "4")
+    try:
+        scale = int(raw)
+    except ValueError:
+        scale = 4
+    return max(0, min(4, scale))
+
+
+def _upscale_for_detect(payload: bytes, scale: int) -> tuple[bytes, str, float, float]:
+    """Real-ESRGAN upscale for detect refine.
+
+    Returns ``(png_bytes, engine, scale_x, scale_y)``. On failure / scale≤1,
+    returns the original payload with scale 1.
+    """
+    import cv2
+
+    from .ai.paths import decode_bgr
+
+    src = decode_bgr(payload)
+    sh, sw = src.shape[:2]
+    if scale <= 1 or not realesrgan_available():
+        return payload, "identity", 1.0, 1.0
+
+    # Try requested scale, then smaller factors if size/RAM guards refuse.
+    last_err: Exception | None = None
+    for try_scale in (scale, 2) if scale > 2 else (scale,):
+        try:
+            out, engine = upscale_image(payload, scale=try_scale, model="realesrgan")
+            up = decode_bgr(out)
+            uh, uw = up.shape[:2]
+            sx = float(uw) / float(max(1, sw))
+            sy = float(uh) / float(max(1, sh))
+            # Optional GFPGAN face polish when weights exist (best-effort).
+            polished, gfp = _maybe_gfpgan(out)
+            if gfp:
+                return polished, f"{engine}+{gfp}", sx, sy
+            return out, engine, sx, sy
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            continue
+
+    # Fallback: Lanczos so bbox still scales consistently when AI upscale fails.
+    if scale > 1:
+        bgr = src if src.ndim == 3 else cv2.cvtColor(src, cv2.COLOR_GRAY2BGR)
+        if bgr.shape[2] == 4:
+            bgr = cv2.cvtColor(bgr, cv2.COLOR_BGRA2BGR)
+        resized = cv2.resize(
+            bgr,
+            (int(sw * scale), int(sh * scale)),
+            interpolation=cv2.INTER_LANCZOS4,
+        )
+        ok, buf = cv2.imencode(".png", resized)
+        if ok:
+            return buf.tobytes(), f"lanczos-x{scale}", float(scale), float(scale)
+    if last_err:
+        return payload, f"identity({last_err})", 1.0, 1.0
+    return payload, "identity", 1.0, 1.0
+
+
+def _maybe_gfpgan(payload: bytes) -> tuple[bytes, str | None]:
+    """Best-effort GFPGAN face polish after Real-ESRGAN. No-op if unavailable."""
+    if not gfpgan_available():
+        return payload, None
+    try:
+        import cv2
+        import numpy as np
+        import torch
+        from gfpgan import GFPGANer
+
+        from .ai.paths import decode_bgr, encode_png, models_dir, torch_device
+
+        weight = models_dir() / "gfpgan" / "GFPGANv1.4.pth"
+        device = torch_device()
+        restorer = GFPGANer(
+            model_path=str(weight),
+            upscale=1,
+            arch="clean",
+            channel_multiplier=2,
+            bg_upsampler=None,
+            device=device,
+        )
+        bgr = decode_bgr(payload)
+        if bgr.ndim == 2:
+            bgr = cv2.cvtColor(bgr, cv2.COLOR_GRAY2BGR)
+        elif bgr.shape[2] == 4:
+            bgr = cv2.cvtColor(bgr, cv2.COLOR_BGRA2BGR)
+        _cropped, _restored, output = restorer.enhance(
+            bgr, has_aligned=False, only_center_face=False, paste_back=True,
+        )
+        if output is None:
+            return payload, None
+        return encode_png(np.asarray(output)), "gfpgan"
+    except Exception:
+        return payload, None
+
+
+def _scale_box(top: dict[str, Any], sx: float, sy: float) -> dict[str, float]:
+    return {
+        "x": float(top["x"]) * sx,
+        "y": float(top["y"]) * sy,
+        "w": float(top["w"]) * sx,
+        "h": float(top["h"]) * sy,
+    }
+
+
+def _rgba_cutout_from_mask(
+    bgr,
+    mask_png_b64: str,
+    scale_x: float,
+    scale_y: float,
+) -> dict[str, Any]:
+    """Bitwise-AND RGB with binary mask → cropped transparent RGBA + original-space rect."""
+    import base64
+
+    import cv2
+    import numpy as np
+
+    from .ai.paths import encode_png
+
+    raw = base64.b64decode(mask_png_b64)
+    arr = np.frombuffer(raw, dtype=np.uint8)
+    mask = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+    if mask is None:
+        raise RuntimeError("Could not decode SAM mask")
+
+    if bgr.ndim == 2:
+        bgr = cv2.cvtColor(bgr, cv2.COLOR_GRAY2BGR)
+    elif bgr.shape[2] == 4:
+        bgr = cv2.cvtColor(bgr, cv2.COLOR_BGRA2BGR)
+
+    h, w = bgr.shape[:2]
+    if mask.shape[0] != h or mask.shape[1] != w:
+        mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+
+    binary = (mask > 127).astype(np.uint8)
+    rgba = cv2.cvtColor(bgr, cv2.COLOR_BGR2BGRA)
+    rgba[:, :, 3] = binary * 255
+
+    ys, xs = np.where(binary > 0)
+    if xs.size == 0:
+        raise RuntimeError("SAM mask was empty")
+
+    pad = 2
+    x1 = max(0, int(xs.min()) - pad)
+    y1 = max(0, int(ys.min()) - pad)
+    x2 = min(w - 1, int(xs.max()) + pad)
+    y2 = min(h - 1, int(ys.max()) + pad)
+    crop = rgba[y1 : y2 + 1, x1 : x2 + 1]
+
+    sx = max(1e-6, float(scale_x))
+    sy = max(1e-6, float(scale_y))
+    return {
+        "cutout_png_base64": base64.b64encode(encode_png(crop)).decode("ascii"),
+        "mask_png_base64": mask_png_b64,
+        "rect": {
+            "x": float(x1) / sx,
+            "y": float(y1) / sy,
+            "width": float(x2 - x1 + 1) / sx,
+            "height": float(y2 - y1 + 1) / sy,
+        },
+    }
+
+
 def _refine_with_sam2(
     payload: bytes,
     top: dict[str, Any],
     sam2_model: str | None,
 ) -> dict[str, Any]:
-    """Box → mask via SAM2 only (DINO refine). SAM3 is a separate detect engine."""
+    """DINO box → Real-ESRGAN (+ optional GFPGAN) → scale box → SAM2 → RGBA cutout.
+
+    Image resolution before/after upscale is irrelevant to callers: boxes/`rect`
+    stay in the *original* image coordinate space; cutout pixels may be denser.
+    """
     if not sam2_available():
         raise RuntimeError("SAM2 not available for mask refine")
+
+    import base64
+
+    from .ai.paths import decode_bgr
     from .ai.sam2_runner import segment_with_sam2
 
-    x1 = float(top["x"])
-    y1 = float(top["y"])
-    x2 = x1 + float(top["w"])
-    y2 = y1 + float(top["h"])
-    model = sam2_model if _segment_family(sam2_model) == "sam2" else None
-    return segment_with_sam2(
-        payload,
+    want_scale = _detect_upscale_scale()
+    up_payload, up_engine, sx, sy = _upscale_for_detect(payload, want_scale)
+    scaled = _scale_box(top, sx, sy)
+    x1, y1 = scaled["x"], scaled["y"]
+    x2, y2 = x1 + scaled["w"], y1 + scaled["h"]
+
+    model = _prefer_sam2_large(sam2_model)
+    seg = segment_with_sam2(
+        up_payload,
         point=((x1 + x2) / 2.0, (y1 + y2) / 2.0),
         box=(x1, y1, x2, y2),
         model=model,
     )
+
+    bgr = decode_bgr(up_payload)
+    layer = _rgba_cutout_from_mask(
+        bgr, seg["mask_png_base64"], scale_x=sx, scale_y=sy,
+    )
+
+    # Full-frame mask in *original* resolution for UI compositing onto canvas.
+    orig = decode_bgr(payload)
+    oh, ow = orig.shape[:2]
+    import cv2
+    import numpy as np
+
+    raw = base64.b64decode(seg["mask_png_base64"])
+    mask_hr = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+    if mask_hr is not None and (mask_hr.shape[0] != oh or mask_hr.shape[1] != ow):
+        mask_orig = cv2.resize(mask_hr, (ow, oh), interpolation=cv2.INTER_NEAREST)
+        from .ai.paths import encode_png
+
+        mask_b64_orig = base64.b64encode(encode_png(mask_orig)).decode("ascii")
+    else:
+        mask_b64_orig = seg["mask_png_base64"]
+
+    return {
+        **seg,
+        "mask_png_base64": mask_b64_orig,
+        "mask_png_base64_hr": seg.get("mask_png_base64"),
+        "cutout_png_base64": layer["cutout_png_base64"],
+        "rect": layer["rect"],
+        "upscale_engine": up_engine,
+        "upscale_scale_x": sx,
+        "upscale_scale_y": sy,
+        "scaled_box": scaled,
+        "engine": f"{up_engine}+{seg.get('engine')}",
+    }
 
 
 def detect_objects(
@@ -221,9 +445,10 @@ def detect_objects(
     engine: str | None = "auto",
     sam3_model: str | None = None,
 ) -> dict[str, Any]:
-    """Detect via SAM3 (text→mask) or Grounding DINO + SAM2 refine.
+    """Detect via SAM3 (text→mask) or Grounding DINO + upscale + SAM2 refine.
 
-    SAM3 is the upgrade path that *replaces* DINO+SAM2 — never stacked on both.
+    DINO path: box on input → Real-ESRGAN (×N) → scale box → SAM2 → RGBA cutout.
+    SAM3 replaces that stack entirely (never stacked on DINO).
     """
     from .ai.grounding_dino_runner import pick_best_box
 
@@ -256,7 +481,7 @@ def detect_objects(
     if top is not None:
         result = {**result, "selected_box": top, "selected_label": top.get("label")}
 
-    # DINO boxes → SAM2 mask. SAM3 is never used as a refine step.
+    # DINO → upscale → SAM2 → RGBA. SAM3 is never used as a refine step.
     if not refine_sam2 or not boxes or top is None:
         return result
     if not sam2_available():
@@ -275,9 +500,17 @@ def detect_objects(
         result = {
             **result,
             "mask_png_base64": seg.get("mask_png_base64"),
+            "mask_png_base64_hr": seg.get("mask_png_base64_hr"),
+            "cutout_png_base64": seg.get("cutout_png_base64"),
+            "rect": seg.get("rect"),
             "mask_score": seg.get("score"),
+            "upscale_engine": seg.get("upscale_engine"),
+            "upscale_scale_x": seg.get("upscale_scale_x"),
+            "upscale_scale_y": seg.get("upscale_scale_y"),
+            "scaled_box": seg.get("scaled_box"),
             "engine": f"{result.get('engine')}+{seg.get('engine')}",
             "refined": "sam2",
+            "pipeline": "dino→realesrgan→sam2→rgba",
         }
     except Exception as exc:
         result = {**result, "refine_error": str(exc), "refined": None}
@@ -293,17 +526,6 @@ def matte_image(payload: bytes, model: str | None = None) -> dict[str, Any]:
     from .ai.matte_runner import matte_with_model
 
     return matte_with_model(payload, model=model)
-
-
-def depth_image(payload: bytes, model: str | None = None) -> dict[str, Any]:
-    if not depth_available():
-        raise RuntimeError(
-            "Depth Anything V2 not available. Place snapshot under "
-            "models/depth/v2-small-hf/ (python scripts/setup_ai_models.py)."
-        )
-    from .ai.depth_runner import estimate_depth
-
-    return estimate_depth(payload, model=model)
 
 
 def upscale_image(payload: bytes, scale: int = 2, model: str = "realesrgan") -> tuple[bytes, str]:
@@ -330,34 +552,9 @@ def upscale_image(payload: bytes, scale: int = 2, model: str = "realesrgan") -> 
     return upscale_with_realesrgan(payload, scale=scale, model=nid)
 
 
-def interpolate_frames(
-    frames: list[bytes],
-    factor: int = 2,
-    model: str | None = "rife",
-) -> tuple[list[bytes], str]:
-    """Return (frame_pngs, engine_name). RIFE only."""
-    mid = (model or "rife").strip().lower()
-    if mid != "rife":
-        raise RuntimeError(f"Unknown interpolate model {model!r}. Supported: rife.")
-    if not rife_available():
-        raise RuntimeError(
-            "RIFE is not available. Install the RIFE package and place weights "
-            "under models/rife, or set RIFE_MODEL / GIF_STUDIO_RIFE."
-        )
-
-    from .ai.rife_runner import interpolate_with_rife
-
-    return interpolate_with_rife(frames, factor=factor)
-
-
 # Back-compat aliases used by older call sites
 def upscale_realesrgan(payload: bytes, scale: int = 2) -> bytes:
     data, _engine = upscale_image(payload, scale=scale)
-    return data
-
-
-def interpolate_rife(frames: list[bytes], factor: int = 2) -> list[bytes]:
-    data, _engine = interpolate_frames(frames, factor=factor)
     return data
 
 
@@ -370,9 +567,7 @@ def capability_flags() -> dict[str, Any]:
         "sam3": sam3_available(),
         "grounding_dino": grounding_dino_available(),
         "matte": matte_available(),
-        "depth": depth_available(),
         "realesrgan": realesrgan_available(),
-        "rife": rife_available(),
         "gfpgan": gfpgan_available(),
         "rembg": rembg_available(),
         "mediapipe_server": False,
@@ -384,8 +579,6 @@ def capability_flags() -> dict[str, Any]:
             "select_detect": models.get("select_detect") or [],
             "grounding_dino": models["grounding_dino"],
             "matte": models["matte"],
-            "depth": models["depth"],
-            "interpolate": models["interpolate"],
             "upscale": models["upscale"],
             "models_dir": models["models_dir"],
             "jobs": models["jobs"],
@@ -409,12 +602,8 @@ def active_engines() -> list[str]:
         engines.append("SAM3")
     if caps["grounding_dino"]:
         engines.append("Grounding DINO")
-    if caps["depth"]:
-        engines.append("Depth Anything V2")
     if caps["realesrgan"]:
         engines.append("RealESRGAN")
-    if caps["rife"]:
-        engines.append("RIFE")
     if caps["gfpgan"]:
         engines.append("GFPGAN (weights only)")
     engines.append("MediaPipe (browser)")

@@ -2,11 +2,11 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useLocation, useNavigate } from 'react-router-dom'
 import { GIFEncoder, applyPalette, quantize } from 'gifenc'
 import { PRESETS, TEXT_DEFAULT, transformsFromAmount, MAX_TEXT_LAYERS, clampTextInOut } from '../lib/presets'
-import { IMAGE_EDITS_DEFAULT, CENSOR_DEFAULT, PARALLAX_DEFAULT } from '../lib/project-document'
+import { measureTextLayerPx, textLayerBoundsPct } from '../lib/text-measure'
+import { IMAGE_EDITS_DEFAULT, PARALLAX_DEFAULT } from '../lib/project-document'
 import { QUALITY_PROFILE_MAP, HEALTH_TIMEOUT_MS } from '../lib/catalogs'
 import { clamp, clampNice, fmtBytes, ease, MAX_CANVAS, MAX_UPLOAD_DIMENSION, nice, uploadImageError } from '../lib/format'
-import { applyDistortion, ditherToPalette } from '../lib/effects'
-import { sampleDistortions, sampleZoomScale, clampMotionEffects, createMotionEffect, MAX_MOTION_EFFECTS, isBaseMotionClip, parseLayerTrackId } from '../lib/motion-effects'
+import { parseLayerTrackId } from '../lib/timeline-ids'
 import { gifWorkspacePath, workspaceFromPath } from '../lib/routes'
 import { useCanvasZoom } from '../hooks/use-canvas-zoom'
 import { useStudioStore } from '../store/studio-store'
@@ -112,6 +112,8 @@ export function StudioProvider({ children }) {
 
 
   const canvasRef = useRef(null)
+  const konvaStageApiRef = useRef(null)
+  const setKonvaStageApi = useCallback((api) => { konvaStageApiRef.current = api }, [])
   const stageRef = useRef(null)
   const fileRef = useRef(null)
   const fontFileRef = useRef(null)
@@ -122,7 +124,7 @@ export function StudioProvider({ children }) {
   const playingRef = useRef(false)
   /** Shared finish lock — only one of export / PNG download / upscale at a time. */
   const ioLockRef = useRef(false)
-  /** Nestable AI busy depth (segment / detect / matte / depth / RIFE / pose). */
+  /** Nestable AI busy depth (segment / detect / matte / pose). */
   const busyDepthRef = useRef(0)
   const enhanceGenRef = useRef(0)
   const selectionStart = useRef(null)
@@ -144,7 +146,6 @@ export function StudioProvider({ children }) {
   const textLayers = useStudioStore((s) => s.editor.textLayers)
   const enhancedLayer = useStudioStore((s) => s.editor.enhancedLayer)
   const imageEdits = useStudioStore((s) => s.editor.imageEdits)
-  const censor = useStudioStore((s) => s.editor.censor)
   const parallax = useStudioStore((s) => s.editor.parallax)
   const fontOptions = useStudioStore((s) => s.editor.fontOptions)
 
@@ -155,7 +156,6 @@ export function StudioProvider({ children }) {
   const setTextLayers = useStudioStore((s) => s.setTextLayers)
   const setEnhancedLayer = useStudioStore((s) => s.setEnhancedLayer)
   const setImageEdits = useStudioStore((s) => s.setImageEdits)
-  const setCensor = useStudioStore((s) => s.setCensor)
   const setParallax = useStudioStore((s) => s.setParallax)
   const setFontOptions = useStudioStore((s) => s.setFontOptions)
 
@@ -191,7 +191,6 @@ export function StudioProvider({ children }) {
   const extractTolerance = useStudioStore((s) => s.tools.extractTolerance)
   const maskEditing = useStudioStore((s) => s.tools.maskEditing)
   const maskBrush = useStudioStore((s) => s.tools.maskBrush)
-  const censorSelecting = useStudioStore((s) => s.tools.censorSelecting)
 
   const setSelectMode = useStudioStore((s) => s.setSelectMode)
   const setSelectionTool = useStudioStore((s) => s.setSelectionTool)
@@ -200,7 +199,6 @@ export function StudioProvider({ children }) {
   const setExtractTolerance = useStudioStore((s) => s.setExtractTolerance)
   const setMaskEditing = useStudioStore((s) => s.setMaskEditing)
   const setMaskBrush = useStudioStore((s) => s.setMaskBrush)
-  const setCensorSelecting = useStudioStore((s) => s.setCensorSelecting)
 
   const mobilePanel = useStudioStore((s) => s.ui.mobilePanel)
   const toast = useStudioStore((s) => s.ui.toast)
@@ -313,13 +311,7 @@ export function StudioProvider({ children }) {
 
   const update = (key, value) => {
     const nextValue = typeof value === 'number' ? nice(value, Number.isInteger(value) ? 0 : 1) : value
-    setSettings((s) => {
-      const next = { ...s, [key]: nextValue }
-      if (key === 'duration') {
-        next.motionEffects = clampMotionEffects(s.motionEffects, next.duration)
-      }
-      return next
-    })
+    setSettings((s) => ({ ...s, [key]: nextValue }))
     if (key === 'duration') {
       setTextLayers((current) => current.map((layer) => clampTextInOut(layer, nextValue)))
     }
@@ -330,64 +322,6 @@ export function StudioProvider({ children }) {
       const parsed = parseLayerTrackId(current)
       if (parsed && parsed.kind === kind && parsed.id === id) return null
       return current
-    })
-  }
-
-  const addMotionEffect = (type) => {
-    let addedId = null
-    setSettings((s) => {
-      const list = s.motionEffects || []
-      if (list.length >= MAX_MOTION_EFFECTS) return s
-      const used = new Set(list.map((clip) => clip.track ?? 0))
-      let track = 0
-      while (used.has(track) && track < MAX_MOTION_EFFECTS) track += 1
-      const clip = createMotionEffect(type, s.duration, track)
-      addedId = clip.id
-      return { ...s, motionEffects: [...list, clip] }
-    })
-    if (addedId == null) {
-      setToast(`Max ${MAX_MOTION_EFFECTS} timeline effects`)
-      return null
-    }
-    setSelectedMotionEffect(addedId)
-    return addedId
-  }
-
-  const updateMotionEffect = (id, patch) => {
-    if (isBaseMotionClip(id)) return
-    setSettings((s) => ({
-      ...s,
-      motionEffects: clampMotionEffects(
-        (s.motionEffects || []).map((clip) => (clip.id === id ? { ...clip, ...patch } : clip)),
-        s.duration,
-      ),
-    }))
-  }
-
-  const removeMotionEffect = (id) => {
-    if (isBaseMotionClip(id)) return
-    setSettings((s) => ({
-      ...s,
-      motionEffects: (s.motionEffects || []).filter((clip) => clip.id !== id),
-    }))
-    setSelectedMotionEffect((current) => (current === id ? null : current))
-  }
-
-  const moveMotionEffectTrack = (id, track) => {
-    if (isBaseMotionClip(id)) return
-    const nextTrack = Math.max(0, Math.min(MAX_MOTION_EFFECTS - 1, track))
-    setSettings((s) => {
-      const clips = [...(s.motionEffects || [])]
-      const from = clips.findIndex((clip) => clip.id === id)
-      if (from < 0) return s
-      const occupant = clips.find((clip) => clip.id !== id && (clip.track ?? 0) === nextTrack)
-      const moving = { ...clips[from], track: nextTrack }
-      const next = clips.map((clip) => {
-        if (clip.id === id) return moving
-        if (occupant && clip.id === occupant.id) return { ...clip, track: clips[from].track ?? 0 }
-        return clip
-      })
-      return { ...s, motionEffects: clampMotionEffects(next, s.duration) }
     })
   }
 
@@ -487,10 +421,8 @@ export function StudioProvider({ children }) {
       sam3: Boolean(apiInfo?.sam3),
       groundingDino: Boolean(apiInfo?.grounding_dino),
       matte: Boolean(apiInfo?.matte),
-      depth: Boolean(apiInfo?.depth),
       gfpgan: Boolean(apiInfo?.gfpgan),
       realesrgan: Boolean(apiInfo?.realesrgan),
-      rife: Boolean(apiInfo?.rife),
       rembg: Boolean(apiInfo?.rembg || apiInfo?.ai),
       device: apiInfo?.device || null,
       models: apiInfo?.models || null,
@@ -523,9 +455,7 @@ export function StudioProvider({ children }) {
     }
     const t = ease(timeline, settings.easing)
     const timeSec = rawT * (settings.duration || 1)
-    const motionFx = settings.motionEffects || []
-    const zoomFx = sampleZoomScale(motionFx, timeSec)
-    let scale = (settings.scaleStart + (settings.scaleEnd - settings.scaleStart) * t) / 100 * zoomFx
+    let scale = (settings.scaleStart + (settings.scaleEnd - settings.scaleStart) * t) / 100
     let x = settings.xStart + (settings.xEnd - settings.xStart) * t
     let y = settings.yStart + (settings.yEnd - settings.yStart) * t
     let rotation = settings.rotateStart + (settings.rotateEnd - settings.rotateStart) * t
@@ -630,15 +560,6 @@ export function StudioProvider({ children }) {
       ctx.globalAlpha = opacity
       ctx.drawImage(drawSource, 0, 0, iw, ih, 0, 0, baseDw, baseDh)
       ctx.restore()
-    }
-
-    if (censor.enabled) {
-      const cx = Math.round(censor.x / 100 * W), cy = Math.round(censor.y / 100 * H)
-      const cw = Math.max(1, Math.round(censor.w / 100 * W)), ch = Math.max(1, Math.round(censor.h / 100 * H))
-      const pixel = Math.max(2, censor.pixelSize), tiny = document.createElement('canvas')
-      tiny.width = Math.max(1, Math.round(cw / pixel)); tiny.height = Math.max(1, Math.round(ch / pixel))
-      tiny.getContext('2d').drawImage(target, cx, cy, cw, ch, 0, 0, tiny.width, tiny.height)
-      ctx.save(); ctx.imageSmoothingEnabled = false; ctx.drawImage(tiny, 0, 0, tiny.width, tiny.height, cx, cy, cw, ch); ctx.restore()
     }
 
     overlays.filter((overlay) => overlay.visible).forEach((overlay) => {
@@ -816,7 +737,6 @@ export function StudioProvider({ children }) {
       if (layer.casing === 'lowercase') content = content.toLowerCase()
       const fontScale = W / settings.width
       const size = layer.size * fontScale
-      const lines = content.split('\n')
       const lineHeight = size * layer.lineHeight
       ctx.save()
       ctx.translate(layer.x / 100 * W + tx, layer.y / 100 * H + ty)
@@ -830,6 +750,7 @@ export function StudioProvider({ children }) {
       ctx.fillStyle = layer.color; ctx.strokeStyle = layer.strokeColor; ctx.lineWidth = layer.strokeWidth * fontScale * 2
       ctx.lineJoin = 'round'; ctx.shadowColor = layer.shadowColor; ctx.shadowBlur = layer.shadowBlur * fontScale
       ctx.shadowOffsetX = layer.shadowX * fontScale; ctx.shadowOffsetY = layer.shadowY * fontScale
+      const { lines } = measureTextLayerPx({ ...layer, text: content }, fontScale)
       lines.forEach((line, index) => {
         const lineY = (index - (lines.length - 1) / 2) * lineHeight
         if (layer.strokeWidth > 0) ctx.strokeText(line, 0, lineY)
@@ -859,20 +780,7 @@ export function StudioProvider({ children }) {
       })
     }
 
-    // Timed liquify / warp clips (Motion timeline) — applied last for smooth GIF deformation.
-    const distortions = sampleDistortions(motionFx, timeSec)
-    for (const distort of distortions) {
-      applyDistortion(target, {
-        type: distort.type,
-        amount: distort.amount,
-        x: distort.x,
-        y: distort.y,
-        radius: distort.radius,
-        angle: distort.angle,
-        phase: distort.phase || 0,
-      })
-    }
-  }, [image, settings, elements, textLayers, parallax, imageEdits, censor, overlays, poseRig, enhancedLayer, imageVisible])
+  }, [image, settings, elements, textLayers, parallax, imageEdits, overlays, poseRig, enhancedLayer, imageVisible])
 
   drawRef.current = draw
 
@@ -983,9 +891,8 @@ export function StudioProvider({ children }) {
       })
       setSelectedOverlay(null)
       setSelectedMotionEffect(null)
-      setSettings((current) => ({ ...current, motionEffects: [] }))
+      setSettings((current) => ({ ...current }))
       setImageEdits({ ...IMAGE_EDITS_DEFAULT })
-      setCensor({ ...CENSOR_DEFAULT })
       setParallax({ ...PARALLAX_DEFAULT })
       setPoseRig({ ...POSE_RIG_DEFAULT })
       setProgress(0)
@@ -1168,7 +1075,6 @@ export function StudioProvider({ children }) {
     setPlaying(false)
     setSelectMode(false)
     setMaskEditing(false)
-    setCensorSelecting(false)
   }
 
   const applyPreset = (name) => setSettings((s) => ({
@@ -1205,6 +1111,21 @@ export function StudioProvider({ children }) {
 
   const cancelSelection = () => { selectionStart.current = null; setSelection(null); setSelectionPoints([]); setSelectMode(false) }
 
+  const applyKonvaSelection = (payload) => {
+    if (!payload?.rect) return
+    const { rect, points, type } = payload
+    setSelectMode(false)
+    setSelection(null)
+    setSelectionPoints([])
+    selectionStart.current = null
+    if (type === 'path' && points?.length >= 3) {
+      extractElementLocal(rect, points, true)
+      return
+    }
+    extractElementLocal(rect)
+  }
+
+
   const completePathSelection = () => {
     if (!selectMode || selectionPoints.length < 3) { setToast('Add at least three selection points'); return }
     const points = [...selectionPoints], rect = selectionBounds(points)
@@ -1217,16 +1138,14 @@ export function StudioProvider({ children }) {
     if (!selectMode) return undefined
     const handleSelectionKeys = (event) => {
       if (event.key === 'Escape') cancelSelection()
-      if (event.key === 'Enter' && (selectionTool === 'Polygonal Lasso' || selectionTool === 'Pen Path')) completePathSelection()
-      if ((event.key === 'Backspace' || event.key === 'Delete') && selectionPoints.length) { event.preventDefault(); setSelectionPoints((points) => points.slice(0, -1)) }
+      // Enter / Backspace handled by Konva selection draft on the stage.
     }
     window.addEventListener('keydown', handleSelectionKeys)
     return () => window.removeEventListener('keydown', handleSelectionKeys)
-  }, [selectMode, selectionTool, selectionPoints])
+  }, [selectMode])
 
   const startSelection = (event) => {
     if (maskEditing) { event.currentTarget.setPointerCapture(event.pointerId); maskPainting.current = true; paintElementMask(event); return }
-    if (censorSelecting) { event.currentTarget.setPointerCapture(event.pointerId); const point = pointerPosition(event); selectionStart.current = point; setSelection({ x: point.x, y: point.y, w: 0, h: 0 }); return }
     if (!selectMode) return
     const point = pointerPosition(event)
     if (selectionTool === 'Polygonal Lasso' || selectionTool === 'Pen Path') { setSelectionPoints((current) => [...current, point]); return }
@@ -1236,7 +1155,6 @@ export function StudioProvider({ children }) {
   }
   const moveSelection = (event) => {
     if (maskEditing && maskPainting.current) { paintElementMask(event); return }
-    if (censorSelecting && selectionStart.current) { const point = pointerPosition(event), start = selectionStart.current; setSelection({ x: Math.min(start.x, point.x), y: Math.min(start.y, point.y), w: Math.abs(point.x - start.x), h: Math.abs(point.y - start.y) }); return }
     if (!selectMode || !selectionStart.current) return
     const point = pointerPosition(event), start = selectionStart.current
     if (selectionTool === 'Freehand Lasso') setSelectionPoints((current) => {
@@ -1252,7 +1170,6 @@ export function StudioProvider({ children }) {
       if (wasPainting) endMaskStroke(event)
       return
     }
-    if (censorSelecting && selectionStart.current) { const point = pointerPosition(event), start = selectionStart.current; const rect = { x: Math.min(start.x, point.x), y: Math.min(start.y, point.y), w: Math.abs(point.x - start.x), h: Math.abs(point.y - start.y) }; setCensor((current) => ({ ...current, enabled: true, x: rect.x * 100, y: rect.y * 100, w: rect.w * 100, h: rect.h * 100 })); selectionStart.current = null; setSelection(null); setToast('Censor region added'); return }
     if (selectMode && selectionTool === 'Freehand Lasso' && selectionStart.current) {
       const point = pointerPosition(event), points = [...selectionPoints, point], rect = selectionBounds(points)
       selectionStart.current = null; setSelection(null); setSelectionPoints([]); setSelectMode(false)
@@ -1269,7 +1186,7 @@ export function StudioProvider({ children }) {
     extractElementLocal(rect)
   }
 
-  const extractElementLocal = (rect, pathPoints = null, exactMask = false) => {
+  function extractElementLocal(rect, pathPoints = null, exactMask = false) {
     const sourceCanvas = canvasRef.current
     if (!sourceCanvas) return
     const padX = Math.min(.04, Math.max(.012, rect.w * .1)), padY = Math.min(.04, Math.max(.012, rect.h * .1))
@@ -1672,6 +1589,95 @@ export function StudioProvider({ children }) {
     }
   }
 
+  /**
+   * Layer from detect pipeline cutout (DINO → Real-ESRGAN → SAM2 → RGBA).
+   * ``result.rect`` is in original canvas pixels; bitmap may be higher density.
+   */
+  const addElementFromDetectCutout = async (result, { name = 'AI layer', engine = 'ai' } = {}) => {
+    const sourceCanvas = canvasRef.current
+    if (!sourceCanvas || !result?.cutout_png_base64 || !result?.rect) return null
+    const W = sourceCanvas.width
+    const H = sourceCanvas.height
+    const cutout = new Image()
+    await new Promise((resolve, reject) => {
+      cutout.onload = resolve
+      cutout.onerror = reject
+      cutout.src = `data:image/png;base64,${result.cutout_png_base64}`
+    })
+    const bitmap = document.createElement('canvas')
+    bitmap.width = cutout.naturalWidth
+    bitmap.height = cutout.naturalHeight
+    bitmap.getContext('2d').drawImage(cutout, 0, 0)
+
+    const rx = Math.round(result.rect.x)
+    const ry = Math.round(result.rect.y)
+    const rw = Math.max(2, Math.round(result.rect.width))
+    const rh = Math.max(2, Math.round(result.rect.height))
+    const sourceBitmap = document.createElement('canvas')
+    sourceBitmap.width = bitmap.width
+    sourceBitmap.height = bitmap.height
+    sourceBitmap.getContext('2d').drawImage(
+      sourceCanvas, rx, ry, rw, rh, 0, 0, bitmap.width, bitmap.height,
+    )
+
+    const maskCanvas = document.createElement('canvas')
+    maskCanvas.width = bitmap.width
+    maskCanvas.height = bitmap.height
+    {
+      const maskCtx = maskCanvas.getContext('2d')
+      const alpha = bitmap.getContext('2d').getImageData(0, 0, bitmap.width, bitmap.height)
+      const maskData = maskCtx.createImageData(bitmap.width, bitmap.height)
+      for (let i = 0; i < alpha.data.length; i += 4) {
+        const a = alpha.data[i + 3]
+        maskData.data[i] = a
+        maskData.data[i + 1] = a
+        maskData.data[i + 2] = a
+        maskData.data[i + 3] = 255
+      }
+      maskCtx.putImageData(maskData, 0, 0)
+    }
+
+    const smartRect = {
+      x: rx / W,
+      y: ry / H,
+      w: rw / W,
+      h: rh / H,
+    }
+    const id = newStudioId()
+    const element = {
+      id,
+      name,
+      ...smartRect,
+      bitmap,
+      sourceBitmap,
+      maskCanvas,
+      cleanup: null,
+      rotation: 0,
+      scaleX: 100,
+      scaleY: 100,
+      flipX: false,
+      flipY: false,
+      opacity: 100,
+      motion: 'None',
+      amplitude: 5,
+      speed: 1,
+      depth: Math.min(100, 30 + elements.length * 20),
+      visible: true,
+      smart: true,
+      locked: false,
+      anchorX: 50,
+      anchorY: 50,
+      engine,
+      cutoutMode: source?.kind === 'gif' ? GIF_CUTOUT_LABEL : 'Still image',
+    }
+    setElements((current) => insertInStack(current, element, layerInsertAt, selectedElement))
+    setSelectedElements([id])
+    if (activeTab !== 'ai') goToWorkspace('motion')
+    setSettings((current) => ({ ...current, preset: 'Still', ...PRESETS.Still }))
+    setToast(`${name} ready · ${engine}`)
+    return id
+  }
+
   /** Build a movable layer from a full-canvas mask (SAM2 / MediaPipe / etc.). */
   const addElementFromMask = (maskCanvas, { name = 'AI layer', engine = 'ai' } = {}) => {
     const sourceCanvas = canvasRef.current
@@ -1798,43 +1804,6 @@ export function StudioProvider({ children }) {
     )
   }
 
-  const runDepthForParallax = async ({ model = 'depth-anything-v2-small' } = {}) => {
-    const canvas = canvasRef.current
-    if (!canvas || !image) { setToast('Open an image first'); return }
-    if (!assertStudioIdle()) return
-    beginBusy('Estimating depth…')
-    try {
-      const { estimateDepth } = await import('../ai/depth')
-      const result = await estimateDepth({ imageCanvas: canvas, model })
-      useStudioStore.getState().setCapabilities({ depth: true })
-      const suggested = Number(result.suggested_layer_depth)
-      setParallax((current) => ({
-        ...current,
-        enabled: true,
-        strength: Math.max(current.strength || 8, 12),
-      }))
-      if (Number.isFinite(suggested) && selectedElement) {
-        setElements((els) => els.map((el) => (
-          el.id === selectedElement ? { ...el, depth: suggested } : el
-        )))
-      } else if (Number.isFinite(suggested) && elements.length) {
-        // Distribute depths from map mean onto all cutout layers
-        setElements((els) => els.map((el, i) => ({
-          ...el,
-          depth: Math.max(5, Math.min(95, suggested + (i - els.length / 2) * 12)),
-        })))
-      }
-      setToast(
-        `Depth · ${result.engine} · parallax on`
-        + (Number.isFinite(suggested) ? ` · depth ~${suggested}%` : ''),
-      )
-    } catch (err) {
-      setToast(err?.message || 'Depth failed')
-    } finally {
-      endBusy()
-    }
-  }
-
   /**
    * Body joints via MediaPipe Pose (no human cutout).
    * @param {{ joints?: boolean, openPanel?: boolean, driveMotion?: boolean }} opts
@@ -1915,7 +1884,6 @@ export function StudioProvider({ children }) {
     setSelectedOverlay(null)
     setSelectedText(null)
     setSelectMode(false)
-    setCensorSelecting(false)
     setMaskEditing(false)
     setPlaying(false)
     return true
@@ -1969,7 +1937,7 @@ export function StudioProvider({ children }) {
     if (!assertStudioIdle()) return
     beginBusy('Detecting objects…')
     try {
-      // Roles: SAM3 text→mask | DINO+SAM2 refine. Never SAM3 on top of DINO.
+      // Roles: SAM3 text→mask | DINO→Real-ESRGAN→SAM2→RGBA. Never SAM3 on top of DINO.
       const { detectWithGroundingDino } = await import('../ai/grounding-dino')
       const result = await detectWithGroundingDino({
         imageCanvas: canvas,
@@ -1992,6 +1960,32 @@ export function StudioProvider({ children }) {
         useStudioStore.getState().setCapabilities({ groundingDino: true })
       }
 
+      const label = result.selected_label || prompt.trim()
+      // DINO→Real-ESRGAN→SAM2 returns an RGBA cutout (may be denser than canvas).
+      if (result.cutout_png_base64 && result.rect) {
+        if (/sam3/i.test(eng)) {
+          useStudioStore.getState().setCapabilities({ sam3: true })
+        } else {
+          const caps = { sam2: true }
+          const up = String(result.upscale_engine || '')
+          if (up && !up.startsWith('identity') && !up.startsWith('lanczos')) {
+            caps.realesrgan = true
+          }
+          useStudioStore.getState().setCapabilities(caps)
+        }
+        const layerId = await addElementFromDetectCutout(result, {
+          name: String(label).slice(0, 28) || 'Detected',
+          engine: result.engine || eng || 'detect',
+        })
+        if (layerId) selectDetectedCutout(layerId)
+        const sx = result.upscale_scale_x || 1
+        const how = sx > 1.01
+          ? 'DINO → Real-ESRGAN → SAM2'
+          : 'Grounding DINO + SAM2'
+        setToast(`${how} · “${label}” contour · cube selected`)
+        return
+      }
+
       if (result.mask_png_base64) {
         const maskCanvas = document.createElement('canvas')
         const img = new Image()
@@ -2008,7 +2002,6 @@ export function StudioProvider({ children }) {
         } else {
           useStudioStore.getState().setCapabilities({ sam2: true })
         }
-        const label = result.selected_label || prompt.trim()
         const layerId = addElementFromMask(maskCanvas, {
           name: String(label).slice(0, 28) || 'Detected',
           engine: result.engine || eng || 'detect',
@@ -2037,98 +2030,6 @@ export function StudioProvider({ children }) {
       setToast(`Detect · ${top.label || 'box'} · ${why}`)
     } catch (err) {
       setToast(err?.message || 'Text detect failed')
-    } finally {
-      endBusy()
-    }
-  }
-
-  /** Apply RIFE / interpolated PNG data-URLs or blobs as multi-frame source. */
-  const applyInterpolatedFrames = async (frameSources, { engine = 'rife', fps } = {}) => {
-    if (!Array.isArray(frameSources) || frameSources.length < 2) {
-      setToast('Need at least 2 interpolated frames')
-      return
-    }
-    const generation = ++loadGenerationRef.current
-    const frameCanvases = []
-    for (const src of frameSources) {
-      let url = src
-      if (src instanceof Blob) url = URL.createObjectURL(src)
-      const img = await new Promise((resolve, reject) => {
-        const el = new Image()
-        el.onload = () => resolve(el)
-        el.onerror = reject
-        el.src = url
-      })
-      const c = document.createElement('canvas')
-      c.width = img.naturalWidth
-      c.height = img.naturalHeight
-      c.getContext('2d').drawImage(img, 0, 0)
-      if (src instanceof Blob) URL.revokeObjectURL(url)
-      frameCanvases.push({
-        canvas: c,
-        delay: Math.round(1000 / Math.max(1, fps || settings.fps || 12)),
-      })
-    }
-    if (generation !== loadGenerationRef.current) return
-    const first = frameCanvases[0].canvas
-    const firstUrl = await blobUrlFromCanvas(first)
-    if (generation !== loadGenerationRef.current) { revokeBlobUrl(firstUrl); return }
-    gifFramesRef.current = {
-      frames: frameCanvases,
-      frameCount: frameCanvases.length,
-      width: first.width,
-      height: first.height,
-    }
-    const rate = fps || settings.fps || 12
-    setSettings((current) => ({
-      ...current,
-      duration: Math.max(0.1, +(frameCanvases.length / Math.max(1, rate)).toFixed(2)),
-      fps: rate,
-      width: Math.min(MAX_CANVAS, first.width),
-      height: Math.min(MAX_CANVAS, first.height),
-    }))
-    replaceSource({
-      name: `interpolated-${engine}.png`,
-      width: first.width,
-      height: first.height,
-      url: firstUrl,
-      frameCount: frameCanvases.length,
-      kind: 'gif',
-    })
-    setToast(`${engine} · ${frameCanvases.length} frames loaded`)
-  }
-
-  const runRifeInterpolate = async ({ factor = 2 } = {}) => {
-    const pack = gifFramesRef.current
-    const canvas = canvasRef.current
-    if (!image || !canvas) { setToast('Open an image or GIF first'); return }
-    if (!pack?.frames || pack.frames.length < 2) {
-      setToast('RIFE needs a multi-frame GIF or video — open one with at least 2 frames')
-      return
-    }
-    if (!assertStudioIdle()) return
-    beginBusy('Interpolating frames…')
-    try {
-      const { interpolateFrames } = await import('../ai/rife')
-      const blobs = []
-      for (const frame of pack.frames) {
-        const blob = await new Promise((resolve, reject) => {
-          frame.canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Frame encode failed'))), 'image/png')
-        })
-        blobs.push(blob)
-      }
-      const out = await interpolateFrames(blobs, { factor })
-      if (out?.jobId && !(out.frames?.length)) {
-        setToast('RIFE job queued — async polling is not wired yet. Run without Celery for sync results.')
-        return
-      }
-      const frames = Array.isArray(out) ? out : (out.frames || [])
-      if (!frames.length) throw new Error('No frames returned')
-      const engine = (!Array.isArray(out) && out.engine) || 'rife'
-      useStudioStore.getState().setCapabilities({ rife: String(engine).startsWith('rife') })
-      await applyInterpolatedFrames(frames, { engine, fps: settings.fps })
-    } catch (err) {
-      setToast(err?.message || 'RIFE interpolate failed')
     } finally {
       endBusy()
     }
@@ -2360,8 +2261,7 @@ export function StudioProvider({ children }) {
     }
     const t = ease(timeline, settings.easing)
     const timeSec = progress * (settings.duration || 1)
-    const zoomFx = sampleZoomScale(settings.motionEffects || [], timeSec)
-    let scale = (settings.scaleStart + (settings.scaleEnd - settings.scaleStart) * t) / 100 * zoomFx
+    let scale = (settings.scaleStart + (settings.scaleEnd - settings.scaleStart) * t) / 100
     let ox = (settings.xStart + (settings.xEnd - settings.xStart) * t) / 100
     let oy = (settings.yStart + (settings.yEnd - settings.yStart) * t) / 100
     let rotation = settings.rotateStart + (settings.rotateEnd - settings.rotateStart) * t + imageEdits.rotation
@@ -3025,18 +2925,33 @@ export function StudioProvider({ children }) {
       let width = Math.round(settings.width * ratio), height = Math.round(settings.height * ratio)
       const work = document.createElement('canvas'); work.width = width; work.height = height
 
+      const renderExportFrame = (tNorm) => {
+        const api = konvaStageApiRef.current
+        if (api?.seekTo && api?.captureFrameCanvas) {
+          api.seekTo(tNorm)
+          const captured = api.captureFrameCanvas()
+          if (captured) {
+            const ctx = work.getContext('2d')
+            ctx.clearRect(0, 0, width, height)
+            ctx.drawImage(captured, 0, 0, width, height)
+            return
+          }
+        }
+        draw(tNorm, work, ratio)
+      }
+
       if (apiAvailable) {
         try {
           const form = new FormData()
           for (let i = 0; i < frames; i++) {
-            draw(i / frames, work, ratio)
+            renderExportFrame(i / frames)
             const frameBlob = await new Promise((resolve) => work.toBlob(resolve, 'image/png'))
             form.append('frames', frameBlob, `frame-${String(i).padStart(4, '0')}.png`)
             if (i % 2 === 0) { setProgress((i + 1) / frames * .72); await new Promise((r) => setTimeout(r, 0)) }
           }
           form.append('fps', String(Math.max(1, Math.round(timingFps)))); form.append('loop', String(settings.loop))
           form.append('palette', String(settings.palette)); form.append('optimize', 'true')
-          form.append('dither', String(settings.dither)); form.append('lossy', String(settings.lossy))
+          form.append('dither', 'false'); form.append('lossy', String(settings.lossy))
           form.append('compression_method', settings.compressionMethod)
           form.append('disposal', String(settings.disposal))
           form.append('durations', JSON.stringify(frameDelays))
@@ -3074,10 +2989,9 @@ export function StudioProvider({ children }) {
       }
       const globalPalette = quantize(samplePixels, maxColors, { format: colorFormat, oneBitAlpha: settings.transparent })
       for (let i = 0; i < frames; i++) {
-        draw(i / frames, work, ratio)
+        renderExportFrame(i / frames)
         const rgba = work.getContext('2d').getImageData(0, 0, width, height).data
-        const prepared = settings.dither ? ditherToPalette(rgba, width, height, globalPalette) : rgba
-        const indexed = applyPalette(prepared, globalPalette, colorFormat)
+        const indexed = applyPalette(rgba, globalPalette, colorFormat)
         encoder.writeFrame(indexed, width, height, { palette: globalPalette, delay: frameDelays[i], repeat: settings.loop, transparent: settings.transparent, dispose: settings.disposal })
         if (i % 3 === 0) { setProgress((i + 1) / frames); await new Promise((r) => setTimeout(r, 0)) }
       }
@@ -3145,13 +3059,7 @@ export function StudioProvider({ children }) {
   }, [toast, clearToast])
 
   const stageStyle = { width: '100%', height: '100%' }
-  const textBounds = (layer) => {
-    const lines = layer.text.split('\n'), longest = Math.max(1, ...lines.map((line) => line.length))
-    const width = Math.min(95, Math.max(8, longest * layer.size * .62 * layer.scaleX / 100 / settings.width * 100))
-    const height = Math.min(95, Math.max(5, lines.length * layer.size * layer.lineHeight * layer.scaleY / 100 / settings.height * 100))
-    const left = layer.align === 'center' ? layer.x - width / 2 : layer.align === 'right' ? layer.x - width : layer.x
-    return { left, top: layer.y - height / 2, width, height }
-  }
+  const textBounds = (layer) => textLayerBoundsPct(layer, settings.width, settings.height)
 
   const value = {
     // refs
@@ -3179,7 +3087,7 @@ export function StudioProvider({ children }) {
     selection, setSelection, selectionPoints, setSelectionPoints, extractTolerance, setExtractTolerance,
     apiAvailable, apiInfo, segmenting, textLayers, setTextLayers, selectedText, setSelectedText, fontOptions,
     parallax, setParallax, lastExport, maskEditing, setMaskEditing, maskBrush, setMaskBrush,
-    imageEdits, setImageEdits, censor, setCensor, censorSelecting, setCensorSelecting,
+    imageEdits, setImageEdits,
     overlays, setOverlays, selectedOverlay, setSelectedOverlay,
     selectedMotionEffect, setSelectedMotionEffect,
     gpuPreview, setGpuPreview,
@@ -3188,7 +3096,7 @@ export function StudioProvider({ children }) {
     frames, frameDelays, actualDuration, actualFps, memory, timingFps, stageStyle,
     // actions
     update, setAmplitude, setSpeed, applyQuality, applyPreset, reset, loadFile, draw, cancelSelection, completePathSelection,
-    startSelection, moveSelection, finishSelection, updateElement, removeElement,
+    startSelection, moveSelection, finishSelection, applyKonvaSelection, updateElement, removeElement,
     toggleElementLock, toggleElementVisible, toggleImageLock, toggleFlip, rotateSelection, selectionFlip, toggleTextLock, selectBaseImage, selectStageElement,
     resetElementMask, invertElementMask, featherElementMask, paintElementMask,
     trimElementTransparentBounds, beginMaskErase,
@@ -3197,11 +3105,9 @@ export function StudioProvider({ children }) {
     addOverlay, updateOverlay, updateOverlayById, selectOverlay, selectStageOverlay, overlayBounds, toggleOverlayVisible, removeOverlay, saveCurrentPng, compressExistingGif,
     beginAnchorDrag, moveAnchorDrag, endAnchorDrag, resetMotionAnchor,
     beginJointDrag, moveJointDrag, endJointDrag,
-    addMotionEffect, updateMotionEffect, removeMotionEffect, moveMotionEffectTrack,
     addElementFromMask, runPoseDetect, runTextDetect,
-    runMatteCutout, runDepthForParallax,
-    applyInterpolatedFrames, runRifeInterpolate,
-    exportGif, textBounds,
+    runMatteCutout,
+    exportGif, textBounds, setKonvaStageApi, konvaStageApiRef,
   }
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>

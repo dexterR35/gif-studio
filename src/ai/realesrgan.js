@@ -29,12 +29,6 @@ async function viaServer(imageBlob, scale = 2, model = 'realesrgan') {
   if (!res.ok) throw new Error(await res.text())
   if (res.headers.get('content-type')?.includes('json')) {
     const data = await res.json()
-    if (data.job_id && !data.storage_key) {
-      throw new Error('Upscale job queued — async polling is not wired yet. Run without Celery for sync results.')
-    }
-    if (data.storage_key || data.url) {
-      throw new Error('Upscale returned a storage key; use sync upscale (async_job=false).')
-    }
     throw new Error(data.detail || 'Upscale failed')
   }
   const blob = await res.blob()

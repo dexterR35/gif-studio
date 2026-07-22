@@ -75,7 +75,6 @@ export function applyEditorSessionToV2(project, editor) {
       quality: settings.quality || 'High quality',
       loop: Number.isFinite(Number(settings.loop)) ? Number(settings.loop) : 0,
       paletteSize: Number(settings.palette) || 256,
-      dither: settings.dither !== false,
       disposal: Number(settings.disposal) || 2,
       transparent: Boolean(settings.transparent),
     },
@@ -86,7 +85,7 @@ export function applyEditorSessionToV2(project, editor) {
         preset: settings.preset,
         fit: settings.fit,
         motion: settings.motion || 'None',
-        motionEffects: settings.motionEffects,
+        imageFilters: settings.imageFilters || [],
       },
       editorSession: {
         source: editor?.source
@@ -104,7 +103,6 @@ export function applyEditorSessionToV2(project, editor) {
             }
           : null,
         imageEdits: editor?.imageEdits || null,
-        censor: editor?.censor || null,
         parallax: editor?.parallax || null,
         enhancedLayer: editor?.enhancedLayer
           ? {
@@ -127,7 +125,6 @@ function withSessionFromExtensions(editor, project) {
     ...editor,
     source: editor.source ?? session.source ?? null,
     imageEdits: editor.imageEdits ?? session.imageEdits ?? editor.imageEdits,
-    censor: editor.censor ?? session.censor ?? editor.censor,
     parallax: editor.parallax ?? session.parallax ?? editor.parallax,
     enhancedLayer: editor.enhancedLayer ?? session.enhancedLayer ?? null,
     keyframes: editor.keyframes?.length ? editor.keyframes : (session.keyframes || []),
@@ -223,11 +220,11 @@ export function commitEditorPatch(state, editorPatch) {
     project = applyTextLayersToProjectV2(project, editor.textLayers)
   }
 
-  if (editorPatch.source !== undefined || editorPatch.settings || editorPatch.censor
+  if (editorPatch.source !== undefined || editorPatch.settings
       || editorPatch.name || editorPatch.imageEdits
       || editorPatch.parallax || editorPatch.enhancedLayer || editorPatch.fontOptions
       || editorPatch.keyframes) {
-    if (editorPatch.source !== undefined || editorPatch.censor !== undefined || editorPatch.enhancedLayer !== undefined) {
+    if (editorPatch.source !== undefined || editorPatch.enhancedLayer !== undefined) {
       try {
         const { project: migrated } = migrateV1ToV2(editor)
         project = {
@@ -252,7 +249,6 @@ export function commitEditorPatch(state, editorPatch) {
   if (editor.source) nextEditor.source = editor.source
   if (editor.enhancedLayer) nextEditor.enhancedLayer = editor.enhancedLayer
   if (editor.imageEdits) nextEditor.imageEdits = editor.imageEdits
-  if (editor.censor) nextEditor.censor = editor.censor
   if (editor.parallax) nextEditor.parallax = editor.parallax
   if (editor.fontOptions) nextEditor.fontOptions = editor.fontOptions
   if (editor.keyframes) nextEditor.keyframes = editor.keyframes
@@ -266,7 +262,7 @@ function pickManagedLayers(project) {
   if (!project?.layers) return {}
   const out = {}
   for (const [id, layer] of Object.entries(project.layers)) {
-    if (id === 'layer-background' || id === 'layer-pixelate-censor') continue
+    if (id === 'layer-background') continue
     if (layer?.rollbackAssetId) continue
     out[id] = layer
   }
@@ -310,7 +306,6 @@ export function loadProjectPair(raw) {
     const session = project.extensions?.editorSession
     if (session?.source && !editor.source) editor.source = session.source
     if (session?.imageEdits) editor.imageEdits = { ...editor.imageEdits, ...session.imageEdits }
-    if (session?.censor) editor.censor = { ...editor.censor, ...session.censor }
     if (session?.parallax) editor.parallax = { ...editor.parallax, ...session.parallax }
     if (session?.enhancedLayer) editor.enhancedLayer = session.enhancedLayer
     if (session?.keyframes) editor.keyframes = session.keyframes

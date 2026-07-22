@@ -23,3 +23,6 @@ export {
   loadFFmpeg, probeFFmpeg, encodeGifWithFFmpeg, extractFramesWithFFmpeg, gifToMp4,
 } from './ffmpeg-export'
 export { StudioKonvaStage, KonvaEditor } from './konva-editor'
+export { applyKonvaFilters, KONVA_FILTER_TYPES, createFilterEntry } from './konva-filters'
+export { MOTION_PRESET_NAMES, seekMotion, captureNodeRest, isLoopPreset } from './konva-motion'
+export { fitArtboard, zoomStageAboutPointer, setStageZoomPct, resetStageZoom } from './konva-zoom'

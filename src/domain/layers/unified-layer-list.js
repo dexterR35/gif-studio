@@ -61,20 +61,6 @@ export function buildUnifiedLayerList(project, editorSession = {}) {
       }
     }
 
-    if (layer.type === 'pixelate') {
-      return {
-        id,
-        v2Type: 'pixelate',
-        legacyKind: 'pixelate',
-        legacyId: id,
-        name,
-        visible,
-        locked,
-        subtitle: 'Pixelate',
-        legacyEntity: null,
-      }
-    }
-
     if (layer.type === 'redaction') {
       return {
         id,

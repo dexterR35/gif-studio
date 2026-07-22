@@ -35,7 +35,6 @@ const INITIAL_TOOLS = {
   extractTolerance: 42,
   maskEditing: false,
   maskBrush: { mode: 'Hide', size: 48, hardness: 70, opacity: 100, feather: 8 },
-  censorSelecting: false,
   /** Soft-matte rembg id, or ``opencv-grabcut`` for explicit OpenCV GrabCut. */
   cutoutModel: 'birefnet',
 }
@@ -116,10 +115,8 @@ export const useStudioStore = create((set, get) => ({
     sam3: false,
     groundingDino: false,
     matte: false,
-    depth: false,
     gfpgan: false,
     realesrgan: false,
-    rife: false,
     rembg: false,
     api: false,
     device: null,
@@ -181,12 +178,6 @@ export const useStudioStore = create((set, get) => ({
     const prev = state.editor.imageEdits
     const imageEdits = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
     return commitEditorPatch(state, { imageEdits })
-  }),
-
-  setCensor: (updater) => set((state) => {
-    const prev = state.editor.censor
-    const censor = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
-    return commitEditorPatch(state, { censor })
   }),
 
   setParallax: (updater) => set((state) => {
@@ -294,9 +285,6 @@ export const useStudioStore = create((set, get) => ({
     const next = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
     return { tools: { ...state.tools, maskBrush: next } }
   }),
-  setCensorSelecting: (updater) => set((state) => ({
-    tools: { ...state.tools, censorSelecting: apply(state.tools.censorSelecting, updater) },
-  })),
   setCutoutModel: (updater) => set((state) => ({
     tools: { ...state.tools, cutoutModel: apply(state.tools.cutoutModel, updater) },
   })),

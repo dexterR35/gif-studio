@@ -31,7 +31,6 @@ export function StudioLayout() {
     artboardSelected, baseImageSelected, selectedElements, clearLayerSelection, selectedText, setSelectedText,
     selectedOverlay, setSelectedOverlay,
     maskEditing, setMaskEditing, selectMode, setSelectMode, cancelSelection,
-    censorSelecting, setCensorSelecting,
     activeTab, setPlaying, poseRig, image,
     studioLocked, busyLabel, scaleBusy, downloadBusy, segmenting,
   } = useStudio()
@@ -47,7 +46,7 @@ export function StudioLayout() {
   const showSelectDetect = !isFocus && Boolean(image)
   const jointsOpen = Boolean(poseRig?.panelOpen && poseRig?.joints?.length)
   const inspectorOpen = hasLayers && (
-    maskEditing || selectMode || censorSelecting || jointsOpen || artboardSelected
+    maskEditing || selectMode || jointsOpen || artboardSelected
     || Boolean(selectedText) || baseImageSelected || selectedElements.length > 0 || Boolean(selectedOverlay)
   )
 
@@ -62,7 +61,6 @@ export function StudioLayout() {
     setSelectedOverlay(null)
     setSelectedText(null)
     setMaskEditing(false)
-    setCensorSelecting(false)
     if (selectMode) {
       cancelSelection()
       setSelectMode(false)
@@ -75,7 +73,6 @@ export function StudioLayout() {
     clearLayerSelection()
     setSelectedText(null)
     setMaskEditing(false)
-    setCensorSelecting(false)
     cancelSelection()
     setSelectMode(false)
     setMobilePanel(false)
@@ -91,7 +88,6 @@ export function StudioLayout() {
     clearLayerSelection()
     setSelectedOverlay(null)
     setMaskEditing(false)
-    setCensorSelecting(false)
     if (selectMode) {
       cancelSelection()
       setSelectMode(false)

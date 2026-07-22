@@ -58,7 +58,7 @@ export function firstRedactionPassIndex(plan) {
 
 /**
  * True when every redaction pass is after all non-redaction scene passes
- * (background/layer/adjustment/pixelate), ignoring trailing export-convert.
+ * (background/layer/adjustment), ignoring trailing export-convert.
  * @param {RenderPlan} plan
  */
 export function assertRedactionLast(plan) {

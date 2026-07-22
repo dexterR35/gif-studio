@@ -20,9 +20,7 @@ _ROUTE_RESERVE_GIB: dict[str, float] = {
     "segment": 1.0,
     "detect": 1.25,
     "matte": 0.75,
-    "depth": 1.0,
     "upscale": 2.0,
-    "interpolate": 2.5,
     "export": 1.5,
 }
 
@@ -144,7 +142,7 @@ def check_memory_for_route(route: str) -> tuple[bool, bool, str]:
         )
 
     # Heavy CUDA routes also need a little free VRAM (models may already be resident).
-    if route in {"upscale", "interpolate", "detect", "segment"}:
+    if route in {"upscale", "detect", "segment"}:
         vram = available_vram_bytes()
         min_vram = int(_env_float("GIF_STUDIO_MIN_FREE_VRAM_GIB", 0.35) * _GIB)
         if vram is not None and vram < min_vram:
@@ -175,8 +173,8 @@ def unload_inference_models() -> list[str]:
     """Drop cached runners so weights are not kept forever in RAM/VRAM."""
     notes: list[str] = []
     try:
-        from .ai import depth_runner, grounding_dino_runner, realesrgan_runner
-        from .ai import rife_runner, sam2_runner, sam3_runner
+        from .ai import grounding_dino_runner, realesrgan_runner
+        from .ai import sam2_runner, sam3_runner
 
         _safe_cache_clear(sam2_runner._predictor, "sam2", notes)
         _safe_cache_clear(sam3_runner._build_processor, "sam3", notes)
@@ -184,8 +182,6 @@ def unload_inference_models() -> list[str]:
         _safe_cache_clear(grounding_dino_runner._transformers_model, "dino_hf", notes)
         _safe_cache_clear(realesrgan_runner._realesrganer, "realesrgan", notes)
         _safe_cache_clear(realesrgan_runner._spandrel_model, "spandrel", notes)
-        _safe_cache_clear(rife_runner._load_rife_model, "rife", notes)
-        _safe_cache_clear(depth_runner._load_pipeline, "depth", notes)
     except Exception as exc:  # noqa: BLE001
         notes.append(f"runners:{type(exc).__name__}")
 

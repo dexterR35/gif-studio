@@ -319,81 +319,6 @@ def resolve_matte(model_id: str | None = None) -> dict[str, Any] | None:
     return MATTE_VARIANTS[-1]
 
 
-# --- Depth Anything V2 ----------------------------------------------------
-
-DEPTH_VARIANTS = [
-    {
-        "id": "depth-anything-v2-small",
-        "label": "Depth Anything V2 Small",
-        "file": "depth_anything_v2_vits.pth",
-        "hf_repo": "depth-anything/Depth-Anything-V2-Small-hf",
-        "hf_dir": "v2-small-hf",
-    },
-]
-
-
-def list_depth_models() -> list[dict[str, Any]]:
-    root = models_dir() / "depth"
-    out = []
-    for spec in DEPTH_VARIANTS:
-        path = root / spec["file"]
-        hf = root / spec["hf_dir"]
-        ready = (
-            (path.exists() and path.stat().st_size > 1024)
-            or (hf / "config.json").exists()
-        )
-        out.append({
-            "id": spec["id"],
-            "label": spec["label"],
-            "file": spec["file"],
-            "path": str(path),
-            "hf_dir": str(hf),
-            "ready": ready,
-            "job": "depth",
-        })
-    return out
-
-
-def resolve_depth(model_id: str | None = None) -> dict[str, Any] | None:
-    wanted = (model_id or os.environ.get("DEPTH_MODEL") or "depth-anything-v2-small").strip()
-    root = models_dir() / "depth"
-    for spec in DEPTH_VARIANTS:
-        if wanted not in {spec["id"], spec["file"], Path(spec["file"]).stem}:
-            continue
-        path = root / spec["file"]
-        hf = root / spec["hf_dir"]
-        if path.exists() or (hf / "config.json").exists():
-            return {**spec, "path": path, "hf_path": hf}
-    for spec in DEPTH_VARIANTS:
-        path = root / spec["file"]
-        hf = root / spec["hf_dir"]
-        if path.exists() or (hf / "config.json").exists():
-            return {**spec, "path": path, "hf_path": hf}
-    return None
-
-
-# --- Interpolate (RIFE) ---------------------------------------------------
-
-INTERPOLATE_VARIANTS = [
-    {"id": "rife", "label": "RIFE", "dir": "rife/train_log"},
-]
-
-
-def list_interpolate_models() -> list[dict[str, Any]]:
-    out = []
-    for spec in INTERPOLATE_VARIANTS:
-        root = models_dir() / spec["dir"]
-        ready = root.is_dir() and any(root.glob("*.pkl"))
-        out.append({
-            "id": spec["id"],
-            "label": spec["label"],
-            "path": str(root),
-            "ready": ready,
-            "job": "interpolate",
-        })
-    return out
-
-
 # --- Upscale (+ GFPGAN slot) ----------------------------------------------
 
 UPSCALE_VARIANTS = [
@@ -454,15 +379,11 @@ def catalog() -> dict[str, Any]:
         "select_detect": list_select_detect_engines(),
         "grounding_dino": list_grounding_dino_models(),
         "matte": list_matte_models(),
-        "depth": list_depth_models(),
-        "interpolate": list_interpolate_models(),
         "upscale": list_upscale_models(),
         "models_dir": str(models_dir()),
         "jobs": {
             "select_detect": ["sam3", "grounding_dino"],
             "matte": ["matte"],
-            "depth": ["depth"],
-            "interpolate": ["interpolate"],
             "upscale": ["upscale"],
         },
     }

@@ -1,4 +1,4 @@
-"""Optional heavy AI runners: SAM2, Grounding DINO, Real-ESRGAN, RIFE.
+"""Optional heavy AI runners: SAM2, Grounding DINO, Real-ESRGAN.
 
 Imports are deferred so FastAPI still starts without torch installed.
 """
@@ -8,9 +8,7 @@ from __future__ import annotations
 __all__ = [
     "detect_with_grounding_dino",
     "grounding_dino_ready",
-    "interpolate_with_rife",
     "realesrgan_ready",
-    "rife_ready",
     "sam2_ready",
     "segment_with_sam2",
     "upscale_with_realesrgan",
@@ -43,8 +41,4 @@ def __getattr__(name: str):
             "normalize_model": normalize_model,
             "upscale_with_realesrgan": upscale_with_realesrgan,
         }[name]
-    if name in ("rife_ready", "interpolate_with_rife"):
-        from .rife_runner import interpolate_with_rife, rife_ready
-
-        return {"rife_ready": rife_ready, "interpolate_with_rife": interpolate_with_rife}[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

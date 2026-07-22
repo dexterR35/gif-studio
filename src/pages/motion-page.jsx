@@ -1,9 +1,9 @@
 import { Cpu, ImagePlus } from 'lucide-react'
 import { Button, Section, SelectField, Slider } from '../components/ui'
-import { PRESETS } from '../lib/presets'
 import { EASING_OPTIONS } from '../lib/catalogs'
 import { ALLOWED_UPLOAD_ACCEPT } from '../lib/format'
-import { BASE_MOTION_ID } from '../lib/motion-effects'
+import { BASE_MOTION_ID } from '../lib/timeline-ids'
+import { MOTION_PRESET_NAMES } from '../engine/konva-motion'
 import { useStudio } from '../context/studio-provider'
 import { useStudioStore } from '../store/studio-store'
 
@@ -23,7 +23,7 @@ export default function MotionPage() {
     <>
       <Section
         title="Motion"
-        info="Basic looping animation for the GIF. Timed liquify / zoom clips live on the Timeline tab — the M lane there stays locked and mirrors these controls."
+        info="Konva Tweens / Animations on the base image. Scrub and export sample the Konva stage."
       >
         <div className="gs-chip-row">
           <SelectField
@@ -32,7 +32,7 @@ export default function MotionPage() {
             value={settings.preset}
             onChange={onPresetChange}
           >
-            {Object.keys(PRESETS).map((p) => <option key={p}>{p}</option>)}
+            {MOTION_PRESET_NAMES.map((p) => <option key={p}>{p}</option>)}
           </SelectField>
           <SelectField
             className="min-w-[7.5rem] flex-1"

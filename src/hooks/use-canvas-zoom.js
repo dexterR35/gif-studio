@@ -1,11 +1,11 @@
+/**
+ * Viewport chrome helpers (fullscreen, space key, zoom % state for ZoomControls).
+ * Artboard zoom/pan is owned by Konva Stage — see engine/konva-zoom.js.
+ */
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
 
-/**
- * Figma-style canvas zoom/pan for a viewport + content pair.
- * Scroll zooms toward the cursor; Space/middle-mouse pans.
- */
 export function useCanvasZoom({
   minZoom = 10,
   maxZoom = 800,
@@ -18,7 +18,6 @@ export function useCanvasZoom({
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [spaceDown, setSpaceDown] = useState(false)
-  const panDrag = useRef(null)
   const contentSize = useRef({ width: 800, height: 600 })
 
   const setContentSize = useCallback((width, height) => {
@@ -35,39 +34,13 @@ export function useCanvasZoom({
     })
   }, [minZoom, maxZoom])
 
-  const zoomTo = useCallback((nextZoom, anchor) => {
-    const viewport = viewportRef.current
-    if (!viewport) {
-      setZoom(nextZoom)
-      return
-    }
-
-    const rect = viewport.getBoundingClientRect()
-    const cx = anchor?.x ?? rect.width / 2
-    const cy = anchor?.y ?? rect.height / 2
-
-    setZoomState((currentZoom) => {
-      const clamped = Math.round(clamp(nextZoom, minZoom, maxZoom))
-      const prev = currentZoom / 100
-      const next = clamped / 100
-
-      setPan((currentPan) => {
-        const worldX = (cx - rect.width / 2 - currentPan.x) / prev
-        const worldY = (cy - rect.height / 2 - currentPan.y) / prev
-        return {
-          x: cx - rect.width / 2 - worldX * next,
-          y: cy - rect.height / 2 - worldY * next,
-        }
-      })
-
-      return clamped
-    })
-  }, [minZoom, maxZoom])
+  const zoomTo = useCallback((nextZoom) => {
+    setZoom(nextZoom)
+  }, [setZoom])
 
   const fit = useCallback(() => {
     const viewport = viewportRef.current
     if (!viewport) return
-
     const rect = viewport.getBoundingClientRect()
     const { width, height } = contentSize.current
     const availableW = Math.max(1, rect.width - padding * 2)
@@ -93,26 +66,16 @@ export function useCanvasZoom({
   const toggleFullscreen = useCallback(async () => {
     const node = viewportRef.current?.closest('[data-canvas-stage]') || viewportRef.current
     if (!node) return
-
     try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen()
-      } else {
-        await node.requestFullscreen()
-      }
+      if (document.fullscreenElement) await document.exitFullscreen()
+      else await node.requestFullscreen()
     } catch {
-      // Fullscreen may be blocked by the browser; ignore.
+      /* blocked */
     }
   }, [])
 
   useEffect(() => {
-    const onFullscreenChange = () => {
-      setIsFullscreen(Boolean(document.fullscreenElement))
-      // Re-fit after chrome chrome changes the viewport size.
-      requestAnimationFrame(() => {
-        // Keep current zoom; only recenter if needed when entering fullscreen.
-      })
-    }
+    const onFullscreenChange = () => setIsFullscreen(Boolean(document.fullscreenElement))
     document.addEventListener('fullscreenchange', onFullscreenChange)
     return () => document.removeEventListener('fullscreenchange', onFullscreenChange)
   }, [])
@@ -150,78 +113,19 @@ export function useCanvasZoom({
     }
   }, [fit, reset, zoom, zoomStep, zoomTo])
 
-  const onWheel = useCallback((event) => {
-    event.preventDefault()
-    const viewport = viewportRef.current
-    if (!viewport) return
+  // Legacy no-ops — Stage owns wheel/pan (konva-zoom.js).
+  const onWheel = useCallback((event) => { event.preventDefault() }, [])
+  const beginPan = useCallback(() => false, [])
+  const movePan = useCallback(() => false, [])
+  const endPan = useCallback(() => false, [])
 
-    const rect = viewport.getBoundingClientRect()
-    const anchor = {
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-    }
-
-    // Pinch-zoom / ctrl+wheel and plain scroll both zoom (canvas-style).
-    const direction = event.deltaY > 0 ? 1 / zoomStep : zoomStep
-    const intensity = Math.min(3, Math.abs(event.deltaY) / 100)
-    const factor = direction > 1 ? zoomStep ** intensity : (1 / zoomStep) ** intensity
-    zoomTo(zoom * factor, anchor)
-  }, [zoom, zoomStep, zoomTo])
-
-  const beginPan = useCallback((event) => {
-    const isMiddle = event.button === 1
-    const isSpaceLeft = spaceDown && event.button === 0
-    if (!isMiddle && !isSpaceLeft) return false
-
-    event.preventDefault()
-    panDrag.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      originX: pan.x,
-      originY: pan.y,
-    }
-    viewportRef.current?.setPointerCapture?.(event.pointerId)
-    return true
-  }, [pan.x, pan.y, spaceDown])
-
-  const movePan = useCallback((event) => {
-    const drag = panDrag.current
-    if (!drag || drag.pointerId !== event.pointerId) return false
-    setPan({
-      x: drag.originX + (event.clientX - drag.startX),
-      y: drag.originY + (event.clientY - drag.startY),
-    })
-    return true
-  }, [])
-
-  const endPan = useCallback((event) => {
-    if (!panDrag.current || panDrag.current.pointerId !== event.pointerId) return false
-    panDrag.current = null
-    return true
-  }, [])
-
-  const contentStyle = {
+  /** @deprecated Stage fills the viewport; kept for API compat. */
+  const getContentStyle = useCallback(() => ({
     position: 'absolute',
-    left: '50%',
-    top: '50%',
-    width: contentSize.current.width,
-    height: contentSize.current.height,
-    transform: `translate(calc(-50% + ${pan.x}px), calc(-50% + ${pan.y}px)) scale(${zoom / 100})`,
-    transformOrigin: 'center center',
-    willChange: 'transform',
-  }
-
-  const getContentStyle = useCallback((width, height) => ({
-    position: 'absolute',
-    left: '50%',
-    top: '50%',
-    width,
-    height,
-    transform: `translate(calc(-50% + ${pan.x}px), calc(-50% + ${pan.y}px)) scale(${zoom / 100})`,
-    transformOrigin: 'center center',
-    willChange: 'transform',
-  }), [pan.x, pan.y, zoom])
+    inset: 0,
+    width: '100%',
+    height: '100%',
+  }), [])
 
   return {
     viewportRef,
@@ -231,19 +135,17 @@ export function useCanvasZoom({
     setPan,
     spaceDown,
     isFullscreen,
-    isPanning: Boolean(panDrag.current) || spaceDown,
+    isPanning: false,
     setContentSize,
     fit,
     reset,
     zoomIn,
     zoomOut,
-    zoomTo,
     toggleFullscreen,
     onWheel,
     beginPan,
     movePan,
     endPan,
-    contentStyle,
     getContentStyle,
   }
 }

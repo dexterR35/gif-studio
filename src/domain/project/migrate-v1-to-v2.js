@@ -104,7 +104,6 @@ export function migrateV1ToV2(v1) {
   const notes = [
     'V1 backup retained; do not overwrite original until migrated project is saved successfully.',
     'enhancedLayer migrated as replace+rollback (not underlay).',
-    'censor migrated to pixelate layer (not secure redaction).',
     'Blob URLs are not copied into V2 assets.',
   ]
 

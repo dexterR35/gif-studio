@@ -12,7 +12,7 @@
 torch>=2.5.1
 torchvision>=0.20.1
 
-# One-time RIFE weight fetch in setup_ai_models.py (stored under models/rife/)
+# One-time Hub fetches in setup_ai_models.py (stored under models/)
 huggingface_hub>=0.26
 
 # Real-ESRGAN weights loader (xinntao checkpoints under models/realesrgan/)

@@ -41,7 +41,6 @@ describe('ProjectDocumentV2', () => {
       byteLength: 200,
       checksumSha256: 'def',
     }
-    legacy.censor = { enabled: true, x: 10, y: 10, w: 20, h: 20, pixelSize: 8 }
     legacy.textLayers = [{
       id: 't1',
       text: 'Hello',
@@ -59,7 +58,7 @@ describe('ProjectDocumentV2', () => {
     expect(project.layers['layer-background']).toBeTruthy()
     expect(project.layers['layer-background'].assetId).toBe('asset-enhanced')
     expect(project.layers['layer-background'].rollbackAssetId).toBe('asset-source')
-    expect(project.layers['layer-pixelate-censor']?.type).toBe('pixelate')
+    expect(project.layers['layer-pixelate-censor']).toBeUndefined()
     expect(project.layers.t1?.type).toBe('text')
     expect(Array.isArray(warnings)).toBe(true)
 

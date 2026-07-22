@@ -13,6 +13,4 @@ export {
   probePose,
 } from './mediapipe'
 export { upscaleWithRealESRGAN, probeRealESRGAN, realesrganConfigured } from './realesrgan'
-export { interpolateFrames, probeRife, rifeConfigured } from './rife'
 export { matteWithModel, probeMatte } from './matte'
-export { estimateDepth, probeDepth } from './depth'

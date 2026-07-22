@@ -77,12 +77,12 @@ export const PRESETS = {
 export const INITIAL = {
   preset: 'Still', duration: 10, fps: 24, easing: 'Ease in-out', width: 480, height: 300,
   fit: 'Contain', background: '#111114', transparent: false, quality: 'High quality', palette: 256,
-  dither: true, lossy: 0, compressionMethod: 'Lossless', loop: 0, disposal: 2,
+  lossy: 0, compressionMethod: 'Lossless', loop: 0, disposal: 2,
   motion: 'None', speed: 1,
   /** Pivot for scale / rotate / pulse (canvas %, 50 = center). */
   anchorX: 50, anchorY: 50,
-  /** Timed liquify / zoom clips — see motion-effects.js */
-  motionEffects: [],
+  /** Konva Filters on the base image — see engine/konva-filters.js */
+  imageFilters: [],
   ...PRESETS.Still,
 }
 
@@ -91,6 +91,8 @@ export const TEXT_DEFAULT = {
   align: 'center', color: '#ffffff', strokeColor: '#000000', strokeWidth: 0,
   letterSpacing: 0, lineHeight: 1.1, opacity: 100, x: 50, y: 50, rotation: 0,
   scaleX: 100, scaleY: 100, flipX: false, flipY: false,
+  /** Wrap width in px — set by Konva Transformer (Resize Text); null = auto. */
+  boxWidth: null,
   shadowColor: '#000000', shadowBlur: 0, shadowX: 0, shadowY: 4,
   decoration: 'None', casing: 'As typed', blendMode: 'source-over',
   entrance: 'None', entranceDuration: 20, motion: 'None', exit: 'None', exitDuration: 20,

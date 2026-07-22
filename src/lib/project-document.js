@@ -5,7 +5,7 @@ import { createEmptyProjectV2 } from '../domain/project/create-empty-v2.js'
 import { cloneV1Snapshot } from '../domain/project/migrate-v1-to-v2.js'
 export { migrateV1ToV2 } from '../domain/project/migrate-v1-to-v2.js'
 export { createEmptyProjectV2 } from '../domain/project/create-empty-v2.js'
-export { createEmptyEditorSession, createLegacyImportFixture, IMAGE_EDITS_DEFAULT, CENSOR_DEFAULT, PARALLAX_DEFAULT } from './editor-session.js'
+export { createEmptyEditorSession, createLegacyImportFixture, IMAGE_EDITS_DEFAULT, PARALLAX_DEFAULT } from './editor-session.js'
 
 export const PROJECT_SCHEMA_VERSION = 2
 

@@ -64,19 +64,6 @@ export function evaluate(project, timeUs, assetsMeta = {}, opts = {}) {
       continue
     }
 
-    if (layer.type === 'pixelate') {
-      plan = appendPass(plan, {
-        kind: 'pixelate',
-        layerId,
-        payload: {
-          region: layer.region,
-          pixelSize: layer.pixelSize,
-          opacity: layer.opacity ?? 1,
-        },
-      })
-      continue
-    }
-
     const evaluated = evaluateLayerTracks(layer, timeline, t, {
       projectSeed,
       frameIndex,
@@ -132,7 +119,7 @@ export function evaluate(project, timeUs, assetsMeta = {}, opts = {}) {
     }
   }
 
-  // Secure redaction last (after scene + pixelate)
+  // Secure redaction last (after scene)
   for (const layerId of redactionIds) {
     const layer = layers[layerId]
     if (!layer || layer.visible === false) continue

@@ -44,7 +44,6 @@ export const RENDER_PASS_KINDS = Object.freeze([
   'background',
   'layer',
   'adjustment',
-  'pixelate',
   'redaction',
   'export-convert',
 ])

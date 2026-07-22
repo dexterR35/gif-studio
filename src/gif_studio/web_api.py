@@ -49,7 +49,7 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=[
         "X-GIF-Encoder", "X-GIF-Optimized", "X-GIF-Original-Bytes", "X-GIF-Bytes",
-        "X-GIF-Compression", "X-Upscale-Engine", "X-Interpolate-Engine",
+        "X-GIF-Compression", "X-Upscale-Engine",
         "Retry-After", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Window",
         "X-Request-Id",
     ],
@@ -96,16 +96,6 @@ def _ai_http_error(exc: BaseException, *, default_message: str) -> HTTPException
     if isinstance(exc, FileNotFoundError):
         return HTTPException(503, message)
     return HTTPException(500, f"{default_message}: {message}")
-
-
-def _inline_or_queued(result: object, *, inline_builder):
-    """When Celery is off, delay() returns a dict — convert to a real response."""
-    if isinstance(result, dict) and "job_id" not in result:
-        return inline_builder(result)
-    job_id = getattr(result, "id", None)
-    if job_id is None and isinstance(result, dict):
-        job_id = result.get("job_id")
-    return {"job_id": job_id or "queued", "status": "queued"}
 
 
 def _require_upload_image(payload: bytes, filename: str | None = None) -> Image.Image:
@@ -168,8 +158,6 @@ def _grabcut_mask(source: np.ndarray, rect: tuple[int, int, int, int], iteration
 def health() -> dict[str, object]:
     from . import ai_pipeline
     from .db import db_available
-    from .jobs import celery_available
-    from .storage import storage_configured
 
     caps = ai_pipeline.capability_flags()
     rembg = caps["rembg"]
@@ -187,10 +175,8 @@ def health() -> dict[str, object]:
         "sam3": caps.get("sam3", False),
         "grounding_dino": caps["grounding_dino"],
         "matte": caps.get("matte", False),
-        "depth": caps.get("depth", False),
         "gfpgan": caps.get("gfpgan", False),
         "realesrgan": caps["realesrgan"],
-        "rife": caps["rife"],
         "device": device,
         "nvidia": bool(device.get("nvidia")) if isinstance(device, dict) else False,
         "upload": {
@@ -201,9 +187,6 @@ def health() -> dict[str, object]:
         "allow_huggingface": caps.get("allow_huggingface", False),
         "models": caps.get("models") or {},
         "database": db_available(),
-        "storage": storage_configured(),
-        "storage_local": True,
-        "celery": celery_available(),
         "engines": ai_pipeline.active_engines(),
         "rate_limit": rate_limit_status(),
     }
@@ -548,7 +531,7 @@ async def compress_gif(
     )
 
 
-# --- AI / storage / project API (SAM2 refine via detect, DINO, RealESRGAN, RIFE, Postgres, S3) ---
+# --- AI / project API (SAM2 refine via detect, DINO, RealESRGAN, Postgres) ---
 
 
 def _form_bool(value: object, default: bool = True) -> bool:
@@ -576,7 +559,7 @@ async def ai_detect(
     sam2_model: Annotated[str, Form()] = "",
     sam3_model: Annotated[str, Form()] = "",
 ) -> dict[str, object]:
-    """Detect: ``sam3`` (text→mask) or ``grounding_dino`` + SAM2 refine."""
+    """Detect: ``sam3`` (text→mask) or ``grounding_dino`` → Real-ESRGAN → SAM2 → RGBA."""
     payload = await image.read()
     _require_upload_image(payload, image.filename)
     try:
@@ -634,50 +617,14 @@ async def ai_matte(
         raise _ai_http_error(exc, default_message="Matte failed") from exc
 
 
-@app.post("/api/ai/depth")
-async def ai_depth(
-    image: Annotated[UploadFile, File()],
-    model: Annotated[str, Form()] = "depth-anything-v2-small",
-) -> dict[str, object]:
-    """Depth Anything V2 map for parallax / Ken Burns."""
-    payload = await image.read()
-    _require_upload_image(payload, image.filename)
-    try:
-        from .ai_pipeline import depth_image
-
-        async with acquire_ai_slot("depth"):
-            return await run_in_threadpool(depth_image, payload, model or None)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _ai_http_error(exc, default_message="Depth failed") from exc
-
-
 @app.post("/api/ai/upscale")
 async def ai_upscale(
     image: Annotated[UploadFile, File()],
     scale: Annotated[int, Form()] = 2,
     model: Annotated[str, Form()] = "realesrgan",
-    async_job: Annotated[bool, Form()] = False,
 ):
     payload = await image.read()
     _require_upload_image(payload, image.filename)
-    if async_job:
-        from .jobs import job_upscale
-        from .storage import get_bytes, put_bytes
-
-        key = put_bytes(payload, content_type="image/png")
-        result = job_upscale.delay(key, scale, model)
-
-        def build_inline(data: dict) -> Response:
-            out = get_bytes(data["storage_key"])
-            return Response(
-                out,
-                media_type="image/png",
-                headers={"X-Upscale-Engine": str(data.get("engine") or model or "realesrgan")},
-            )
-
-        return _inline_or_queued(result, inline_builder=build_inline)
     try:
         from .ai_pipeline import upscale_image
 
@@ -688,58 +635,6 @@ async def ai_upscale(
         raise
     except Exception as exc:
         raise _ai_http_error(exc, default_message="Upscale failed") from exc
-
-
-@app.post("/api/ai/interpolate")
-async def ai_interpolate(
-    frames: Annotated[list[UploadFile], File()],
-    factor: Annotated[int, Form()] = 2,
-    model: Annotated[str, Form()] = "rife",
-    async_job: Annotated[bool, Form()] = False,
-) -> dict[str, object]:
-    if len(frames) < 2:
-        raise HTTPException(400, "Need at least two frames to interpolate.")
-    payloads: list[bytes] = []
-    for upload in frames[:MAX_FRAMES]:
-        data = await upload.read()
-        _require_upload_image(data, upload.filename)
-        payloads.append(data)
-
-    if async_job:
-        from .jobs import job_interpolate
-        from .storage import get_bytes, put_bytes
-
-        keys = [put_bytes(p, content_type="image/png") for p in payloads]
-        result = job_interpolate.delay(keys, factor)
-
-        def build_inline(data: dict) -> dict[str, object]:
-            outs = [get_bytes(k) for k in data.get("frame_keys") or []]
-            return {
-                "engine": data.get("engine") or model or "rife",
-                "frames": [
-                    "data:image/png;base64," + base64.b64encode(b).decode("ascii") for b in outs
-                ],
-            }
-
-        return _inline_or_queued(result, inline_builder=build_inline)
-
-    try:
-        from .ai_pipeline import interpolate_frames
-
-        async with acquire_ai_slot("interpolate"):
-            outs, engine = await run_in_threadpool(
-                interpolate_frames, payloads, factor, model or "rife",
-            )
-        return {
-            "engine": engine,
-            "frames": [
-                "data:image/png;base64," + base64.b64encode(b).decode("ascii") for b in outs
-            ],
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _ai_http_error(exc, default_message="Interpolate failed") from exc
 
 
 @app.post("/api/projects")
@@ -808,39 +703,3 @@ async def update_project(project_id: str, document: dict[str, object]) -> dict[s
         return {"id": row.id, "persisted": True}
     finally:
         session.close()
-
-
-@app.post("/api/assets")
-async def upload_asset(
-    file: Annotated[UploadFile, File()],
-    project_id: Annotated[str | None, Form()] = None,
-) -> dict[str, object]:
-    payload = await file.read()
-    _require_upload_image(payload, file.filename)
-    from .storage import put_bytes, storage_configured
-
-    key = put_bytes(payload, content_type=file.content_type or "application/octet-stream")
-    asset_id = None
-    from .db import Asset, get_session
-
-    session = get_session()
-    if session is not None and project_id:
-        try:
-            row = Asset(
-                project_id=project_id,
-                storage_key=key,
-                filename=file.filename or "",
-                bytes=len(payload),
-            )
-            session.add(row)
-            session.commit()
-            session.refresh(row)
-            asset_id = row.id
-        finally:
-            session.close()
-    return {
-        "id": asset_id,
-        "storage_key": key,
-        "s3": storage_configured(),
-        "bytes": len(payload),
-    }

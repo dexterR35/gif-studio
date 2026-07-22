@@ -5,7 +5,6 @@ Weights go under ``models/``. Grounding DINO is cloned to ``third_party/``.
 
 Usage:
   python scripts/setup_ai_models.py              # all local ckpts (default)
-  python scripts/setup_ai_models.py --skip-rife
   python scripts/setup_ai_models.py --tiny-only  # SAM2 tiny + DINO Swin-T only
 """
 
@@ -120,26 +119,6 @@ def setup_matte_dirs() -> None:
     (MODELS / "matte").mkdir(parents=True, exist_ok=True)
     print("  rembg downloads session weights on first use (birefnet-general, isnet, …)")
     print("  optional: drop ONNX under models/matte/; pip install rembg")
-
-
-def setup_depth(tiny_only: bool = True) -> None:
-    print("\n[Depth] Depth Anything V2 Small → models/depth/v2-small-hf/")
-    dest = MODELS / "depth" / "v2-small-hf"
-    if (dest / "config.json").exists():
-        print(f"  skip (exists): {dest.relative_to(ROOT)}")
-        return
-    try:
-        from huggingface_hub import snapshot_download
-
-        print("  downloading depth-anything/Depth-Anything-V2-Small-hf (one-time local snapshot)")
-        snapshot_download(
-            repo_id="depth-anything/Depth-Anything-V2-Small-hf",
-            local_dir=str(dest),
-        )
-    except Exception as exc:  # noqa: BLE001
-        print(f"  WARNING: depth download failed ({exc})")
-        print("  Place Transformers snapshot under models/depth/v2-small-hf/")
-    del tiny_only
 
 
 def setup_slots() -> None:
@@ -278,56 +257,12 @@ def setup_grounding_dino(tiny_only: bool, install_pkg: bool) -> None:
             print(f"  WARNING: official package install skipped ({exc})")
 
 
-def setup_rife(hf_repo: str | None) -> None:
-    print("\n[RIFE]")
-    clone_repo("https://github.com/hzwer/Practical-RIFE.git", THIRD / "Practical-RIFE")
-    clone_repo("https://github.com/hzwer/ECCV2022-RIFE.git", THIRD / "ECCV2022-RIFE")
-
-    train_log = MODELS / "rife" / "train_log"
-    train_log.mkdir(parents=True, exist_ok=True)
-
-    if hf_repo:
-        try:
-            from huggingface_hub import snapshot_download
-
-            print(f"  downloading RIFE weights once from hf.co/{hf_repo}")
-            snapshot_download(
-                repo_id=hf_repo,
-                local_dir=str(MODELS / "rife" / "hf"),
-                local_dir_use_symlinks=False,
-            )
-            nested = MODELS / "rife" / "hf" / "train_log"
-            if nested.is_dir():
-                for item in nested.iterdir():
-                    target = train_log / item.name
-                    if not target.exists():
-                        if item.is_file():
-                            target.write_bytes(item.read_bytes())
-                        else:
-                            run(["cp", "-a", str(item), str(target)])
-            (train_log / "__init__.py").write_text(
-                "# so `import train_log.RIFE_HDv3` works\n", encoding="utf-8"
-            )
-            print(f"  weights → {train_log.relative_to(ROOT)}")
-        except Exception as exc:  # noqa: BLE001
-            print(f"  WARNING: download failed ({exc})")
-            print("  Place flownet.pkl (+ RIFE_HDv3.py) manually in models/rife/train_log/")
-    else:
-        print("  clone done. Place weights in:")
-        print(f"    {train_log}")
-
-    print("  set RIFE_REPO=third_party/Practical-RIFE")
-    print("  set RIFE_MODEL=models/rife/train_log")
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--skip-rife", action="store_true")
-    parser.add_argument("--skip-depth", action="store_true")
     parser.add_argument(
         "--tiny-only",
         action="store_true",
-        help="Smaller set: SAM2 tiny + DINO Swin-T + depth small",
+        help="Smaller set: SAM2 tiny + DINO Swin-T",
     )
     parser.add_argument(
         "--no-install-dino",
@@ -339,13 +274,11 @@ def main() -> int:
         action="store_true",
         help="Install sam3 package + download facebook/sam3 weights (gated HF)",
     )
-    parser.add_argument(
-        "--rife-hf",
-        default=os.environ.get("RIFE_HF_REPO", "MonsterMMORPG/RIFE_4_26"),
-        help="One-time download source for RIFE train_log (stored locally after)",
-    )
-    parser.add_argument("--no-rife-hf", action="store_true")
-    # Keep old flag as no-op alias (local is now default)
+    # Keep old flags as no-op aliases
+    parser.add_argument("--skip-rife", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--skip-depth", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--rife-hf", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--no-rife-hf", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--local-ckpts", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
@@ -359,13 +292,9 @@ def main() -> int:
         install_pkg=not args.no_install_dino,
     )
     setup_matte_dirs()
-    if not args.skip_depth:
-        setup_depth(tiny_only=args.tiny_only)
     setup_slots()
     if args.with_sam3:
         setup_sam3()
-    if not args.skip_rife:
-        setup_rife(None if args.no_rife_hf else args.rife_hf)
 
     print("\nDone. Local-only inference (GIF_STUDIO_ALLOW_HF unset).")
     print("  pip install -r requirements-ai.txt")

@@ -10,7 +10,6 @@ export const TOOL_KINDS = Object.freeze([
   'select-polygon',
   'select-pen',
   'mask-brush',
-  'pixelate',
   'redact',
 ])
 
@@ -31,8 +30,6 @@ export function createInitialToolState(kind = 'move') {
       return { kind: 'select-pen', phase: 'placing', points: [] }
     case 'mask-brush':
       return { kind: 'mask-brush', phase: 'ready' }
-    case 'pixelate':
-      return { kind: 'pixelate', phase: 'ready' }
     case 'redact':
       return { kind: 'redact', phase: 'ready' }
     default:
@@ -50,7 +47,6 @@ export function isGestureActive(state) {
     case 'move':
       return state.phase === 'dragging'
     case 'select-rect':
-    case 'pixelate':
     case 'redact':
       return state.phase === 'drawing'
     case 'select-lasso':
@@ -116,7 +112,6 @@ export function transitionTool(state, event) {
     case 'move':
       return transitionMove(state, event)
     case 'select-rect':
-    case 'pixelate':
     case 'redact':
       return transitionRectTool(state, event)
     case 'select-lasso':

@@ -2,7 +2,8 @@ import { useEffect, useRef } from 'react'
 import { cn } from '../../lib/cn'
 
 /**
- * Scroll-to-zoom / space-pan viewport for canvas-style stages.
+ * Overflow viewport around the artboard.
+ * Children fill the viewport; Konva Stage owns zoom/pan/centering.
  */
 export function CanvasViewport({
   zoomApi,
@@ -10,9 +11,11 @@ export function CanvasViewport({
   contentHeight,
   className,
   children,
-  panEnabled = true,
+  panEnabled = false,
+  wheelEnabled = false,
   autoFit = true,
   onBackgroundPointerDown,
+  onViewportResize,
 }) {
   const {
     viewportRef,
@@ -21,7 +24,6 @@ export function CanvasViewport({
     movePan,
     endPan,
     spaceDown,
-    getContentStyle,
     setContentSize,
     fit,
   } = zoomApi
@@ -31,6 +33,19 @@ export function CanvasViewport({
   useEffect(() => {
     setContentSize(contentWidth, contentHeight)
   }, [contentWidth, contentHeight, setContentSize])
+
+  useEffect(() => {
+    const node = viewportRef.current
+    if (!node) return undefined
+
+    const notify = () => {
+      onViewportResize?.({ width: node.clientWidth, height: node.clientHeight })
+    }
+    notify()
+    const observer = new ResizeObserver(notify)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [viewportRef, onViewportResize])
 
   useEffect(() => {
     if (!autoFit) return undefined
@@ -43,6 +58,7 @@ export function CanvasViewport({
       fit()
       didFit.current = true
       lastSize.current = sizeKey
+      onViewportResize?.({ width: node.clientWidth, height: node.clientHeight })
     }
 
     if (!didFit.current || lastSize.current !== sizeKey) runFit()
@@ -52,21 +68,22 @@ export function CanvasViewport({
     })
     observer.observe(node)
     return () => observer.disconnect()
-  }, [autoFit, contentWidth, contentHeight, fit, setContentSize, viewportRef])
+  }, [autoFit, contentWidth, contentHeight, fit, setContentSize, viewportRef, onViewportResize])
 
   useEffect(() => {
+    if (!wheelEnabled) return undefined
     const node = viewportRef.current
     if (!node) return undefined
     const handler = (event) => onWheel(event)
     node.addEventListener('wheel', handler, { passive: false })
     return () => node.removeEventListener('wheel', handler)
-  }, [onWheel, viewportRef])
+  }, [onWheel, viewportRef, wheelEnabled])
 
   return (
     <div
       ref={viewportRef}
       className={cn(
-        'checker relative flex min-h-0 flex-1 touch-none items-center justify-center overflow-hidden',
+        'checker relative flex min-h-0 flex-1 touch-none overflow-hidden',
         spaceDown && panEnabled ? 'cursor-grab' : '',
         className,
       )}
@@ -77,7 +94,6 @@ export function CanvasViewport({
         }
       }}
       onPointerDown={(event) => {
-        // Checker / empty stage around the canvas — deselect like Figma/Photoshop.
         if (event.target === event.currentTarget && !spaceDown) {
           onBackgroundPointerDown?.(event)
         }
@@ -95,15 +111,8 @@ export function CanvasViewport({
         if (event.button === 1) event.preventDefault()
       }}
     >
-      <div
-        style={getContentStyle(contentWidth, contentHeight)}
-        onPointerDown={(event) => {
-          // Clicks on the content wrapper chrome (outside the stage child) also clear selection.
-          if (event.target === event.currentTarget && !spaceDown) {
-            onBackgroundPointerDown?.(event)
-          }
-        }}
-      >
+      {/* Stage fills the viewport; artboard is centered/scaled inside Konva. */}
+      <div className="absolute inset-0 min-h-0 min-w-0">
         {children}
       </div>
     </div>

@@ -5,19 +5,17 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   ChevronDown, ChevronRight, Eye, EyeOff, Lock, Unlock,
-  Image, Type, Layers, Bone, Sparkles, Diamond,
+  Image, Type, Layers, Bone, Sparkles,
 } from 'lucide-react'
 import { useStudio } from '../../context/studio-provider'
 import {
   BASE_MOTION_ID,
-  MAX_MOTION_EFFECTS,
-  MOTION_EFFECT_COLORS,
   getBaseMotionClip,
   isBaseMotionClip,
   layerTrackId,
   moveClipWindow,
   parseLayerTrackId,
-} from '../../lib/motion-effects'
+} from '../../lib/timeline-ids'
 import { cn } from '../../lib/cn'
 
 const TRACK_H = 28
@@ -149,7 +147,6 @@ function PropertyRow({ name, value, color, depth = 1 }) {
 export function StudioTimeline() {
   const {
     settings, progress, setProgress, actualDuration, setPlaying, draw,
-    updateMotionEffect, moveMotionEffectTrack,
     selectedMotionEffect, setSelectedMotionEffect,
     elements, overlays, textLayers, updateTextById, updateOverlayById,
     poseRig, setPoseRig,
@@ -158,7 +155,6 @@ export function StudioTimeline() {
     selectedElements, selectedOverlay, selectedText,
   } = useStudio()
 
-  const clips = settings.motionEffects || []
   const baseClip = getBaseMotionClip(settings)
   const duration = Math.max(0.1, settings.duration || 1)
   const fps = settings.fps || 24
@@ -283,27 +279,6 @@ export function StudioTimeline() {
       })
     })
 
-    clips.forEach((clip) => {
-      list.push({
-        id: clip.id,
-        name: clip.type,
-        icon: Diamond,
-        visible: true,
-        locked: false,
-        expandable: true,
-        kind: 'effect',
-        color: MOTION_EFFECT_COLORS[clip.type] || '#a1a1aa',
-        clipIn: clip.in,
-        clipOut: clip.out,
-        track: clip.track ?? 0,
-        clip,
-        properties: [
-          { id: 'amount', name: 'Amount', color: '#22d3ee', value: `${fmt(clip.amount ?? 0, 0)}%` },
-          { id: 'center', name: 'Center', color: '#f472b6', value: `X: ${fmt(clip.x, 1)}  Y: ${fmt(clip.y, 1)}` },
-        ],
-      })
-    })
-
     list.push({
       id: BASE_MOTION_ID,
       name: `Base · ${baseClip.type}`,
@@ -354,7 +329,7 @@ export function StudioTimeline() {
     }
 
     return list
-  }, [baseClip, clips, textLayers, elements, overlays, poseRig, duration, settings])
+  }, [baseClip, textLayers, elements, overlays, poseRig, duration, settings])
 
   const isLayerSelected = useCallback((layer) => {
     if (selectedMotionEffect === layer.id) return true
@@ -466,33 +441,6 @@ export function StudioTimeline() {
         const nextOut = Math.max(drag.originIn + minSpan, Math.min(duration, drag.originOut + deltaSec))
         updateTextById(drag.id, { out: +nextOut.toFixed(2) })
       }
-      return
-    }
-
-    if (drag.mode === 'move') {
-      updateMotionEffect(
-        drag.id,
-        moveClipWindow({ in: drag.originIn, out: drag.originOut }, deltaSec, duration),
-      )
-      const laneDelta = Math.round((event.clientY - drag.startY) / drag.laneHeight)
-      const nextTrack = Math.max(0, Math.min(MAX_MOTION_EFFECTS - 1, drag.originTrack + laneDelta))
-      if (nextTrack !== drag.originTrack) {
-        moveMotionEffectTrack(drag.id, nextTrack)
-        drag.originTrack = nextTrack
-        drag.startY = event.clientY
-      }
-      return
-    }
-
-    if (drag.mode === 'in') {
-      const nextIn = Math.max(0, Math.min(drag.originOut - minSpan, drag.originIn + deltaSec))
-      updateMotionEffect(drag.id, { in: +nextIn.toFixed(2) })
-      return
-    }
-
-    if (drag.mode === 'out') {
-      const nextOut = Math.max(drag.originIn + minSpan, Math.min(duration, drag.originOut + deltaSec))
-      updateMotionEffect(drag.id, { out: +nextOut.toFixed(2) })
     }
   }
 
@@ -609,9 +557,8 @@ export function StudioTimeline() {
               const inPct = (layer.clipIn / duration) * 100
               const widthPct = Math.max(1.2, ((layer.clipOut - layer.clipIn) / duration) * 100)
               const isSelected = isLayerSelected(layer)
-              const isEffect = layer.kind === 'effect'
               const isText = layer.kind === 'text'
-              const canTrim = editable && !layer.locked && (isEffect || isText)
+              const canTrim = editable && !layer.locked && isText
 
               return (
                 <div key={layer.id}>
@@ -636,8 +583,7 @@ export function StudioTimeline() {
                           selectClip(layer.id)
                           return
                         }
-                        if (isEffect) beginDrag(e, layer.clip, 'move', 'effect')
-                        else if (isText) beginDrag(e, layer, 'move', 'text')
+                        if (isText) beginDrag(e, layer, 'move', 'text')
                         else {
                           e.preventDefault()
                           e.stopPropagation()
@@ -654,8 +600,7 @@ export function StudioTimeline() {
                           aria-label="Trim in"
                           className="gs-tl-clip-handle gs-tl-clip-handle-in"
                           onPointerDown={(e) => {
-                            if (isEffect) beginDrag(e, layer.clip, 'in', 'effect')
-                            else if (isText) beginDrag(e, layer, 'in', 'text')
+                            if (isText) beginDrag(e, layer, 'in', 'text')
                           }}
                           onPointerMove={onPointerMove}
                           onPointerUp={endDrag}
@@ -669,8 +614,7 @@ export function StudioTimeline() {
                           aria-label="Trim out"
                           className="gs-tl-clip-handle gs-tl-clip-handle-out"
                           onPointerDown={(e) => {
-                            if (isEffect) beginDrag(e, layer.clip, 'out', 'effect')
-                            else if (isText) beginDrag(e, layer, 'out', 'text')
+                            if (isText) beginDrag(e, layer, 'out', 'text')
                           }}
                           onPointerMove={onPointerMove}
                           onPointerUp={endDrag}

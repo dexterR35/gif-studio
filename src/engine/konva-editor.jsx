@@ -1,12 +1,59 @@
 /**
  * Primary studio canvas editor — Konva handles select, drag, resize, rotate.
  * Settings live in Zustand / StudioProvider; this is the interaction surface.
+ *
+ * Text resize follows Konva's Resize Text pattern:
+ * https://konvajs.org/docs/select_and_transform/Resize_Text.html
+ * (Transformer mutates scaleX/scaleY — bake into width/fontSize and reset scale.)
  */
-import { useEffect, useMemo, useRef } from 'react'
-import { Stage, Layer, Image as KonvaImage, Text as KonvaText, Transformer, Rect, Circle, Line } from 'react-konva'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { Stage, Layer, Group, Image as KonvaImage, Text as KonvaText, Transformer, Rect, Circle, Line } from 'react-konva'
 import { PRIMARY_ACCENT } from '../lib/colors'
 import { POSE_BONES, POSE_KEY_JOINTS } from '../lib/pose'
 import useHtmlImage from './use-html-image'
+import { applyKonvaFilters } from './konva-filters'
+import { captureNodeRest, seekMotion } from './konva-motion'
+import {
+  zoomStageAboutPointer,
+  setStageZoomPct,
+  resetStageZoom,
+  clampArtboardPan,
+  applyFitToStage,
+  artboardDragBoundFunc,
+} from './konva-zoom'
+
+const TEXT_WIDTH_ANCHORS = ['middle-left', 'middle-right']
+const TEXT_SCALE_ANCHORS = ['top-left', 'top-right', 'bottom-left', 'bottom-right']
+const DEFAULT_ANCHORS = [
+  'top-left', 'top-right', 'bottom-left', 'bottom-right',
+  'middle-left', 'middle-right', 'top-center', 'bottom-center',
+]
+
+/** Apply align/center offsets so layer.x/y map to Konva node position. */
+function syncTextOffsets(node, align = 'center') {
+  if (!node) return
+  const w = node.width()
+  const h = node.height()
+  node.offsetX(align === 'left' ? 0 : align === 'right' ? w : w / 2)
+  node.offsetY(h / 2)
+}
+
+/**
+ * Bake Transformer scale into text width / fontSize (Konva Resize Text).
+ * @see https://konvajs.org/docs/select_and_transform/Resize_Text.html
+ */
+function bakeTextTransform(node, { flipX = false, flipY = false, align = 'center' } = {}) {
+  if (!node) return
+  const sx = Math.abs(node.scaleX()) || 1
+  const sy = Math.abs(node.scaleY()) || 1
+  node.setAttrs({
+    width: Math.max(20, node.width() * sx),
+    fontSize: Math.max(8, node.fontSize() * sy),
+    scaleX: flipX ? -1 : 1,
+    scaleY: flipY ? -1 : 1,
+  })
+  syncTextOffsets(node, align)
+}
 
 function nodeToNorm(node, width, height) {
   const scaleX = Math.abs(node.scaleX()) || 1
@@ -74,7 +121,6 @@ function anchorNodeProps(box, width, height, anchorX = 50, anchorY = 50) {
  *   onTransformOverlay?: (id:string, patch:object)=>void,
  *   onTransformText?: (id:string, patch:object)=>void,
  *   overlayBounds?: (ov:object)=>{x:number,y:number,w:number,h:number,rotation:number},
- *   textBounds?: (layer:object)=>{left:number,top:number,width:number,height:number},
  *   selection?: {x:number,y:number,w:number,h:number}|null,
  *   selectionPoints?: Array<{x:number,y:number}>,
  *   poseJoints?: Array<{index:number,name:string,x:number,y:number,score?:number}>,
@@ -109,18 +155,175 @@ export function StudioKonvaStage({
   onTransformOverlay,
   onTransformText,
   overlayBounds,
-  textBounds,
   selection = null,
   selectionPoints = [],
   poseJoints = [],
   showPose = false,
   className,
+  imageFilters = [],
+  progress = 0,
+  motionSettings = null,
+  playing = false,
+  onStageApi,
+  onZoomChange,
+  selectMode = false,
+  selectionTool = 'Rectangle',
+  onSelectionComplete,
+  spacePan = false,
+  viewportSize = null,
+  onSelectionDraftChange,
 }) {
   const [sourceImage] = useHtmlImage(sourceUrl)
   const [enhancedImage] = useHtmlImage(enhancedUrl)
   const trRef = useRef(null)
   const stageRef = useRef(null)
   const nodeRefs = useRef({})
+  const imageRestRef = useRef(null)
+
+  const draftRef = useRef(null) // { kind, start, points }
+  const [draft, setDraft] = useState(null)
+  const finishDraftRef = useRef(() => {})
+
+  const viewW = Math.max(1, Math.round(viewportSize?.width || width))
+  const viewH = Math.max(1, Math.round(viewportSize?.height || height))
+  const layerDragBound = useMemo(() => artboardDragBoundFunc(width, height), [width, height])
+
+  const getViewSize = useCallback(() => {
+    const stage = stageRef.current
+    return {
+      vw: viewportSize?.width || stage?.width() || width,
+      vh: viewportSize?.height || stage?.height() || height,
+    }
+  }, [viewportSize, width, height])
+
+  useEffect(() => {
+    if (!onStageApi) return undefined
+    const api = {
+      getStage: () => stageRef.current,
+      getImageNode: () => nodeRefs.current.image || null,
+      seekTo: (tNorm) => {
+        const node = nodeRefs.current.image
+        if (!node) return
+        if (!imageRestRef.current) imageRestRef.current = captureNodeRest(node)
+        seekMotion(node, imageRestRef.current, {
+          preset: motionSettings?.preset || 'Still',
+          amplitude: motionSettings?.amplitude ?? 0,
+          speed: motionSettings?.speed ?? 1,
+          duration: motionSettings?.duration ?? 1,
+        }, tNorm)
+        node.getLayer()?.batchDraw()
+      },
+      captureFrameCanvas: () => {
+        const stage = stageRef.current
+        if (!stage) return null
+        const prevScale = { x: stage.scaleX(), y: stage.scaleY() }
+        const prevPos = { x: stage.x(), y: stage.y() }
+        const prevSize = { w: stage.width(), h: stage.height() }
+        stage.scale({ x: 1, y: 1 })
+        stage.position({ x: 0, y: 0 })
+        stage.width(width)
+        stage.height(height)
+        const canvas = stage.toCanvas({ pixelRatio: 1, x: 0, y: 0, width, height })
+        stage.width(prevSize.w)
+        stage.height(prevSize.h)
+        stage.scale(prevScale)
+        stage.position(prevPos)
+        return canvas
+      },
+      setZoomPct: (zoomPct) => {
+        const stage = stageRef.current
+        if (!stage) return
+        const { vw, vh } = getViewSize()
+        const result = setStageZoomPct(stage, zoomPct, width, height, vw, vh)
+        if (result) onZoomChange?.(result.zoomPct, { x: result.x, y: result.y })
+      },
+      setZoomPan: (zoomPct, pan) => {
+        const stage = stageRef.current
+        if (!stage) return
+        const { vw, vh } = getViewSize()
+        if (pan && (pan.x != null || pan.y != null)) {
+          const s = Math.max(0.05, (Number(zoomPct) || 100) / 100)
+          stage.scale({ x: s, y: s })
+          const pos = clampArtboardPan(pan.x || 0, pan.y || 0, s, vw, vh, width, height)
+          stage.position(pos)
+          stage.batchDraw()
+          onZoomChange?.(Math.round(s * 100), pos)
+          return
+        }
+        api.setZoomPct(zoomPct)
+      },
+      fit: (vw, vh) => {
+        const stage = stageRef.current
+        if (!stage) return
+        const view = {
+          vw: vw || getViewSize().vw,
+          vh: vh || getViewSize().vh,
+        }
+        const f = applyFitToStage(stage, view.vw, view.vh, width, height, 40)
+        if (f) onZoomChange?.(f.zoomPct, { x: f.x, y: f.y })
+      },
+      resetZoom: () => {
+        const stage = stageRef.current
+        if (!stage) return
+        const { vw, vh } = getViewSize()
+        const f = resetStageZoom(stage, vw, vh, width, height)
+        if (f) onZoomChange?.(f.zoomPct, { x: f.x, y: f.y })
+      },
+      finishSelectionDraft: () => finishDraftRef.current?.(),
+      undoSelectionPoint: () => {
+        const d = draftRef.current
+        if (!d?.points?.length) return
+        const next = { ...d, points: d.points.slice(0, -1) }
+        draftRef.current = next
+        setDraft(next)
+      },
+      getZoomPan: () => {
+        const stage = stageRef.current
+        if (!stage) return { zoomPct: 100, x: 0, y: 0 }
+        return { zoomPct: Math.round((stage.scaleX() || 1) * 100), x: stage.x(), y: stage.y() }
+      },
+    }
+    onStageApi(api)
+    return () => onStageApi(null)
+  }, [onStageApi, width, height, motionSettings, onZoomChange, getViewSize])
+
+  // Auto-fit + center when artboard or viewport size changes.
+  useEffect(() => {
+    const stage = stageRef.current
+    if (!stage || !viewportSize?.width || !viewportSize?.height) return
+    const f = applyFitToStage(stage, viewportSize.width, viewportSize.height, width, height, 40)
+    if (f) onZoomChange?.(f.zoomPct, { x: f.x, y: f.y })
+  }, [width, height, viewportSize?.width, viewportSize?.height])
+
+  // Refresh rest pose when base transform / image changes (idle only).
+  useEffect(() => {
+    if (playing) return
+    const node = nodeRefs.current.image
+    if (!node) return
+    imageRestRef.current = captureNodeRest(node)
+  }, [playing, imageTransformBox, sourceImage, imageEdits, width, height])
+
+  // Seek motion while scrubbing / playing.
+  useEffect(() => {
+    const node = nodeRefs.current.image
+    if (!node || !motionSettings) return
+    if (!imageRestRef.current) imageRestRef.current = captureNodeRest(node)
+    seekMotion(node, imageRestRef.current, {
+      preset: motionSettings.preset || 'Still',
+      amplitude: motionSettings.amplitude ?? 0,
+      speed: motionSettings.speed ?? 1,
+      duration: motionSettings.duration ?? 1,
+    }, progress)
+    node.getLayer()?.batchDraw()
+  }, [progress, motionSettings, playing, sourceImage])
+
+  // Konva Filters on base image.
+  useEffect(() => {
+    const node = nodeRefs.current.image
+    if (!node || !sourceImage) return
+    applyKonvaFilters(node, imageFilters)
+  }, [imageFilters, sourceImage, imageTransformBox])
+
 
   const setNodeRef = (key, node) => {
     if (node) nodeRefs.current[key] = node
@@ -209,48 +412,205 @@ export function StudioKonvaStage({
   }
 
   const commitText = (id, node, layer) => {
-    // Konva uses top-left; draw()/textBounds use center %. Convert back.
-    const boxW = Math.max(1, node.width() * Math.abs(node.scaleX() || 1))
-    const boxH = Math.max(1, node.height() * Math.abs(node.scaleY() || 1))
-    const leftPct = (node.x() / width) * 100
-    const topPct = (node.y() / height) * 100
-    const widthPct = (boxW / width) * 100
-    const heightPct = (boxH / height) * 100
-    const align = layer.align || 'center'
-    const centerX = align === 'left'
-      ? leftPct
-      : align === 'right'
-        ? leftPct + widthPct
-        : leftPct + widthPct / 2
-    const centerY = topPct + heightPct / 2
-    onTransformText?.(id, {
-      x: +centerX.toFixed(1),
-      y: +centerY.toFixed(1),
-      rotation: +node.rotation().toFixed(1),
-      scaleX: +(layer.scaleX * node.scaleX()).toFixed(1),
-      scaleY: +(layer.scaleY * node.scaleY()).toFixed(1),
+    bakeTextTransform(node, {
+      flipX: layer.flipX,
+      flipY: layer.flipY,
+      align: layer.align || 'center',
     })
-    node.scaleX(1)
-    node.scaleY(1)
+    // With align offsets, node.x/y is the same origin canvas 2D uses (textAlign point).
+    onTransformText?.(id, {
+      x: +((node.x() / width) * 100).toFixed(1),
+      y: +((node.y() / height) * 100).toFixed(1),
+      rotation: +node.rotation().toFixed(1),
+      size: +node.fontSize().toFixed(1),
+      boxWidth: +Math.max(20, node.width()).toFixed(1),
+      scaleX: 100,
+      scaleY: 100,
+    })
   }
+
+  const textSelected = selectedKind === 'text'
+  const transformerAnchors = textSelected
+    ? [...TEXT_WIDTH_ANCHORS, ...TEXT_SCALE_ANCHORS]
+    : DEFAULT_ANCHORS
+
+  const stageToNorm = (pos) => ({
+    x: Math.max(0, Math.min(1, pos.x / width)),
+    y: Math.max(0, Math.min(1, pos.y / height)),
+  })
+
+  const finishDraft = useCallback((extraPoints = []) => {
+    const d = draftRef.current
+    if (!d) return
+    draftRef.current = null
+    setDraft(null)
+    if (d.kind === 'rect' && d.rect) {
+      const r = d.rect
+      if (r.w < 0.025 || r.h < 0.025) return
+      onSelectionComplete?.({ type: 'rect', rect: r })
+      return
+    }
+    const points = [...(d.points || []), ...extraPoints]
+    if (points.length < 3) return
+    const xs = points.map((p) => p.x)
+    const ys = points.map((p) => p.y)
+    const rect = {
+      x: Math.min(...xs),
+      y: Math.min(...ys),
+      w: Math.max(...xs) - Math.min(...xs),
+      h: Math.max(...ys) - Math.min(...ys),
+    }
+    if (rect.w < 0.015 || rect.h < 0.015) return
+    onSelectionComplete?.({ type: 'path', rect, points, tool: d.kind })
+  }, [onSelectionComplete])
+
+  finishDraftRef.current = finishDraft
+
+  useEffect(() => {
+    onSelectionDraftChange?.(draft?.points || [])
+  }, [draft, onSelectionDraftChange])
+
+  useEffect(() => {
+    if (selectMode) return
+    draftRef.current = null
+    setDraft(null)
+  }, [selectMode])
+
+  // Expose finish for Enter / Complete button via stage API patch
+  useEffect(() => {
+    const stage = stageRef.current
+    if (!stage || !selectMode) return undefined
+    const onKey = (event) => {
+      if (event.key === 'Enter') finishDraft()
+      if (event.key === 'Escape') {
+        draftRef.current = null
+        setDraft(null)
+      }
+      if ((event.key === 'Backspace' || event.key === 'Delete') && draftRef.current?.points?.length) {
+        event.preventDefault()
+        const next = draftRef.current.points.slice(0, -1)
+        draftRef.current = { ...draftRef.current, points: next }
+        setDraft({ ...draftRef.current })
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selectMode, finishDraft])
 
   return (
     <Stage
       ref={stageRef}
-      width={width}
-      height={height}
+      width={viewW}
+      height={viewH}
       className={className}
       style={{ width: '100%', height: '100%' }}
+      draggable={spacePan && !selectMode}
+      dragBoundFunc={(pos) => {
+        const stage = stageRef.current
+        const s = stage?.scaleX() || 1
+        return clampArtboardPan(pos.x, pos.y, s, viewW, viewH, width, height)
+      }}
+      onDragEnd={() => {
+        const stage = stageRef.current
+        if (!stage) return
+        onZoomChange?.(Math.round((stage.scaleX() || 1) * 100), { x: stage.x(), y: stage.y() })
+      }}
+      onWheel={(e) => {
+        e.evt.preventDefault()
+        const stage = stageRef.current
+        if (!stage) return
+        const pointer = stage.getPointerPosition()
+        if (!pointer) return
+        const oldScale = stage.scaleX() || 1
+        const scaleBy = 1.08
+        const direction = e.evt.deltaY > 0 ? -1 : 1
+        const newScale = direction > 0 ? oldScale * scaleBy : oldScale / scaleBy
+        const result = zoomStageAboutPointer(stage, pointer, newScale, viewW, viewH, width, height)
+        if (result) onZoomChange?.(result.zoomPct, { x: result.x, y: result.y })
+      }}
       onMouseDown={(e) => {
+        if (spacePan) return
+        const stage = stageRef.current
+        if (!stage) return
+        // Selection drawing (Konva)
+        if (selectMode) {
+          const pos = stage.getRelativePointerPosition()
+          if (!pos) return
+          const point = stageToNorm(pos)
+          if (selectionTool === 'Polygonal Lasso' || selectionTool === 'Pen Path') {
+            const prev = draftRef.current?.points || []
+            const next = { kind: selectionTool === 'Pen Path' ? 'pen' : 'polygon', points: [...prev, point] }
+            draftRef.current = next
+            setDraft(next)
+            return
+          }
+          if (selectionTool === 'Freehand Lasso') {
+            const next = { kind: 'freehand', points: [point], drawing: true }
+            draftRef.current = next
+            setDraft(next)
+            return
+          }
+          // Rectangle
+          const next = { kind: 'rect', start: point, rect: { x: point.x, y: point.y, w: 0, h: 0 }, drawing: true }
+          draftRef.current = next
+          setDraft(next)
+          return
+        }
         if (!interactive) return
         if (e.target === e.target.getStage()) onSelect?.({ kind: 'image', id: null })
       }}
+      onMouseMove={() => {
+        if (!selectMode || !draftRef.current?.drawing) return
+        const stage = stageRef.current
+        if (!stage) return
+        const pos = stage.getRelativePointerPosition()
+        if (!pos) return
+        const point = stageToNorm(pos)
+        const d = draftRef.current
+        if (d.kind === 'freehand') {
+          const last = d.points[d.points.length - 1]
+          if (!last || Math.hypot(last.x - point.x, last.y - point.y) > 0.002) {
+            const next = { ...d, points: [...d.points, point] }
+            draftRef.current = next
+            setDraft(next)
+          }
+          return
+        }
+        if (d.kind === 'rect' && d.start) {
+          const rect = {
+            x: Math.min(d.start.x, point.x),
+            y: Math.min(d.start.y, point.y),
+            w: Math.abs(point.x - d.start.x),
+            h: Math.abs(point.y - d.start.y),
+          }
+          const next = { ...d, rect }
+          draftRef.current = next
+          setDraft(next)
+        }
+      }}
+      onMouseUp={() => {
+        if (!selectMode || !draftRef.current?.drawing) return
+        const d = draftRef.current
+        if (d.kind === 'rect' || d.kind === 'freehand') {
+          finishDraft()
+        }
+      }}
+      onDblClick={() => {
+        if (selectMode && (selectionTool === 'Polygonal Lasso' || selectionTool === 'Pen Path')) {
+          finishDraft()
+        }
+      }}
       onTouchStart={(e) => {
-        if (!interactive) return
+        if (!interactive || selectMode) return
         if (e.target === e.target.getStage()) onSelect?.({ kind: 'image', id: null })
       }}
     >
-      <Layer>
+      <Layer listening={interactive}>
+        <Group
+          clipFunc={(ctx) => {
+            ctx.rect(0, 0, width, height)
+          }}
+        >
         <Rect
           width={width}
           height={height}
@@ -312,6 +672,7 @@ export function StudioKonvaStage({
               scaleX={flipX ? -1 : 1}
               scaleY={flipY ? -1 : 1}
               draggable={interactive && !imageLocked}
+              dragBoundFunc={layerDragBound}
               onClick={(e) => {
                 e.cancelBubble = true
                 onSelect?.({ kind: 'image' })
@@ -341,6 +702,7 @@ export function StudioKonvaStage({
               scaleX={overlay.flipX ? -1 : 1}
               scaleY={overlay.flipY ? -1 : 1}
               draggable={interactive}
+              dragBoundFunc={layerDragBound}
               onClick={(e) => {
                 e.cancelBubble = true
                 onSelect?.({ kind: 'overlay', id: overlay.id, additive: e.evt.shiftKey || e.evt.metaKey || e.evt.ctrlKey })
@@ -371,6 +733,7 @@ export function StudioKonvaStage({
               scaleX={(el.scaleX || 100) / 100 * (el.flipX ? -1 : 1)}
               scaleY={(el.scaleY || 100) / 100 * (el.flipY ? -1 : 1)}
               draggable={interactive && !el.locked}
+              dragBoundFunc={layerDragBound}
               dash={el.locked ? [4, 4] : undefined}
               stroke={selected ? '#d8ff3e' : undefined}
               strokeWidth={selected ? 2 : 0}
@@ -390,24 +753,41 @@ export function StudioKonvaStage({
 
         {textLayers.filter((layer) => layer.visible !== false).map((layer) => {
           const key = `text:${layer.id}`
-          const boxPct = textBounds?.(layer)
-          const x = boxPct ? (boxPct.left / 100) * width : (layer.x / 100) * width
-          const y = boxPct ? (boxPct.top / 100) * height : (layer.y / 100) * height
+          const align = layer.align || 'center'
+          const fontSize = Math.max(8, layer.size || 72)
+          const hasBoxWidth = layer.boxWidth != null && Number(layer.boxWidth) > 0
           return (
             <KonvaText
               key={layer.id}
-              ref={(n) => setNodeRef(key, n)}
+              ref={(n) => {
+                setNodeRef(key, n)
+                if (n && !n.isDragging() && !n.isTransforming?.()) {
+                  syncTextOffsets(n, align)
+                }
+              }}
               text={layer.text || 'Text'}
-              x={x}
-              y={y}
-              fontSize={Math.max(8, (layer.size || 72) * (layer.scaleY || 100) / 100)}
+              x={(layer.x / 100) * width}
+              y={(layer.y / 100) * height}
+              fontSize={fontSize}
               fontFamily={layer.font || 'Arial'}
               fontStyle={`${layer.italic ? 'italic ' : ''}${layer.weight || 700}`}
               fill={layer.color || '#ffffff'}
               opacity={(layer.opacity ?? 100) / 100}
               rotation={layer.rotation || 0}
-              align={layer.align || 'center'}
+              align={align}
+              lineHeight={layer.lineHeight || 1.1}
+              letterSpacing={layer.letterSpacing || 0}
+              stroke={layer.strokeWidth > 0 ? (layer.strokeColor || '#000') : undefined}
+              strokeWidth={layer.strokeWidth || 0}
+              shadowColor={layer.shadowBlur > 0 || layer.shadowX || layer.shadowY ? layer.shadowColor : undefined}
+              shadowBlur={layer.shadowBlur || 0}
+              shadowOffsetX={layer.shadowX || 0}
+              shadowOffsetY={layer.shadowY || 0}
+              {...(hasBoxWidth ? { width: Number(layer.boxWidth) } : {})}
+              scaleX={layer.flipX ? -1 : 1}
+              scaleY={layer.flipY ? -1 : 1}
               draggable={interactive && !layer.locked}
+              dragBoundFunc={layerDragBound}
               onClick={(e) => {
                 e.cancelBubble = true
                 onSelect?.({ kind: 'text', id: layer.id })
@@ -415,6 +795,17 @@ export function StudioKonvaStage({
               onTap={(e) => {
                 e.cancelBubble = true
                 onSelect?.({ kind: 'text', id: layer.id })
+              }}
+              onTransform={() => {
+                const node = nodeRefs.current[key]
+                if (!node) return
+                // https://konvajs.org/docs/select_and_transform/Resize_Text.html
+                bakeTextTransform(node, {
+                  flipX: layer.flipX,
+                  flipY: layer.flipY,
+                  align,
+                })
+                trRef.current?.forceUpdate()
               }}
               onDragEnd={(e) => commitText(layer.id, e.target, layer)}
               onTransformEnd={(e) => commitText(layer.id, e.target, layer)}
@@ -494,11 +885,62 @@ export function StudioKonvaStage({
           </>
         )}
 
+
+        {/* Live Konva selection draft */}
+        {draft?.kind === 'rect' && draft.rect && (
+          <Rect
+            x={draft.rect.x * width}
+            y={draft.rect.y * height}
+            width={draft.rect.w * width}
+            height={draft.rect.h * height}
+            stroke={PRIMARY_ACCENT}
+            strokeWidth={2 / Math.max(0.01, stageRef.current?.scaleX?.() || 1)}
+            fill="rgba(200,245,66,0.12)"
+            listening={false}
+          />
+        )}
+        {draft?.points?.length > 0 && (
+          <>
+            <Line
+              points={draft.points.flatMap((p) => [p.x * width, p.y * height])}
+              stroke={PRIMARY_ACCENT}
+              strokeWidth={2 / Math.max(0.01, stageRef.current?.scaleX?.() || 1)}
+              closed={false}
+              listening={false}
+            />
+            {draft.points.map((p, i) => (
+              <Circle
+                key={`draft-pt-${i}`}
+                x={p.x * width}
+                y={p.y * height}
+                radius={3 / Math.max(0.01, stageRef.current?.scaleX?.() || 1)}
+                fill={PRIMARY_ACCENT}
+                listening={false}
+              />
+            ))}
+          </>
+        )}
+        </Group>
+
+        {/* Artboard frame (outside clip so it stays crisp at edges) */}
+        <Rect
+          x={0}
+          y={0}
+          width={width}
+          height={height}
+          stroke="rgba(255,255,255,0.18)"
+          strokeWidth={1 / Math.max(0.01, stageRef.current?.scaleX?.() || 1)}
+          listening={false}
+        />
+
+      </Layer>
+      <Layer listening={interactive}>
         {interactive && (
           <Transformer
             ref={trRef}
             rotateEnabled
-            enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right', 'middle-left', 'middle-right', 'top-center', 'bottom-center']}
+            enabledAnchors={transformerAnchors}
+            keepRatio={false}
             boundBoxFunc={(oldBox, newBox) => (
               newBox.width < 8 || newBox.height < 8 ? oldBox : newBox
             )}

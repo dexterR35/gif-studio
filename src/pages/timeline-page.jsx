@@ -1,19 +1,15 @@
 import { Lock, Trash2 } from 'lucide-react'
-import { Button, DualRange, Hint, Section, SelectField, Slider } from '../components/ui'
+import { Button, DualRange, Hint, Section } from '../components/ui'
 import { TimelineAddChips } from '../components/studio/timeline-add-chips'
 import {
-  ANIMATE_MODES,
   BASE_MOTION_ID,
-  MOTION_EFFECT_COLORS,
-  MOTION_EFFECT_TYPES,
-  MAX_MOTION_EFFECTS,
-  defaultAnimateForType,
+  BASE_MOTION_COLOR,
   getBaseMotionClip,
   isBaseMotionClip,
   isLayerTrackId,
   layerTrackId,
   parseLayerTrackId,
-} from '../lib/motion-effects'
+} from '../lib/timeline-ids'
 import { MAX_TEXT_LAYERS } from '../lib/presets'
 import { useStudio } from '../context/studio-provider'
 import { useStudioStore } from '../store/studio-store'
@@ -36,7 +32,6 @@ export default function TimelinePage() {
     settings,
     elements, overlays, textLayers,
     selectedMotionEffect, setSelectedMotionEffect,
-    addMotionEffect, updateMotionEffect, removeMotionEffect,
     addTextLayer, updateTextById, removeText, setSelectedText,
     goToWorkspace, progress, setProgress, setPlaying, draw, actualDuration,
   } = useStudio()
@@ -46,7 +41,6 @@ export default function TimelinePage() {
   const selectedKeyframe = useStudioStore((s) => s.editor._selectedKeyframeId)
   const patchProject = useStudioStore((s) => s.patchProject)
 
-  const clips = settings.motionEffects || []
   const baseClip = getBaseMotionClip(settings)
   const duration = Math.max(0.1, settings.duration || 1)
   const baseSelected = isBaseMotionClip(selectedMotionEffect)
@@ -55,9 +49,6 @@ export default function TimelinePage() {
     ? (textLayers.find((item) => item.id === layerRef.id) || null)
     : null
   const lockedLayerRef = layerRef && layerRef.kind !== 'text' ? layerRef : null
-  const selected = !baseSelected && !layerRef
-    ? (clips.find((clip) => clip.id === selectedMotionEffect) || null)
-    : null
 
   const lockedLayerInfo = (() => {
     if (!lockedLayerRef) return null
@@ -71,11 +62,6 @@ export default function TimelinePage() {
     }
     return null
   })()
-
-  const addClip = (type) => {
-    const id = addMotionEffect(type)
-    if (id != null) setSelectedMotionEffect(id)
-  }
 
   const addText = () => {
     const id = addTextLayer({ stay: true })
@@ -121,25 +107,23 @@ export default function TimelinePage() {
 
       <Section
         title="Timeline"
-        info="Timed effects and text tracks live here. Base motion and image layers stay locked mirrors from Motion."
+        info="Text tracks live here. Base motion mirrors the Motion tab (Konva Tweens / Animations)."
         open
       >
         <TimelineAddChips
           textCount={textLayers.length}
-          effectCount={clips.length}
           onAddText={addText}
-          onAddEffect={addClip}
         />
         <p className="mt-2 font-mono text-[10px] text-zinc-500">
-          {textLayers.length}/{MAX_TEXT_LAYERS} text · {clips.length}/{MAX_MOTION_EFFECTS} effects
+          {textLayers.length}/{MAX_TEXT_LAYERS} text
         </p>
       </Section>
 
       {baseSelected && (
         <Section title="Base motion" open>
-          <LockedTrackRow color={MOTION_EFFECT_COLORS.Base} lane="M" title={baseClip.type} />
+          <LockedTrackRow color={BASE_MOTION_COLOR} lane="M" title={baseClip.type} />
           <Hint className="mt-3">
-            Locked lane updated from the Motion tab (preset, amount, speed, duration). Image transform settings are unavailable while editing the timeline.
+            Locked lane updated from the Motion tab (preset, amount, speed, duration).
           </Hint>
           <Button variant="soft" size="lg" full className="mt-3" onClick={() => goToWorkspace('motion')}>
             Edit basic animation
@@ -234,157 +218,10 @@ export default function TimelinePage() {
         </Section>
       )}
 
-      {selected && (
-        <Section
-          title="Timeline effect"
-          info={`Edit the selected V-lane clip (max ${MAX_MOTION_EFFECTS}).`}
-          open
-        >
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <SelectField
-              className="min-w-0 flex-1"
-              value={selected.type}
-              onChange={(v) => updateMotionEffect(selected.id, { type: v })}
-            >
-              {MOTION_EFFECT_TYPES.map((type) => (
-                <option key={type}>{type}</option>
-              ))}
-            </SelectField>
-            <Button
-              variant="soft"
-              size="sm"
-              onClick={() => removeMotionEffect(selected.id)}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-
-          <p className="mb-2 font-mono text-[10px] text-zinc-500">
-            V{(selected.track ?? 0) + 1} · {selected.in.toFixed(1)}s → {selected.out.toFixed(1)}s
-          </p>
-
-          <DualRange
-            label="In / Out"
-            info="When this effect is active (seconds)."
-            start={selected.in}
-            end={selected.out}
-            min={0}
-            max={duration}
-            step={0.1}
-            suffix="s"
-            onStart={(v) => updateMotionEffect(selected.id, { in: Math.min(v, selected.out - 0.05) })}
-            onEnd={(v) => updateMotionEffect(selected.id, { out: Math.max(v, selected.in + 0.05) })}
-          />
-
-          <div className="mt-2">
-            <SelectField
-              label="Animate"
-              info="Continuous motion from In → Out across the GIF timeline (not only fade)."
-              value={selected.animate || defaultAnimateForType(selected.type)}
-              onChange={(v) => updateMotionEffect(selected.id, { animate: v })}
-            >
-              {ANIMATE_MODES.map((mode) => (
-                <option key={mode}>{mode}</option>
-              ))}
-            </SelectField>
-          </div>
-          <Slider
-            className="gs-row"
-            label="Cycles"
-            info="How many times the animation repeats between In and Out."
-            suffix="×"
-            min={0.5}
-            max={8}
-            step={0.5}
-            value={selected.cycles ?? 1}
-            onChange={(v) => updateMotionEffect(selected.id, { cycles: v })}
-          />
-
-          <Slider
-            className="gs-row"
-            label="Peak amount"
-            suffix="%"
-            min={0}
-            max={100}
-            value={selected.amount}
-            onChange={(v) => updateMotionEffect(selected.id, { amount: v })}
-          />
-          <Slider
-            className="gs-row"
-            label="Fade in"
-            suffix="%"
-            info="Portion of the clip used to ramp strength up."
-            min={0}
-            max={50}
-            value={selected.fadeIn}
-            onChange={(v) => updateMotionEffect(selected.id, { fadeIn: v })}
-          />
-          <Slider
-            className="gs-row"
-            label="Fade out"
-            suffix="%"
-            info="Portion of the clip used to ramp strength down."
-            min={0}
-            max={50}
-            value={selected.fadeOut}
-            onChange={(v) => updateMotionEffect(selected.id, { fadeOut: v })}
-          />
-
-          {selected.type !== 'Zoom' && (
-            <>
-              <Slider
-                className="mt-2 gs-row"
-                label="Center X"
-                suffix="%"
-                info="Base center — path modes (Left → Right, Orbit, Random) animate from here."
-                min={0}
-                max={100}
-                step={0.5}
-                value={selected.x}
-                onChange={(v) => updateMotionEffect(selected.id, { x: v })}
-              />
-              <Slider
-                className="gs-row"
-                label="Center Y"
-                suffix="%"
-                min={0}
-                max={100}
-                step={0.5}
-                value={selected.y}
-                onChange={(v) => updateMotionEffect(selected.id, { y: v })}
-              />
-              {selected.type !== 'Swirl' && selected.type !== 'Wave' && (
-                <Slider
-                  className="gs-row"
-                  label="Brush radius"
-                  suffix="%"
-                  min={5}
-                  max={100}
-                  value={selected.radius}
-                  onChange={(v) => updateMotionEffect(selected.id, { radius: v })}
-                />
-              )}
-            </>
-          )}
-
-          {(selected.type === 'Push' || selected.animate === 'Spin') && (
-            <Slider
-              className="gs-row"
-              label="Push / spin angle"
-              suffix="°"
-              min={0}
-              max={360}
-              value={selected.angle ?? 0}
-              onChange={(v) => updateMotionEffect(selected.id, { angle: v })}
-            />
-          )}
-        </Section>
-      )}
-
-      {!selected && !baseSelected && !selectedTextLayer && !isLayerTrackId(selectedMotionEffect) && (
+      {!baseSelected && !selectedTextLayer && !isLayerTrackId(selectedMotionEffect) && (
         <Section title="Selection" open>
           <Hint>
-            Select a text track or V-lane clip on the timeline to edit it. Base motion (M) and image layers are locked.
+            Select a text track on the timeline to edit it. Base motion (M) and image layers are locked.
           </Hint>
           <button
             type="button"
@@ -394,7 +231,7 @@ export default function TimelinePage() {
               'border-white/[.06] bg-white/[.02] text-zinc-400 hover:border-white/10 hover:text-zinc-200',
             )}
           >
-            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: MOTION_EFFECT_COLORS.Base }} />
+            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: BASE_MOTION_COLOR }} />
             <span className="w-6 shrink-0 font-mono text-[9px] text-zinc-600">M</span>
             <span className="min-w-0 flex-1 truncate font-semibold">{baseClip.type}</span>
             <Lock className="h-3 w-3 shrink-0 text-zinc-600" />

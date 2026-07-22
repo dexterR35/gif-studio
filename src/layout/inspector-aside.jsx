@@ -27,6 +27,7 @@ import { JointAnimPanel } from '../components/studio/joint-anim-panel'
 import { useStudio } from '../context/studio-provider'
 import { FIT_MODES, LAYER_MOTION_OPTIONS } from '../lib/catalogs'
 import { cn } from '../lib/cn'
+import { KONVA_FILTER_TYPES, createFilterEntry } from '../engine/konva-filters'
 import { SecondaryAside } from './secondary-aside'
 
 function TransformFields({
@@ -34,6 +35,21 @@ function TransformFields({
   opacity,
   onRotation,
   onOpacity,
+  posX,
+  posY,
+  onPosX,
+  onPosY,
+  scaleX,
+  scaleY,
+  onScaleX,
+  onScaleY,
+  scaleLinked = false,
+  posMin = 0,
+  posMax = 100,
+  posStep = 0.1,
+  posSuffix = '%',
+  scaleMin = 1,
+  scaleMax = 400,
   anchorX,
   anchorY,
   onAnchor,
@@ -41,18 +57,72 @@ function TransformFields({
   disabled = false,
   rotationMin = -360,
   rotationMax = 360,
+  showAnchor = true,
 }) {
   const ax = anchorX ?? 50
   const ay = anchorY ?? 50
   const centered = ax === 50 && ay === 50
+  const showPos = typeof onPosX === 'function' && typeof onPosY === 'function'
+  const showScale = typeof onScaleX === 'function'
 
   return (
     <Section
       title="Transform"
-      info="Rotation, scale, and flip pivot around the anchor point. Drag handles on the stage or the crosshair on the preview."
+      info="Position, scale, and rotation match the Konva Transformer on the stage."
       open
     >
       <div className={disabled ? 'pointer-events-none opacity-40' : undefined}>
+        {showPos && (
+          <>
+            <Slider
+              className="gs-row"
+              label="Position X"
+              suffix={posSuffix}
+              min={posMin}
+              max={posMax}
+              step={posStep}
+              value={posX ?? 0}
+              onChange={onPosX}
+            />
+            <Slider
+              className="gs-row"
+              label="Position Y"
+              suffix={posSuffix}
+              min={posMin}
+              max={posMax}
+              step={posStep}
+              value={posY ?? 0}
+              onChange={onPosY}
+            />
+          </>
+        )}
+        {showScale && (
+          <>
+            <Slider
+              className="gs-row"
+              label={scaleLinked || onScaleY == null ? 'Scale' : 'Scale X'}
+              suffix="%"
+              min={scaleMin}
+              max={scaleMax}
+              value={scaleX ?? 100}
+              onChange={(v) => {
+                onScaleX(v)
+                if (scaleLinked && onScaleY) onScaleY(v)
+              }}
+            />
+            {!scaleLinked && onScaleY && (
+              <Slider
+                className="gs-row"
+                label="Scale Y"
+                suffix="%"
+                min={scaleMin}
+                max={scaleMax}
+                value={scaleY ?? 100}
+                onChange={onScaleY}
+              />
+            )}
+          </>
+        )}
         <Slider
           className="gs-row"
           label="Rotation"
@@ -71,36 +141,40 @@ function TransformFields({
           value={opacity}
           onChange={onOpacity}
         />
-        <Slider
-          className="mt-2 gs-row"
-          label="Anchor X"
-          suffix="%"
-          min={0}
-          max={100}
-          step={0.1}
-          value={ax}
-          onChange={(v) => onAnchor('anchorX', v)}
-        />
-        <Slider
-          className="gs-row"
-          label="Anchor Y"
-          suffix="%"
-          min={0}
-          max={100}
-          step={0.1}
-          value={ay}
-          onChange={(v) => onAnchor('anchorY', v)}
-        />
-        <Button
-          variant="soft"
-          full
-          className="mt-2 text-[10px]"
-          disabled={centered}
-          onClick={onResetAnchor}
-        >
-          <Crosshair className="h-3.5 w-3.5" />
-          Reset anchor to center
-        </Button>
+        {showAnchor && (
+          <>
+            <Slider
+              className="mt-2 gs-row"
+              label="Anchor X"
+              suffix="%"
+              min={0}
+              max={100}
+              step={0.1}
+              value={ax}
+              onChange={(v) => onAnchor('anchorX', v)}
+            />
+            <Slider
+              className="gs-row"
+              label="Anchor Y"
+              suffix="%"
+              min={0}
+              max={100}
+              step={0.1}
+              value={ay}
+              onChange={(v) => onAnchor('anchorY', v)}
+            />
+            <Button
+              variant="soft"
+              full
+              className="mt-2 text-[10px]"
+              disabled={centered}
+              onClick={onResetAnchor}
+            >
+              <Crosshair className="h-3.5 w-3.5" />
+              Reset anchor to center
+            </Button>
+          </>
+        )}
       </div>
     </Section>
   )
@@ -150,6 +224,28 @@ function BaseTransformPanel() {
     setSettings((current) => ({ ...current, [startKey]: value, [endKey]: value }))
   }
 
+  const filters = settings.imageFilters || []
+
+  const addFilter = (type) => {
+    const entry = createFilterEntry(type)
+    if (!entry) return
+    setSettings((s) => ({ ...s, imageFilters: [...(s.imageFilters || []), entry] }))
+  }
+
+  const updateFilter = (index, patch) => {
+    setSettings((s) => ({
+      ...s,
+      imageFilters: (s.imageFilters || []).map((f, i) => (i === index ? { ...f, ...patch } : f)),
+    }))
+  }
+
+  const removeFilter = (index) => {
+    setSettings((s) => ({
+      ...s,
+      imageFilters: (s.imageFilters || []).filter((_, i) => i !== index),
+    }))
+  }
+
   return (
     <>
       <Section title="Background" info="First uploaded image — sits on the artboard like a Photoshop background layer." open>
@@ -172,6 +268,16 @@ function BaseTransformPanel() {
         opacity={settings.opacityStart}
         onRotation={(v) => setBoth('rotateStart', 'rotateEnd', v)}
         onOpacity={(v) => setBoth('opacityStart', 'opacityEnd', v)}
+        posX={settings.xStart}
+        posY={settings.yStart}
+        onPosX={(v) => setBoth('xStart', 'xEnd', v)}
+        onPosY={(v) => setBoth('yStart', 'yEnd', v)}
+        scaleX={settings.scaleStart}
+        scaleY={settings.scaleEnd}
+        onScaleX={(v) => setBoth('scaleStart', 'scaleEnd', v)}
+        scaleLinked
+        posMin={-100}
+        posMax={100}
         anchorX={settings.anchorX}
         anchorY={settings.anchorY}
         onAnchor={(key, value) => update(key, value)}
@@ -180,6 +286,48 @@ function BaseTransformPanel() {
         rotationMin={-180}
         rotationMax={180}
       />
+
+      <Section
+        title="Konva Filters"
+        info="Official Konva.Filters — cache() + filters() on the base image. No custom liquify."
+        open
+      >
+        <SelectField
+          label="Add filter"
+          value=""
+          onChange={(v) => { if (v) addFilter(v) }}
+        >
+          <option value="">Choose…</option>
+          {KONVA_FILTER_TYPES.map((f) => (
+            <option key={f.type} value={f.type}>{f.label}</option>
+          ))}
+        </SelectField>
+        {filters.length === 0 && (
+          <p className="mt-2 text-[10px] text-zinc-600">No filters. Add Blur, Contrast, Grayscale, etc.</p>
+        )}
+        {filters.map((f, index) => {
+          const meta = KONVA_FILTER_TYPES.find((x) => x.type === f.type)
+          return (
+            <div key={`${f.type}-${index}`} className="mt-3 rounded-lg border border-white/[.06] p-2">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="text-[11px] font-semibold text-zinc-300">{meta?.label || f.type}</span>
+                <Button size="sm" variant="soft" onClick={() => removeFilter(index)}>Remove</Button>
+              </div>
+              {meta?.attr && (
+                <Slider
+                  className="gs-row"
+                  label={meta.attr}
+                  min={meta.min}
+                  max={meta.max}
+                  step={meta.step}
+                  value={f[meta.attr] ?? meta.default}
+                  onChange={(v) => updateFilter(index, { [meta.attr]: v })}
+                />
+              )}
+            </div>
+          )
+        })}
+      </Section>
     </>
   )
 }
@@ -238,30 +386,6 @@ function MaskPaintPanel() {
   )
 }
 
-function CensorPanel() {
-  const { censor, setCensor } = useStudio()
-
-  return (
-    <Section title="Censor / pixelate" info="Drag on the canvas to set the region." open>
-      <Switch
-        label="Show censor"
-        checked={censor.enabled}
-        onChange={(v) => setCensor((s) => ({ ...s, enabled: v }))}
-      />
-      <Slider
-        className="mt-2 gs-row"
-        label="Pixel block size"
-        suffix="px"
-        min={2}
-        max={100}
-        value={censor.pixelSize}
-        onChange={(v) => setCensor((s) => ({ ...s, pixelSize: v }))}
-      />
-      <Hint className="mt-3">Drag a box on the stage to place or move the pixelate region.</Hint>
-    </Section>
-  )
-}
-
 function SelectionOptionsPanel() {
   const {
     selectionTool, extractTolerance, setExtractTolerance,
@@ -300,6 +424,14 @@ function ElementTransformPanel({ el }) {
         opacity={el.opacity}
         onRotation={(v) => updateElement('rotation', v)}
         onOpacity={(v) => updateElement('opacity', v)}
+        posX={(el.x ?? 0) * 100}
+        posY={(el.y ?? 0) * 100}
+        onPosX={(v) => updateElement('x', v / 100)}
+        onPosY={(v) => updateElement('y', v / 100)}
+        scaleX={el.scaleX ?? 100}
+        scaleY={el.scaleY ?? 100}
+        onScaleX={(v) => updateElement('scaleX', v)}
+        onScaleY={(v) => updateElement('scaleY', v)}
         anchorX={el.anchorX}
         anchorY={el.anchorY}
         onAnchor={(key, value) => updateElement(key, value)}
@@ -381,6 +513,16 @@ function OverlayTransformPanel({ overlay }) {
       opacity={overlay.opacity}
       onRotation={(v) => updateOverlay('rotation', v)}
       onOpacity={(v) => updateOverlay('opacity', v)}
+      posX={overlay.x}
+      posY={overlay.y}
+      onPosX={(v) => updateOverlay('x', v)}
+      onPosY={(v) => updateOverlay('y', v)}
+      scaleX={overlay.scaleX ?? overlay.scale ?? 100}
+      scaleY={overlay.scaleY ?? overlay.scale ?? 100}
+      onScaleX={(v) => updateOverlay('scaleX', v)}
+      onScaleY={(v) => updateOverlay('scaleY', v)}
+      posMin={0}
+      posMax={100}
       anchorX={overlay.anchorX}
       anchorY={overlay.anchorY}
       onAnchor={(key, value) => updateOverlay(key, value)}
@@ -396,6 +538,25 @@ function TextPropertiesPanel({ layer }) {
 
   return (
     <>
+      <TransformFields
+        rotation={layer.rotation || 0}
+        opacity={layer.opacity ?? 100}
+        onRotation={(v) => updateText('rotation', v)}
+        onOpacity={(v) => updateText('opacity', v)}
+        posX={layer.x}
+        posY={layer.y}
+        onPosX={(v) => updateText('x', v)}
+        onPosY={(v) => updateText('y', v)}
+        scaleX={layer.scaleX ?? 100}
+        scaleY={layer.scaleY ?? 100}
+        onScaleX={(v) => updateText('scaleX', v)}
+        onScaleY={(v) => updateText('scaleY', v)}
+        posMin={0}
+        posMax={100}
+        showAnchor={false}
+        disabled={layer.locked}
+      />
+
       <Section title="Content & font" open>
         <Textarea value={layer.text} onChange={(e) => updateText('text', e.target.value)} className="h-20" placeholder="Type your text…" />
         <div className="mt-3">
@@ -489,8 +650,6 @@ export function InspectorAside({ floating = false }) {
     selectMode,
     setSelectMode,
     cancelSelection,
-    censorSelecting,
-    setCensorSelecting,
     poseRig, setPoseRig,
   } = useStudio()
 
@@ -502,14 +661,13 @@ export function InspectorAside({ floating = false }) {
   const jointsOpen = Boolean(poseRig.panelOpen && poseRig.joints?.length)
 
   const open = Boolean(
-    maskEditing || selectMode || censorSelecting || jointsOpen || artboardSelected
+    maskEditing || selectMode || jointsOpen || artboardSelected
     || textLayer
     || baseImageSelected || selectedLayers.length > 0 || Boolean(overlay),
   )
 
   let title = 'Properties'
-  if (censorSelecting) title = 'Censor'
-  else if (maskEditing) title = maskBrush?.mode === 'Hide' ? 'Erase' : 'Mask'
+  if (maskEditing) title = maskBrush?.mode === 'Hide' ? 'Erase' : 'Mask'
   else if (selectMode) title = 'Selection'
   else if (jointsOpen) title = 'Joint animation'
   else if (artboardSelected) title = 'Artboard'
@@ -525,7 +683,6 @@ export function InspectorAside({ floating = false }) {
     setSelectedOverlay(null)
     setSelectedText(null)
     setMaskEditing(false)
-    setCensorSelecting(false)
     setPoseRig((current) => ({ ...current, panelOpen: false }))
     if (selectMode) {
       cancelSelection()
@@ -534,8 +691,7 @@ export function InspectorAside({ floating = false }) {
   }
 
   let body = null
-  if (censorSelecting) body = <CensorPanel />
-  else if (maskEditing) body = <MaskPaintPanel />
+  if (maskEditing) body = <MaskPaintPanel />
   else if (selectMode) body = <SelectionOptionsPanel />
   else if (jointsOpen) body = <JointAnimPanel />
   else if (artboardSelected) body = <ArtboardPanel />

@@ -31,7 +31,7 @@ function visualCommon(id, name, extras = {}) {
 }
 
 /**
- * Migrate V1 elements / overlays / textLayers (+ optional source, censor, enhanced)
+ * Migrate V1 elements / overlays / textLayers (+ optional source, enhanced)
  * into layers map + rootLayerIds.
  *
  * Enhanced (MEGA): replace semantics — if enhancedLayer exists, background uses
@@ -294,26 +294,8 @@ export function migrateLayersFromV1(v1, ctx = {}) {
         strokeWidth: Number(tl.strokeWidth) || 0,
         letterSpacing: Number(tl.letterSpacing) || 0,
         lineHeight: Number(tl.lineHeight) || 1.1,
+        boxWidth: tl.boxWidth != null ? Number(tl.boxWidth) : null,
       },
-    }
-    rootLayerIds.push(id)
-  }
-
-  // censor → pixelate (not secure redaction)
-  const censor = v1?.censor
-  if (censor?.enabled) {
-    const id = 'layer-pixelate-censor'
-    layers[id] = {
-      ...visualCommon(id, 'Pixelate', { locked: false }),
-      type: 'pixelate',
-      region: {
-        kind: 'rect',
-        x: Number(censor.x) || 0,
-        y: Number(censor.y) || 0,
-        w: Number(censor.w) || 10,
-        h: Number(censor.h) || 10,
-      },
-      pixelSize: Number(censor.pixelSize) || 14,
     }
     rootLayerIds.push(id)
   }

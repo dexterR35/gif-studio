@@ -10,9 +10,9 @@ export const FIT_MODES = ['Contain', 'Cover', 'Stretch', 'Original size']
 export const QUALITY_PROFILES = ['Low / small', 'Balanced', 'High quality', 'Custom']
 
 export const QUALITY_PROFILE_MAP = {
-  'Low / small': { palette: 64, dither: false, lossy: 80, compressionMethod: 'Lossy LZW' },
-  Balanced: { palette: 128, dither: true, lossy: 30, compressionMethod: 'Lossy LZW' },
-  'High quality': { palette: 256, dither: true, lossy: 0, compressionMethod: 'Lossless' },
+  'Low / small': { palette: 64, lossy: 80, compressionMethod: 'Lossy LZW' },
+  Balanced: { palette: 128, lossy: 30, compressionMethod: 'Lossy LZW' },
+  'High quality': { palette: 256, lossy: 0, compressionMethod: 'Lossless' },
 }
 
 export const LAYER_MOTION_OPTIONS = [

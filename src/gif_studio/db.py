@@ -1,7 +1,7 @@
-"""PostgreSQL models for GIF Studio projects, assets, and jobs.
+"""PostgreSQL models for GIF Studio projects.
 
 Uses SQLAlchemy when installed and DATABASE_URL is set. Otherwise callers
-fall back to in-memory / local filesystem behaviour.
+fall back to in-memory / client-side behaviour.
 """
 
 from __future__ import annotations
@@ -12,13 +12,13 @@ from typing import Any
 from uuid import uuid4
 
 try:
-    from sqlalchemy import JSON, DateTime, Integer, String, Text, create_engine
+    from sqlalchemy import JSON, DateTime, String, create_engine
     from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
     _HAS_SA = True
 except ImportError:
     _HAS_SA = False
-    JSON = DateTime = Integer = String = Text = create_engine = None  # type: ignore
+    JSON = DateTime = String = create_engine = None  # type: ignore
     DeclarativeBase = object  # type: ignore
     Mapped = Any  # type: ignore
     mapped_column = sessionmaker = None  # type: ignore
@@ -38,36 +38,8 @@ if _HAS_SA:
         updated_at: Mapped[datetime] = mapped_column(
             DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
         )
-
-    class Asset(Base):
-        __tablename__ = "assets"
-
-        id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-        project_id: Mapped[str] = mapped_column(String(36), index=True)
-        kind: Mapped[str] = mapped_column(String(64), default="image")
-        storage_key: Mapped[str] = mapped_column(String(512))
-        filename: Mapped[str] = mapped_column(String(255), default="")
-        width: Mapped[int] = mapped_column(Integer, default=0)
-        height: Mapped[int] = mapped_column(Integer, default=0)
-        bytes: Mapped[int] = mapped_column(Integer, default=0)
-        created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-    class Job(Base):
-        __tablename__ = "jobs"
-
-        id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-        project_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-        kind: Mapped[str] = mapped_column(String(64))
-        status: Mapped[str] = mapped_column(String(32), default="queued")
-        progress: Mapped[int] = mapped_column(Integer, default=0)
-        result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-        error: Mapped[str | None] = mapped_column(Text, nullable=True)
-        created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-        updated_at: Mapped[datetime] = mapped_column(
-            DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
-        )
 else:
-    Base = Project = Asset = Job = None  # type: ignore
+    Base = Project = None  # type: ignore
 
 
 _engine = None

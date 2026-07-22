@@ -104,9 +104,7 @@ _DEFAULT_COOLDOWN_S: dict[str, float] = {
     "segment": 1.0,
     "detect": 1.5,
     "matte": 1.5,
-    "depth": 2.0,
     "upscale": 4.0,
-    "interpolate": 5.0,
     "export": 2.0,
 }
 
@@ -114,9 +112,7 @@ _AI_PATHS = {
     "/api/segment": ("ai", "smart_segment"),
     "/api/ai/detect": ("ai", "detect"),
     "/api/ai/matte": ("ai", "matte"),
-    "/api/ai/depth": ("ai", "depth"),
     "/api/ai/upscale": ("heavy", "upscale"),
-    "/api/ai/interpolate": ("heavy", "interpolate"),
 }
 
 _EXPORT_PATHS = {"/api/export", "/api/optimize-png"}

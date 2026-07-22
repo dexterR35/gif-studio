@@ -200,20 +200,6 @@
         }
       }
     },
-    "/api/ai/depth": {
-      "post": {
-        "operationId": "aiDepth",
-        "summary": "Depth map",
-        "responses": {
-          "200": {
-            "description": "Depth result",
-            "content": {
-              "application/json": { "schema": { "type": "object" } }
-            }
-          }
-        }
-      }
-    },
     "/api/ai/upscale": {
       "post": {
         "operationId": "aiUpscale",
@@ -221,20 +207,6 @@
         "responses": {
           "200": {
             "description": "Upscale result",
-            "content": {
-              "application/json": { "schema": { "type": "object" } }
-            }
-          }
-        }
-      }
-    },
-    "/api/ai/interpolate": {
-      "post": {
-        "operationId": "aiInterpolate",
-        "summary": "Frame interpolation",
-        "responses": {
-          "200": {
-            "description": "Interpolation result",
             "content": {
               "application/json": { "schema": { "type": "object" } }
             }

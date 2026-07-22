@@ -227,9 +227,7 @@ def model_device_policy() -> dict[str, dict[str, Any]]:
         "grounding_dino": row(prefers="cuda", cpu_ok=True),
         "sam2": row(prefers="cuda", cpu_ok=True),
         "sam3": row(prefers="cuda", cpu_ok=True, note="Heavy on CPU/RAM; gated weights"),
-        "depth": row(prefers="cuda", cpu_ok=True),
         "realesrgan": row(prefers="cuda", cpu_ok=True, note="Tiled; 5k / 20 GiB server caps"),
-        "rife": row(prefers="cuda", cpu_ok=True),
     }
 
 

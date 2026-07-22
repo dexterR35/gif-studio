@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Frame, ImageIcon, Layers3, Maximize2, Type, Shield, Grid3x3 } from 'lucide-react'
+import { Frame, ImageIcon, Layers3, Maximize2, Type, Shield } from 'lucide-react'
 import { EmptyState, LayerRow } from '../components/ui'
 import { cn } from '../lib/cn'
 import { useStudio } from '../context/studio-provider'
@@ -269,19 +269,6 @@ export function LayersAside({ floating = false }) {
           onDragEnd={endLayerDrag}
           dragging={isDragging('overlay', overlay.id)}
           dropTarget={isDropTarget('overlay', overlay.id)}
-          className="!rounded-md !p-1.5"
-        />
-      )
-    }
-    if (kind === 'pixelate') {
-      return (
-        <LayerRow
-          key={row.id}
-          icon={Grid3x3}
-          title={row.name}
-          subtitle="Pixelate (visual)"
-          visible={row.visible}
-          locked={row.locked}
           className="!rounded-md !p-1.5"
         />
       )

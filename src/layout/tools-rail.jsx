@@ -4,7 +4,6 @@ import {
   Eraser,
   FlipHorizontal2,
   FlipVertical2,
-  Grid3x3,
   Hexagon,
   Lasso,
   LoaderCircle,
@@ -19,7 +18,6 @@ import { cn } from '../lib/cn'
 const MOVE_TOOL = 'Move'
 const MASK_TOOL = 'Mask'
 const ERASE_TOOL = 'Erase'
-const CENSOR_TOOL = 'Censor'
 
 const SELECTION_TOOLS = [
   {
@@ -58,7 +56,7 @@ export function ToolsRail({ floating = false }) {
     setPlaying, setMobilePanel, maskEditing, setMaskEditing, studioLocked, segmenting,
     selectedElement, setToast, setBaseImageSelected,
     toggleFlip, rotateSelection, selectionFlip,
-    baseImageSelected, censorSelecting, setCensorSelecting,
+    baseImageSelected,
     beginMaskErase, maskBrush, setMaskBrush,
   } = useStudio()
 
@@ -66,15 +64,13 @@ export function ToolsRail({ floating = false }) {
   const revealing = maskEditing && maskBrush.mode !== 'Hide'
   const locked = Boolean(studioLocked)
 
-  const activeId = censorSelecting
-    ? CENSOR_TOOL
-    : erasing
-      ? ERASE_TOOL
-      : revealing
-        ? MASK_TOOL
-        : selectMode
-          ? selectionTool
-          : MOVE_TOOL
+  const activeId = erasing
+    ? ERASE_TOOL
+    : revealing
+      ? MASK_TOOL
+      : selectMode
+        ? selectionTool
+        : MOVE_TOOL
   const hasTarget = Boolean(selectedElement || baseImageSelected)
   const flipHint = selectedElement
     ? 'Flip selected layer'
@@ -84,7 +80,6 @@ export function ToolsRail({ floating = false }) {
     cancelSelection()
     setSelectMode(false)
     setMaskEditing(false)
-    setCensorSelecting(false)
   }
 
   const activateSelection = (toolId) => {
@@ -94,7 +89,6 @@ export function ToolsRail({ floating = false }) {
     setSelectionTool(toolId)
     setSelectMode(true)
     setMaskEditing(false)
-    setCensorSelecting(false)
     setPlaying(false)
     setMobilePanel(false)
     setBaseImageSelected(false)
@@ -109,7 +103,6 @@ export function ToolsRail({ floating = false }) {
     setSelectMode(false)
     setMaskBrush((current) => ({ ...current, mode: 'Reveal' }))
     setMaskEditing(true)
-    setCensorSelecting(false)
     setPlaying(false)
     setMobilePanel(false)
     setBaseImageSelected(false)
@@ -122,21 +115,9 @@ export function ToolsRail({ floating = false }) {
     }
     cancelSelection()
     setSelectMode(false)
-    setCensorSelecting(false)
     beginMaskErase(selectedElement)
     setMobilePanel(false)
     setToast('Erase brush — paint to delete wrong path; the box shrinks')
-  }
-
-  const activateCensor = () => {
-    cancelSelection()
-    setSelection(null)
-    setSelectionPoints([])
-    setSelectMode(false)
-    setMaskEditing(false)
-    setCensorSelecting(true)
-    setPlaying(false)
-    setMobilePanel(false)
   }
 
   return (
@@ -219,14 +200,6 @@ export function ToolsRail({ floating = false }) {
         active={activeId === MASK_TOOL}
         disabled={locked}
         onClick={activateMask}
-      />
-      <ToolButton
-        label="Censor / pixelate"
-        hint="Draw a pixelate region — options open in the properties panel"
-        icon={Grid3x3}
-        active={activeId === CENSOR_TOOL}
-        disabled={locked}
-        onClick={activateCensor}
       />
 
       {segmenting && (

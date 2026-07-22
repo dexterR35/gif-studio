@@ -1,5 +1,5 @@
 import { Bone, Crosshair, Eye, EyeOff, ImagePlus, Pause, Play } from 'lucide-react'
-import { useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button, CanvasViewport, StageHint, Switch, ZoomControls } from '../components/ui'
 import { ContextualTaskBar } from '../components/studio/contextual-task-bar'
 import { StudioTimeline } from '../components/studio/studio-timeline'
@@ -14,7 +14,8 @@ export function PreviewStage() {
     stageRef, stageStyle, startSelection, moveSelection, finishSelection,
     selectMode, selectionTool, completePathSelection, canvasRef, pixiCanvasRef, image, selection,
     selectionPoints, maskEditing, playing, elements, selectedElement,
-    textLayers, textBounds, selectedText, setSelectionPoints, cancelSelection, censorSelecting,
+    textLayers, selectedText, setSelectionPoints, cancelSelection,
+    applyKonvaSelection,
     setPlaying, progress, setProgress, actualDuration, frames, draw, frameDelays, actualFps,
     settings, setSettings, update, source, memory, canvasZoom, imageEdits,
     baseImageSelected, imageLocked, imageTransformBox, selectBaseImage, selectStageElement,
@@ -25,16 +26,44 @@ export function PreviewStage() {
     overlays, selectedOverlay, selectStageOverlay, overlayBounds,
     activeTab, updateElementById, updateOverlayById, updateTextById, goToWorkspace,
     gpuPreview, poseRig, setPoseRig,
+    setKonvaStageApi, konvaStageApiRef,
   } = useStudio()
 
   const canSelectLayers = activeTab === 'ai' || activeTab === 'motion' || activeTab === 'text'
-  const interacting = selectMode || maskEditing || censorSelecting
+  const interacting = selectMode || maskEditing
   const hasPoseJoints = Boolean(poseRig.restJoints?.length || poseRig.joints?.length)
   // Mesh warp runs on the 2D canvas whenever pose data exists (overlay toggle is separate).
   const poseMeshActive = hasPoseJoints
-  const showKonva = Boolean(image) && !playing && !poseMeshActive
+  const showKonva = Boolean(image) && !poseMeshActive
   const showPixi = Boolean(image) && playing && gpuPreview
   const selectedEl = elements.find((el) => el.id === selectedElement)
+  const [viewportSize, setViewportSize] = useState(null)
+  const [artboardView, setArtboardView] = useState({ x: 0, y: 0, scale: 1 })
+  const onViewportResize = useCallback((size) => {
+    setViewportSize((prev) => (
+      prev && prev.width === size.width && prev.height === size.height ? prev : size
+    ))
+  }, [])
+
+  // ZoomControls → Stage (preserve pan / center via setZoomPct).
+  useEffect(() => {
+    const api = konvaStageApiRef?.current
+    if (!api?.setZoomPct) return
+    const current = api.getZoomPan?.()?.zoomPct
+    if (current != null && Math.abs(current - canvasZoom.zoom) < 1) return
+    api.setZoomPct(canvasZoom.zoom)
+  }, [canvasZoom.zoom, konvaStageApiRef])
+
+  const handleKonvaZoomChange = useCallback((z, pan) => {
+    if (Math.abs((canvasZoom.zoom || 100) - z) >= 1) canvasZoom?.setZoom?.(z)
+    if (pan && (pan.x != null || pan.y != null)) {
+      setArtboardView({
+        x: pan.x,
+        y: pan.y,
+        scale: Math.max(0.05, (Number(z) || 100) / 100),
+      })
+    }
+  }, [canvasZoom])
 
   const selectedKind = useMemo(() => {
     if (selectedText != null) return 'text'
@@ -81,6 +110,12 @@ export function PreviewStage() {
         next.height = source.height
       }
       return next
+    })
+    // Center artboard in the viewport (fit), not raw 1:1 at origin.
+    requestAnimationFrame(() => {
+      const api = konvaStageApiRef?.current
+      if (api?.fit && viewportSize) api.fit(viewportSize.width, viewportSize.height)
+      else api?.resetZoom?.()
     })
   }
 
@@ -243,8 +278,16 @@ export function PreviewStage() {
             onZoomChange={canvasZoom.setZoom}
             onZoomIn={canvasZoom.zoomIn}
             onZoomOut={canvasZoom.zoomOut}
-            onFit={canvasZoom.fit}
-            onReset={canvasZoom.reset}
+            onFit={() => {
+              const api = konvaStageApiRef?.current
+              if (api?.fit && viewportSize) api.fit(viewportSize.width, viewportSize.height)
+              else if (api?.fit) api.fit()
+              else canvasZoom.fit()
+            }}
+            onReset={() => {
+              konvaStageApiRef?.current?.resetZoom?.()
+              canvasZoom.reset()
+            }}
             onFullscreen={canvasZoom.toggleFullscreen}
             isFullscreen={canvasZoom.isFullscreen}
           />
@@ -258,23 +301,99 @@ export function PreviewStage() {
           zoomApi={canvasZoom}
           contentWidth={settings.width}
           contentHeight={settings.height}
-          panEnabled
+          panEnabled={false}
+          wheelEnabled={false}
           className="min-h-[360px] p-0"
+          onViewportResize={onViewportResize}
           onBackgroundPointerDown={() => {
             if (!interacting) clearSelection()
           }}
         >
+          <div className="absolute inset-0 overflow-hidden">
+          {showKonva && (
+            <div className={cn(
+              'pointer-events-auto absolute inset-0 z-[2]',
+              maskEditing && 'pointer-events-none opacity-40',
+            )}
+            >
+              <StudioKonvaStage
+                width={settings.width}
+                height={settings.height}
+                sourceUrl={source?.url}
+                imageVisible={imageVisible}
+                imageTransformBox={imageTransformBox}
+                imageAnchor={{ x: settings.anchorX ?? 50, y: settings.anchorY ?? 50 }}
+                imageLocked={imageLocked}
+                imageEdits={imageEdits}
+                enhancedUrl={enhancedLayer?.url}
+                enhancedVisible={enhancedLayer?.visible !== false}
+                enhancedTransformBox={enhancedTransformBox}
+                background={settings.background}
+                transparent={settings.transparent}
+                elements={elements}
+                overlays={overlays}
+                textLayers={textLayers}
+                selectedKind={selectedKind}
+                selectedId={selectedId}
+                selectedIds={selectedElements}
+                interactive={!selectMode && !maskEditing && canSelectLayers && !playing}
+                selectMode={selectMode}
+                selectionTool={selectionTool}
+                onSelectionComplete={applyKonvaSelection}
+                onSelectionDraftChange={setSelectionPoints}
+                spacePan={canvasZoom.spaceDown}
+                viewportSize={viewportSize}
+                playing={playing}
+                progress={progress}
+                motionSettings={{
+                  preset: settings.preset,
+                  amplitude: settings.amplitude,
+                  speed: settings.speed ?? 1,
+                  duration: settings.duration,
+                }}
+                imageFilters={settings.imageFilters || []}
+                selection={interacting ? selection : null}
+                selectionPoints={interacting ? selectionPoints : []}
+                poseJoints={applyJointKeys(
+                  poseRig.restJoints?.length ? poseRig.restJoints : (poseRig.joints || []),
+                  poseRig.jointKeys,
+                  progress,
+                )}
+                showPose={Boolean(poseRig.visible && hasPoseJoints)}
+                overlayBounds={overlayBounds}
+                onStageApi={setKonvaStageApi}
+                onZoomChange={handleKonvaZoomChange}
+                onSelect={handleKonvaSelect}
+                onTransformImage={handleImageTransform}
+                onTransformElement={(id, patch) => {
+                  Object.entries(patch).forEach(([key, value]) => updateElementById(id, key, value))
+                }}
+                onTransformOverlay={(id, patch) => updateOverlayById(id, patch)}
+                onTransformText={(id, patch) => updateTextById?.(id, patch)}
+              />
+            </div>
+          )}
+
           <div
             ref={stageRef}
-            style={stageStyle}
-            onPointerDown={onStagePointerDown}
-            onPointerMove={(e) => { moveAnchorDrag(e); moveSelection(e) }}
-            onPointerUp={(e) => { endAnchorDrag(e); finishSelection(e) }}
-            onDoubleClick={() => {
-              if (selectMode && (selectionTool === 'Polygonal Lasso' || selectionTool === 'Pen Path')) completePathSelection()
+            style={showKonva ? {
+              position: 'absolute',
+              left: artboardView.x,
+              top: artboardView.y,
+              width: settings.width,
+              height: settings.height,
+              transform: `scale(${artboardView.scale})`,
+              transformOrigin: '0 0',
+            } : stageStyle}
+            onPointerDown={(e) => {
+              if (maskEditing) onStagePointerDown(e)
             }}
+            onPointerMove={(e) => { moveAnchorDrag(e); if (maskEditing) moveSelection(e) }}
+            onPointerUp={(e) => { endAnchorDrag(e); if (maskEditing) finishSelection(e) }}
             className={cn(
-              'card-shadow relative h-full w-full rounded-[4px] ring-1 ring-white/10 overflow-hidden',
+              'card-shadow relative overflow-hidden rounded-[4px] ring-1 ring-white/10',
+              showKonva ? 'z-[1]' : 'h-full w-full',
+              showKonva && !maskEditing && !playing && 'pointer-events-none',
               interacting && 'cursor-crosshair ring-2 ring-acid',
               canvasZoom.spaceDown && 'cursor-grab',
             )}
@@ -300,50 +419,6 @@ export function PreviewStage() {
             />
           )}
 
-          {showKonva && (
-            <div className={cn('absolute inset-0 z-[2]', interacting && 'pointer-events-none opacity-40')}>
-              <StudioKonvaStage
-                width={settings.width}
-                height={settings.height}
-                sourceUrl={source?.url}
-                imageVisible={imageVisible}
-                imageTransformBox={imageTransformBox}
-                imageAnchor={{ x: settings.anchorX ?? 50, y: settings.anchorY ?? 50 }}
-                imageLocked={imageLocked}
-                imageEdits={imageEdits}
-                enhancedUrl={enhancedLayer?.url}
-                enhancedVisible={enhancedLayer?.visible !== false}
-                enhancedTransformBox={enhancedTransformBox}
-                background={settings.background}
-                transparent={settings.transparent}
-                elements={elements}
-                overlays={overlays}
-                textLayers={textLayers}
-                selectedKind={selectedKind}
-                selectedId={selectedId}
-                selectedIds={selectedElements}
-                interactive={!interacting && canSelectLayers}
-                selection={interacting ? selection : null}
-                selectionPoints={interacting ? selectionPoints : []}
-                poseJoints={applyJointKeys(
-                  poseRig.restJoints?.length ? poseRig.restJoints : (poseRig.joints || []),
-                  poseRig.jointKeys,
-                  progress,
-                )}
-                showPose={Boolean(poseRig.visible && hasPoseJoints)}
-                overlayBounds={overlayBounds}
-                textBounds={textBounds}
-                onSelect={handleKonvaSelect}
-                onTransformImage={handleImageTransform}
-                onTransformElement={(id, patch) => {
-                  Object.entries(patch).forEach(([key, value]) => updateElementById(id, key, value))
-                }}
-                onTransformOverlay={(id, patch) => updateOverlayById(id, patch)}
-                onTransformText={(id, patch) => updateTextById?.(id, patch)}
-              />
-            </div>
-          )}
-
           {!image && (
             <div className="absolute inset-0 z-10 grid place-items-center bg-zinc-900 px-6 text-center">
               <div>
@@ -362,17 +437,24 @@ export function PreviewStage() {
                   : 'Click to place selection anchors'}
             </StageHint>
           )}
-          {selectMode && (selectionTool === 'Polygonal Lasso' || selectionTool === 'Pen Path') && selectionPoints.length > 0 && (
+          {selectMode && (selectionTool === 'Polygonal Lasso' || selectionTool === 'Pen Path') && (
             <div
               className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 gap-2 rounded-xl border border-white/10 bg-black/80 p-2 shadow-xl backdrop-blur"
               onPointerDown={(event) => event.stopPropagation()}
             >
-              <Button size="sm" className="rounded-lg text-[9px] font-bold" onClick={() => setSelectionPoints((points) => points.slice(0, -1))}>Undo point</Button>
-              <Button variant="primary" size="sm" className="rounded-lg text-[9px] font-bold" disabled={selectionPoints.length < 3} onClick={completePathSelection}>Complete</Button>
+              <Button size="sm" className="rounded-lg text-[9px] font-bold" onClick={() => konvaStageApiRef?.current?.undoSelectionPoint?.()}>Undo point</Button>
+              <Button
+                variant="primary"
+                size="sm"
+                className="rounded-lg text-[9px] font-bold"
+                disabled={(selectionPoints?.length || 0) < 3}
+                onClick={() => konvaStageApiRef?.current?.finishSelectionDraft?.()}
+              >
+                Complete
+              </Button>
               <Button size="sm" className="rounded-lg text-[9px] font-bold" onClick={cancelSelection}>Cancel</Button>
             </div>
           )}
-          {censorSelecting && !selection && <StageHint>Drag over the area to censor</StageHint>}
           {maskEditing && (
             <StageHint>
               Brush on the cutout — erase stray hair / hand; box shrinks when you release
@@ -420,6 +502,7 @@ export function PreviewStage() {
             )
           })}
         </div>
+          </div>
       </CanvasViewport>
       </div>
 

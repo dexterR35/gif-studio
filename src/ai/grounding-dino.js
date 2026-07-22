@@ -1,9 +1,9 @@
 /**
- * Text / class detect — SAM3 (text→mask) or Grounding DINO + SAM2 refine.
+ * Text / class detect — SAM3 (text→mask) or Grounding DINO → Real-ESRGAN → SAM2 → RGBA.
  *
- * Roles (not a stack):
- * - sam3: replaces DINO + SAM2 refine
- * - grounding_dino: open-vocab box → SAM2 contour
+ * Roles (not a stack with SAM3):
+ * - sam3: replaces DINO + upscale + SAM2 refine
+ * - grounding_dino: open-vocab box → upscale → SAM2 contour cutout
  */
 import { getOnnxSession, imageDataToFloatTensor } from './onnx'
 
@@ -36,7 +36,16 @@ async function viaServer(imageBlob, prompt, {
 }
 
 /**
- * @returns {{ boxes: Array<{x,y,w,h,score,label}>, engine: string, mask_png_base64?: string }}
+ * @returns {{
+ *   boxes: Array<{x,y,w,h,score,label}>,
+ *   engine: string,
+ *   mask_png_base64?: string,
+ *   cutout_png_base64?: string,
+ *   rect?: {x,y,width,height},
+ *   upscale_scale_x?: number,
+ *   upscale_scale_y?: number,
+ *   pipeline?: string,
+ * }}
  */
 export async function detectWithGroundingDino({
   imageCanvas,

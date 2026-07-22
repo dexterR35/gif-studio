@@ -92,7 +92,6 @@ export function projectToEditorView(project, opts = {}) {
   const overlays = []
   const textLayers = []
   let enhancedLayer = previous.enhancedLayer || null
-  let censor = previous.censor || empty.censor
 
   for (const id of order) {
     const layer = layers[id]
@@ -115,6 +114,7 @@ export function projectToEditorView(project, opts = {}) {
         strokeWidth: Number(style.strokeWidth) || 0,
         letterSpacing: Number(style.letterSpacing) || 0,
         lineHeight: Number(style.lineHeight) || 1.1,
+        boxWidth: style.boxWidth != null ? Number(style.boxWidth) : null,
         x: Number(t.x) || 50,
         y: Number(t.y) || 50,
         scaleX: scalePercent(t.scaleX, 100),
@@ -130,18 +130,8 @@ export function projectToEditorView(project, opts = {}) {
       continue
     }
 
-    if (layer.type === 'pixelate') {
-      const region = layer.region || {}
-      censor = {
-        enabled: true,
-        x: Number(region.x) || 0,
-        y: Number(region.y) || 0,
-        w: Number(region.w) || 10,
-        h: Number(region.h) || 10,
-        pixelSize: Number(layer.pixelSize) || 14,
-      }
-      continue
-    }
+    // Drop legacy pixelate / censor layers — feature removed.
+    if (layer.type === 'pixelate') continue
 
     if (layer.type !== 'raster') continue
 
@@ -249,7 +239,6 @@ export function projectToEditorView(project, opts = {}) {
     overlays: mergedOverlays,
     textLayers,
     enhancedLayer,
-    censor,
     fontOptions: project.extensions?.legacyFontOptions || previous.fontOptions || empty.fontOptions,
   }
 }

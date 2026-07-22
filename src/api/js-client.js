@@ -14,9 +14,7 @@ export const API_PATHS = {
   export: '/api/export',
   aiMatte: '/api/ai/matte',
   aiDetect: '/api/ai/detect',
-  aiDepth: '/api/ai/depth',
   aiUpscale: '/api/ai/upscale',
-  aiInterpolate: '/api/ai/interpolate',
 }
 
 /**
