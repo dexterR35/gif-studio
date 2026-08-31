@@ -7,9 +7,9 @@ Image Studio is a local-first web editor for preparing still images. It combines
 - Opens PNG, JPEG, and WebP images.
 - Keeps the base image, extracted elements, enhancements, overlays, and text as editable layers.
 - Supports crop-aware resizing, rotation, flipping, opacity, locking, ordering, and canvas sizing.
-- Provides box, lasso, brush, soft-matte, and prompt-assisted selection tools.
+- Provides box, lasso, brush, one-click object cut, soft-matte, and prompt-assisted selection tools.
 - Removes backgrounds and unwanted regions while preserving the original source.
-- Upscales selected images with local model runners when available.
+- Upscales selected images with fixed local Real-ESRGAN ×2 or ×4 checkpoints.
 - Saves project documents and restores the static composition.
 - Downloads the full artboard or an enhanced layer as PNG.
 - Optionally optimizes PNG output through the local API.
@@ -41,8 +41,10 @@ To install the optional local AI stack and its essential weights:
 npm run setup
 ```
 
-Prompt-assisted selection runs only on the local API with Grounding DINO
-Swin-B and SAM 2.1 Large. The editor does not expose model selectors.
+The left-rail **Point cut** tool sends one canvas click to SAM 2.1 Large and
+places the contour-masked object into a new layer. Prompt selection uses the
+fixed backend path Grounding DINO Swin-B → SAM 2.1 Large → BiRefNet. The editor
+does not expose model selectors.
 
 ## Common commands
 
@@ -70,6 +72,7 @@ The layer panel, artboard controls, inspector, history, autosave, and project pe
 The FastAPI service provides:
 
 - health and capability discovery;
+- click-point and text-prompt contour selection;
 - smart segmentation and local model inference;
 - soft-matte background removal;
 - content-aware image cleanup;

@@ -139,10 +139,9 @@ function modelsReady() {
     path.join(root, 'models', 'groundingdino', 'bert-base-uncased', 'config.json'),
     path.join(root, 'models', 'groundingdino', 'bert-base-uncased', 'model.safetensors'),
     path.join(root, 'models', 'groundingdino', 'bert-base-uncased', 'vocab.txt'),
-    path.join(root, 'models', 'realesrgan', 'RealESRGAN_x4plus.pth'),
+    path.join(root, 'models', 'matte', 'birefnet-general.onnx'),
     path.join(root, 'models', 'realesrgan', 'RealESRGAN_x2plus.pth'),
-    path.join(root, 'models', 'realesrgan', 'ESRGAN_SRx4_DF2KOST_official-ff704c30.pth'),
-    path.join(root, 'models', 'realesrgan', 'RealESRGAN_x4plus_anime_6B.pth'),
+    path.join(root, 'models', 'realesrgan', 'RealESRGAN_x4plus.pth'),
     path.join(root, 'models', 'lama', 'big-lama.pt'),
   ]
   return markers.every((file) => existsSync(file))

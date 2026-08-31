@@ -1,9 +1,10 @@
 export { getOnnxSession, probeOnnx, imageDataToFloatTensor, ort } from './onnx'
 export {
   selectByPrompt,
+  selectAtPoint,
   probePromptSelection,
 } from './prompt-selection'
-export { upscaleWithRealESRGAN, probeRealESRGAN, realesrganConfigured } from './realesrgan'
+export { upscaleWithRealESRGAN, probeRealESRGAN } from './realesrgan'
 export { matteWithModel, probeMatte } from './matte'
 export {
   inpaintRegion,

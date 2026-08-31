@@ -4,6 +4,7 @@ import { Button, CanvasViewport, StageHint, ZoomControls } from '../components/u
 import { ContextualTaskBar } from '../components/studio/contextual-task-bar'
 import { StudioKonvaStage } from '../engine/konva-editor'
 import { MAX_CANVAS, nice, clampNice } from '../lib/format'
+import { fittedImageNorm } from '../lib/image-space'
 import { useStudio } from '../context/studio-provider'
 import { cn } from '../lib/cn'
 
@@ -147,22 +148,7 @@ export function PreviewStage() {
     // Reverse imageTransformBox: derive the static offsets and scale from fitted size.
     const iw = source?.width || settings.width
     const ih = source?.height || settings.height
-    const fit = settings.fit
-    let udw
-    let udh
-    if (fit === 'Stretch') {
-      udw = 1
-      udh = 1
-    } else if (fit === 'Original size') {
-      udw = iw / settings.width
-      udh = ih / settings.height
-    } else {
-      const contain = Math.min(settings.width / iw, settings.height / ih)
-      const cover = Math.max(settings.width / iw, settings.height / ih)
-      const base = fit === 'Cover' ? cover : contain
-      udw = (iw * base) / settings.width
-      udh = (ih * base) / settings.height
-    }
+    const { w: udw, h: udh } = fittedImageNorm(settings.fit, iw, ih, settings.width, settings.height)
     const scalePct = clampNice((boxW / Math.max(0.02, udw)) * 100, 5, 400, 1)
     const xOff = nice((centerX - 0.5) * 100, 1)
     const yOff = nice((centerY - 0.5) * 100, 1)
@@ -369,7 +355,9 @@ export function PreviewStage() {
                   : selectionTool === 'Freehand Lasso'
                     ? 'Draw around what to remove — then press Cut'
                     : 'Click anchors, Complete, then press Cut')
-                : selectionTool === 'Rectangle'
+                : selectionTool === 'Object Cut'
+                  ? 'Click the object to cut its contour into a new layer'
+                  : selectionTool === 'Rectangle'
                   ? 'Drag a box around the object'
                   : selectionTool === 'Freehand Lasso'
                     ? 'Draw around the object continuously'

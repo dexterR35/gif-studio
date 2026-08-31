@@ -200,6 +200,36 @@
         }
       }
     },
+    "/api/ai/point-cut": {
+      "post": {
+        "operationId": "aiPointCut",
+        "summary": "Cut the object under a canvas click",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["image", "x", "y"],
+                "properties": {
+                  "image": { "type": "string", "format": "binary" },
+                  "x": { "type": "number", "description": "Canvas-space pixel X" },
+                  "y": { "type": "number", "description": "Canvas-space pixel Y" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Contour-masked RGBA cutout",
+            "content": {
+              "application/json": { "schema": { "type": "object" } }
+            }
+          }
+        }
+      }
+    },
     "/api/ai/detect": {
       "post": {
         "operationId": "aiDetect",
@@ -233,12 +263,27 @@
     "/api/ai/upscale": {
       "post": {
         "operationId": "aiUpscale",
-        "summary": "Upscale",
+        "summary": "Upscale with fixed Real-ESRGAN ×2 or ×4",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["image"],
+                "properties": {
+                  "image": { "type": "string", "format": "binary" },
+                  "scale": { "type": "integer", "enum": [2, 4], "default": 2 }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
-            "description": "Upscale result",
+            "description": "Upscaled PNG",
             "content": {
-              "application/json": { "schema": { "type": "object" } }
+              "image/png": { "schema": { "type": "string", "format": "binary" } }
             }
           }
         }

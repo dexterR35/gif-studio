@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import os
 import tempfile
+import warnings
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -30,6 +32,9 @@ from .paths import ensure_sys_path, models_dir, third_party_dir, torch_device
 def _ensure_groundingdino_on_path() -> None:
     import importlib.util
 
+    matplotlib_cache = models_dir() / ".cache" / "matplotlib"
+    matplotlib_cache.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("MPLCONFIGDIR", str(matplotlib_cache))
     if importlib.util.find_spec("groundingdino") is not None:
         return
     local = third_party_dir() / "GroundingDINO"
@@ -160,7 +165,16 @@ def pick_best_box(boxes: list[dict[str, Any]], prompt: str) -> dict[str, Any] | 
 def _patch_transformers_for_groundingdino() -> None:
     """Compat shims so official GroundingDINO works with transformers ≥5."""
     import torch
-    from transformers import BertModel
+    from transformers import BertModel, PretrainedConfig
+
+    use_return_dict = getattr(PretrainedConfig, "use_return_dict", None)
+    getter = getattr(use_return_dict, "fget", None)
+    if getter is not None and not getattr(getter, "_image_studio_patched", False):
+        def get_use_return_dict(self):
+            return self.return_dict
+
+        get_use_return_dict._image_studio_patched = True  # type: ignore[attr-defined]
+        PretrainedConfig.use_return_dict = property(get_use_return_dict)
 
     if not hasattr(BertModel, "get_head_mask"):
         def get_head_mask(self, head_mask, num_hidden_layers, is_attention_chunked=False):
@@ -180,22 +194,55 @@ def _patch_transformers_for_groundingdino() -> None:
 
         BertModel.get_head_mask = get_head_mask  # type: ignore[method-assign]
 
-    orig = getattr(BertModel, "get_extended_attention_mask", None)
-    if orig is not None and not getattr(orig, "_image_studio_patched", False):
+    current = getattr(BertModel, "get_extended_attention_mask", None)
+    if current is not None and not getattr(current, "_image_studio_patched", False):
         def get_extended_attention_mask(self, attention_mask, input_shape, device=None, dtype=None, *args, **kwargs):
             if isinstance(device, torch.dtype) and dtype is None:
                 dtype = device
-                device = None
-            try:
-                return orig(self, attention_mask, input_shape, device=device, dtype=dtype, **kwargs)
-            except TypeError:
-                try:
-                    return orig(self, attention_mask, input_shape, dtype=dtype or self.dtype)
-                except TypeError:
-                    return orig(self, attention_mask, input_shape)
+            target_dtype = dtype or self.dtype
+            if attention_mask.dim() == 3:
+                extended = attention_mask[:, None, :, :]
+            elif attention_mask.dim() == 2:
+                if getattr(self.config, "is_decoder", False):
+                    from transformers.modeling_utils import ModuleUtilsMixin
+
+                    extended = ModuleUtilsMixin.create_extended_attention_mask_for_decoder(
+                        input_shape,
+                        attention_mask,
+                    )
+                else:
+                    extended = attention_mask[:, None, None, :]
+            else:
+                raise ValueError(
+                    f"Wrong attention mask shape {tuple(attention_mask.shape)} "
+                    f"for input shape {tuple(input_shape)}"
+                )
+            extended = extended.to(dtype=target_dtype)
+            return (1.0 - extended) * torch.finfo(target_dtype).min
 
         get_extended_attention_mask._image_studio_patched = True  # type: ignore[attr-defined]
         BertModel.get_extended_attention_mask = get_extended_attention_mask  # type: ignore[method-assign]
+
+
+@contextmanager
+def _quiet_expected_transformers_load():
+    """Hide only Transformers' known BERT pretraining-head load report."""
+    try:
+        from transformers.utils import logging as hf_logging
+    except ImportError:
+        yield
+        return
+
+    previous_verbosity = hf_logging.get_verbosity()
+    progress_was_enabled = hf_logging.is_progress_bar_enabled()
+    hf_logging.set_verbosity_error()
+    hf_logging.disable_progress_bar()
+    try:
+        yield
+    finally:
+        hf_logging.set_verbosity(previous_verbosity)
+        if progress_was_enabled:
+            hf_logging.enable_progress_bar()
 
 
 def _config_with_local_bert(cfg_path: Path) -> Path:
@@ -217,6 +264,11 @@ def _config_with_local_bert(cfg_path: Path) -> Path:
             break
     else:
         patched = patched.rstrip() + f'\ntext_encoder_type = "{local}"\n'
+    patched = patched.replace("use_checkpoint = True", "use_checkpoint = False")
+    patched = patched.replace(
+        "use_transformer_ckpt = True",
+        "use_transformer_ckpt = False",
+    )
     out = cfg_path.with_name(cfg_path.stem + "_local.py")
     out.write_text(patched, encoding="utf-8")
     return out
@@ -239,10 +291,11 @@ def _official_model():
     from groundingdino.util.inference import load_model
 
     device = str(torch_device())
-    try:
-        model = load_model(str(cfg_local), str(ckpt), device=device)
-    except TypeError:
-        model = load_model(str(cfg_local), str(ckpt))
+    with _quiet_expected_transformers_load():
+        try:
+            model = load_model(str(cfg_local), str(ckpt), device=device)
+        except TypeError:
+            model = load_model(str(cfg_local), str(ckpt))
     model = model.to(device)
     model.eval()
     return model, "GroundingDINO-B", device
@@ -299,14 +352,20 @@ def _detect_official(
         except OSError:
             pass
 
-    boxes, logits, phrases = predict(
-        model=model,
-        image=image_tensor,
-        caption=caption,
-        box_threshold=box_threshold,
-        text_threshold=text_threshold,
-        device=device,
-    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*torch\.cuda\.amp\.autocast.*is deprecated.*",
+            category=FutureWarning,
+        )
+        boxes, logits, phrases = predict(
+            model=model,
+            image=image_tensor,
+            caption=caption,
+            box_threshold=box_threshold,
+            text_threshold=text_threshold,
+            device=device,
+        )
 
     # annotate() converts cxcywh-normalized → xyxy pixels
     h, w = image_source.shape[:2]

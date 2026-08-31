@@ -8,9 +8,11 @@ from __future__ import annotations
 __all__ = [
     "detect_with_grounding_dino",
     "grounding_dino_ready",
+    "normalize_scale",
     "realesrgan_ready",
     "sam2_ready",
     "segment_with_sam2",
+    "upscale_available",
     "upscale_with_realesrgan",
 ]
 
@@ -27,9 +29,14 @@ def __getattr__(name: str):
             "grounding_dino_ready": grounding_dino_ready,
             "detect_with_grounding_dino": detect_with_grounding_dino,
         }[name]
-    if name in ("realesrgan_ready", "upscale_with_realesrgan", "upscale_available", "normalize_model"):
+    if name in (
+        "normalize_scale",
+        "realesrgan_ready",
+        "upscale_available",
+        "upscale_with_realesrgan",
+    ):
         from .realesrgan_runner import (
-            normalize_model,
+            normalize_scale,
             realesrgan_ready,
             upscale_available,
             upscale_with_realesrgan,
@@ -38,7 +45,7 @@ def __getattr__(name: str):
         return {
             "realesrgan_ready": realesrgan_ready,
             "upscale_available": upscale_available,
-            "normalize_model": normalize_model,
+            "normalize_scale": normalize_scale,
             "upscale_with_realesrgan": upscale_with_realesrgan,
         }[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

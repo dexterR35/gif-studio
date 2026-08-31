@@ -12,7 +12,6 @@ import { InspectorAside } from './inspector-aside'
 import { LayersAside } from './layers-aside'
 import { ProjectAside } from './project-aside'
 import { PreviewStage } from './preview-stage'
-import { SelectDetectAside } from './select-detect-aside'
 import { StudioHeader } from './studio-header'
 import { ToolsRail } from './tools-rail'
 import { WorkspaceNav } from './workspace-nav'
@@ -30,7 +29,7 @@ export function StudioLayout() {
     artboardSelected, baseImageSelected, selectedElements, clearLayerSelection, selectedText, setSelectedText,
     selectedOverlay, setSelectedOverlay,
     maskEditing, setMaskEditing, selectMode, setSelectMode, cancelSelection,
-    activeTab, image,
+    activeTab,
     studioLocked, busyLabel, scaleBusy, downloadBusy, segmenting,
   } = useStudio()
 
@@ -41,7 +40,6 @@ export function StudioLayout() {
   const isFocus = FOCUS_TABS.has(activeTab)
   const hasLayers = LAYER_WORKSPACES.has(activeTab)
   const showTools = activeTab === 'ai'
-  const showSelectDetect = !isFocus && Boolean(image)
   const inspectorOpen = hasLayers && (
     maskEditing || selectMode || artboardSelected
     || Boolean(selectedText) || baseImageSelected || selectedElements.length > 0 || Boolean(selectedOverlay)
@@ -113,7 +111,6 @@ export function StudioLayout() {
         {!isFocus && (
           <>
             {!floatingTools && <ProjectAside />}
-            {showSelectDetect && <SelectDetectAside />}
             {showTools && !floatingTools && <ToolsRail />}
             {(mobilePanel || inspectorOpen) && (
               <button

@@ -17,6 +17,7 @@ _GIB = 1024**3
 _ROUTE_RESERVE_GIB: dict[str, float] = {
     "smart_segment": 0.75,
     "segment": 1.0,
+    "point_cut": 1.25,
     "detect": 1.25,
     "matte": 0.75,
     "inpaint": 1.5,
@@ -141,7 +142,7 @@ def check_memory_for_route(route: str) -> tuple[bool, bool, str]:
         )
 
     # Heavy CUDA routes also need a little free VRAM (models may already be resident).
-    if route in {"upscale", "detect", "segment", "inpaint", "smart_segment"}:
+    if route in {"upscale", "detect", "point_cut", "segment", "inpaint", "smart_segment"}:
         vram = available_vram_bytes()
         min_vram = int(_env_float("IMAGE_STUDIO_MIN_FREE_VRAM_GIB", 0.35) * _GIB)
         if vram is not None and vram < min_vram:
@@ -175,12 +176,14 @@ def unload_inference_models() -> list[str]:
         from .ai import (
             grounding_dino_runner,
             lama_runner,
+            matte_runner,
             realesrgan_runner,
             sam2_runner,
         )
 
         _safe_cache_clear(sam2_runner._predictor, "sam2", notes)
         _safe_cache_clear(grounding_dino_runner._official_model, "dino_official", notes)
+        _safe_cache_clear(matte_runner._birefnet_session, "birefnet", notes)
         _safe_cache_clear(realesrgan_runner._realesrganer, "realesrgan", notes)
         _safe_cache_clear(realesrgan_runner._spandrel_model, "spandrel", notes)
         _safe_cache_clear(lama_runner._load_lama, "lama", notes)

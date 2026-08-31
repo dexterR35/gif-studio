@@ -6,16 +6,8 @@ available. Missing engines raise — no substitute algorithms.
 
 from __future__ import annotations
 
-import os
+from math import isfinite
 from typing import Any
-
-
-def _env_model(name: str) -> str | None:
-    return os.environ.get(name) or None
-
-
-def default_rembg_model() -> str:
-    return os.environ.get("IMAGE_STUDIO_AI_MODEL") or os.environ.get("AI_MODEL") or "isnet-general-use"
 
 
 def sam2_available() -> bool:
@@ -36,37 +28,22 @@ def grounding_dino_available() -> bool:
         return False
 
 
-def matte_available(model: str | None = None) -> bool:
+def matte_available() -> bool:
     try:
         from .ai.matte_runner import matte_ready
 
-        return matte_ready(model)
+        return matte_ready()
     except Exception:
-        return rembg_available()
+        return False
 
 
 def realesrgan_available() -> bool:
     try:
         from .ai.realesrgan_runner import upscale_available
 
-        return any(
-            upscale_available(model, scale)
-            for model, scale in (
-                ("realesrgan", 2),
-                ("realesrgan", 4),
-                ("esrgan", 4),
-                ("a-esrgan", 4),
-            )
-        )
+        return any(upscale_available(scale) for scale in (2, 4))
     except Exception:
-        return bool(_env_model("REALESRGAN_MODEL") or _env_model("IMAGE_STUDIO_REALESRGAN"))
-
-
-def gfpgan_available() -> bool:
-    from .ai.paths import models_dir
-
-    path = models_dir() / "gfpgan" / "GFPGANv1.4.pth"
-    return path.exists() and path.stat().st_size > 1024
+        return False
 
 
 def rembg_available() -> bool:
@@ -87,7 +64,7 @@ def _rgba_cutout_from_mask(
     bgr,
     mask_png_b64: str,
 ) -> dict[str, Any]:
-    """Apply a binary mask and return a cropped transparent RGBA layer."""
+    """Apply a hard or soft mask and return a contour-cropped RGBA layer."""
     import base64
 
     import cv2
@@ -110,11 +87,11 @@ def _rgba_cutout_from_mask(
     if mask.shape[0] != h or mask.shape[1] != w:
         mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
 
-    binary = (mask > 127).astype(np.uint8)
+    alpha = mask.astype(np.uint8)
     rgba = cv2.cvtColor(bgr, cv2.COLOR_BGR2BGRA)
-    rgba[:, :, 3] = binary * 255
+    rgba[:, :, 3] = alpha
 
-    ys, xs = np.where(binary > 0)
+    ys, xs = np.where(alpha > 2)
     if xs.size == 0:
         raise RuntimeError("SAM mask was empty")
 
@@ -137,6 +114,102 @@ def _rgba_cutout_from_mask(
     }
 
 
+def _encode_mask(mask) -> str:
+    import base64
+
+    from .ai.paths import encode_png
+
+    return base64.b64encode(encode_png(mask)).decode("ascii")
+
+
+def _decode_mask(mask_png_b64: str):
+    import base64
+
+    import cv2
+    import numpy as np
+
+    decoded = cv2.imdecode(
+        np.frombuffer(base64.b64decode(mask_png_b64), dtype=np.uint8),
+        cv2.IMREAD_GRAYSCALE,
+    )
+    if decoded is None:
+        raise RuntimeError("Could not decode selection mask")
+    return decoded
+
+
+def _isolate_component_at_point(mask_png_b64: str, point: tuple[float, float]) -> str:
+    """Discard disconnected SAM islands and keep the component under the click."""
+    import cv2
+    import numpy as np
+
+    mask = _decode_mask(mask_png_b64)
+    binary = (mask > 127).astype(np.uint8)
+    count, labels = cv2.connectedComponents(binary, connectivity=8)
+    if count <= 2:
+        return _encode_mask(binary * 255)
+
+    h, w = binary.shape
+    px = int(np.clip(round(point[0]), 0, w - 1))
+    py = int(np.clip(round(point[1]), 0, h - 1))
+    label = int(labels[py, px])
+    if label == 0:
+        radius = max(2, min(12, round(min(w, h) * 0.01)))
+        y1, y2 = max(0, py - radius), min(h, py + radius + 1)
+        x1, x2 = max(0, px - radius), min(w, px + radius + 1)
+        nearby = labels[y1:y2, x1:x2]
+        foreground = nearby[nearby > 0]
+        if foreground.size:
+            values, frequencies = np.unique(foreground, return_counts=True)
+            label = int(values[int(np.argmax(frequencies))])
+    if label == 0:
+        areas = np.bincount(labels.ravel())
+        label = int(np.argmax(areas[1:]) + 1)
+    return _encode_mask((labels == label).astype(np.uint8) * 255)
+
+
+def _refine_sam_edges_with_birefnet(
+    payload: bytes,
+    sam_mask_png_b64: str,
+) -> tuple[str, bool]:
+    """Use fixed BiRefNet only in a narrow band around the SAM object contour."""
+    import cv2
+    import numpy as np
+
+    from .ai.matte_runner import matte_with_model
+
+    sam_mask = _decode_mask(sam_mask_png_b64)
+    matte = _decode_mask(matte_with_model(payload)["mask_png_base64"])
+    h, w = sam_mask.shape
+    if matte.shape != sam_mask.shape:
+        matte = cv2.resize(matte, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    sam_binary = (sam_mask > 127).astype(np.uint8)
+    sam_area = int(np.count_nonzero(sam_binary))
+    if sam_area == 0:
+        return sam_mask_png_b64, False
+
+    # A global matte can target a different foreground object. In that case SAM is
+    # safer; only blend when BiRefNet substantially overlaps the grounded object.
+    overlap = int(np.count_nonzero((matte > 24) & (sam_binary > 0))) / sam_area
+    if overlap < 0.2:
+        return sam_mask_png_b64, False
+
+    radius = max(2, min(10, round(min(w, h) * 0.004)))
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (radius * 2 + 1, radius * 2 + 1),
+    )
+    inner = cv2.erode(sam_binary, kernel)
+    outer = cv2.dilate(sam_binary, kernel)
+    boundary = (outer > 0) & (inner == 0)
+    refined = np.zeros_like(matte, dtype=np.uint8)
+    refined[inner > 0] = 255
+    refined[boundary] = matte[boundary]
+    if np.count_nonzero(refined > 2) == 0:
+        return sam_mask_png_b64, False
+    return _encode_mask(refined), True
+
+
 def _refine_with_sam2(
     payload: bytes,
     top: dict[str, Any],
@@ -154,12 +227,50 @@ def _refine_with_sam2(
         point=((x1 + x2) / 2.0, (y1 + y2) / 2.0),
         box=(x1, y1, x2, y2),
     )
-    layer = _rgba_cutout_from_mask(decode_bgr(payload), seg["mask_png_base64"])
+    mask_png_b64, matte_refined = _refine_sam_edges_with_birefnet(
+        payload,
+        seg["mask_png_base64"],
+    )
+    layer = _rgba_cutout_from_mask(decode_bgr(payload), mask_png_b64)
 
     return {
         **seg,
+        "mask_png_base64": mask_png_b64,
         "cutout_png_base64": layer["cutout_png_base64"],
         "rect": layer["rect"],
+        "matte_refined": matte_refined,
+    }
+
+
+def point_cutout(payload: bytes, x: float, y: float) -> dict[str, Any]:
+    """Cut the clicked object with fixed SAM 2.1 Large and return an RGBA layer."""
+    from .ai.paths import decode_bgr
+    from .ai.sam2_runner import segment_with_sam2
+
+    if not sam2_available():
+        raise RuntimeError(
+            "Point selection is unavailable. Run: python scripts/setup_ai_models.py"
+        )
+    bgr = decode_bgr(payload)
+    height, width = bgr.shape[:2]
+    px = float(x)
+    py = float(y)
+    if not isfinite(px) or not isfinite(py):
+        raise ValueError("Click coordinates must be finite numbers.")
+    if px < 0 or py < 0 or px >= width or py >= height:
+        raise ValueError("Click is outside the image canvas.")
+
+    seg = segment_with_sam2(payload, point=(px, py))
+    mask_png_b64 = _isolate_component_at_point(seg["mask_png_base64"], (px, py))
+    layer = _rgba_cutout_from_mask(bgr, mask_png_b64)
+    return {
+        "engine": "point-selection",
+        "pipeline": "point→segment→rgba",
+        "point": {"x": px, "y": py},
+        "mask_png_base64": mask_png_b64,
+        "cutout_png_base64": layer["cutout_png_base64"],
+        "rect": layer["rect"],
+        "mask_score": seg.get("score"),
     }
 
 
@@ -168,7 +279,7 @@ def detect_objects(
     prompt: str = "",
     confidence: float = 0.35,
 ) -> dict[str, Any]:
-    """Prompt selection: Grounding DINO Swin-B → SAM 2.1 Large → RGBA."""
+    """Prompt selection: text grounding → SAM contour → BiRefNet edge matte."""
     from .ai.grounding_dino_runner import pick_best_box
 
     if not grounding_dino_available():
@@ -178,6 +289,10 @@ def detect_objects(
     if not sam2_available():
         raise RuntimeError(
             "SAM 2.1 Large is unavailable. Run: python scripts/setup_ai_models.py"
+        )
+    if not matte_available():
+        raise RuntimeError(
+            "BiRefNet is unavailable. Run: python scripts/setup_ai_models.py"
         )
     prompt = (prompt or "").strip()
     if not prompt:
@@ -204,20 +319,20 @@ def detect_objects(
         "cutout_png_base64": seg.get("cutout_png_base64"),
         "rect": seg.get("rect"),
         "mask_score": seg.get("score"),
+        "matte_refined": seg.get("matte_refined", False),
         "refined": True,
-        "pipeline": "detect→segment→rgba",
+        "pipeline": "detect→segment→matte→rgba",
     }
 
 
-def matte_image(payload: bytes, model: str | None = None) -> dict[str, Any]:
-    if not matte_available(model):
+def matte_image(payload: bytes) -> dict[str, Any]:
+    if not matte_available():
         raise RuntimeError(
-            "Matte engine not available. pip install rembg "
-            "(BiRefNet / RMBG / isnet via rembg sessions)."
+            "BiRefNet is unavailable. Run: python scripts/setup_ai_models.py"
         )
     from .ai.matte_runner import matte_with_model
 
-    return matte_with_model(payload, model=model)
+    return matte_with_model(payload)
 
 
 def inpaint_image(
@@ -301,28 +416,22 @@ def _decode_inpaint_mask(mask_payload: bytes):
     return visible_luminance
 
 
-def upscale_image(payload: bytes, scale: int = 2, model: str = "realesrgan") -> tuple[bytes, str]:
-    """Return (png_bytes, engine_name). Real-ESRGAN family only."""
-    mid = (model or "realesrgan").strip().lower()
-    if mid == "gfpgan":
-        if not gfpgan_available():
-            raise RuntimeError(
-                "GFPGAN slot is not ready. Place GFPGANv1.4.pth under models/gfpgan/."
-            )
+def upscale_image(payload: bytes, scale: int = 2) -> tuple[bytes, str]:
+    """Return PNG bytes and engine name using fixed Real-ESRGAN ×2 or ×4."""
+    from .ai.realesrgan_runner import (
+        normalize_scale,
+        upscale_available,
+        upscale_with_realesrgan,
+    )
+
+    normalized_scale = normalize_scale(scale)
+    if not upscale_available(normalized_scale):
         raise RuntimeError(
-            "GFPGAN runner is a catalog slot — use Real-ESRGAN for upscale, then face polish later."
+            f"Real-ESRGAN ×{normalized_scale} is not available. Install spandrel "
+            "and place the matching checkpoint under models/realesrgan/."
         )
 
-    from .ai.realesrgan_runner import normalize_model, upscale_available, upscale_with_realesrgan
-
-    nid = normalize_model(model)
-    if not upscale_available(nid, scale):
-        raise RuntimeError(
-            "AI upscale is not available. Install spandrel (or realesrgan+basicsr) and place "
-            "weights under models/realesrgan, or set REALESRGAN_MODEL / IMAGE_STUDIO_REALESRGAN."
-        )
-
-    return upscale_with_realesrgan(payload, scale=scale, model=nid)
+    return upscale_with_realesrgan(payload, scale=normalized_scale)
 
 
 # Back-compat aliases used by older call sites
@@ -335,13 +444,14 @@ def capability_flags() -> dict[str, Any]:
     from .ai.local_models import catalog
 
     models = catalog()
-    prompt_selection = sam2_available() and grounding_dino_available()
+    point_selection = sam2_available()
+    prompt_selection = point_selection and grounding_dino_available() and matte_available()
     return {
+        "point_selection": point_selection,
         "prompt_selection": prompt_selection,
         "matte": matte_available(),
         "lama": lama_available(),
         "realesrgan": realesrgan_available(),
-        "gfpgan": gfpgan_available(),
         "rembg": rembg_available(),
         "device": models["device"],
         "models": {
@@ -357,16 +467,14 @@ def active_engines() -> list[str]:
     """Honest list of engines that can actually run right now."""
     caps = capability_flags()
     engines = ["OpenCV GrabCut", "Pillow"]
-    if caps["rembg"]:
-        engines.append("rembg/ONNX")
     if caps["matte"]:
-        engines.append("Matte (BiRefNet/RMBG)")
+        engines.append("Matte")
     if caps.get("lama"):
         engines.append("LaMa inpaint")
     if caps["prompt_selection"]:
         engines.append("Prompt selection")
+    if caps["point_selection"]:
+        engines.append("Point selection")
     if caps["realesrgan"]:
         engines.append("RealESRGAN")
-    if caps["gfpgan"]:
-        engines.append("GFPGAN (weights only)")
     return engines

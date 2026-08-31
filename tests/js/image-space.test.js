@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   cropRectByPixelBounds,
+  fittedImageNorm,
   sourceFromStageMatrix,
   transformPoint,
 } from '../../src/lib/image-space.js'
@@ -65,5 +66,21 @@ describe('stage-to-source image coordinates', () => {
     expectPoint(cropped, 0.3, 0.16)
     expect(cropped.w).toBeCloseTo(0.2, 6)
     expect(cropped.h).toBeCloseTo(0.36, 6)
+  })
+})
+
+describe('fittedImageNorm', () => {
+  it('keeps native pixels when the artboard is larger (Original size)', () => {
+    const box = fittedImageNorm('Original size', 1033, 722, 8033, 5615)
+    expect(box.w * 8033).toBeCloseTo(1033, 6)
+    expect(box.h * 5615).toBeCloseTo(722, 6)
+  })
+
+  it('scales the image to fill the artboard with Contain', () => {
+    const original = fittedImageNorm('Original size', 1033, 722, 8033, 5615)
+    const contain = fittedImageNorm('Contain', 1033, 722, 8033, 5615)
+    expect(contain.w).toBeCloseTo(1, 5)
+    expect(contain.w).toBeGreaterThan(original.w * 7)
+    expect(contain.h).toBeGreaterThan(original.h * 7)
   })
 })

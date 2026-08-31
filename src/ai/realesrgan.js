@@ -1,120 +1,61 @@
 /**
- * Upscale — ESRGAN / Real-ESRGAN / A-ESRGAN via local API weights.
- * Size / RAM caps (5k, 20 GiB) are enforced on the Python server.
+ * Fixed Real-ESRGAN ×2 / ×4 client. Inference always runs on the local API.
+ * Size and RAM caps (5k, 20 GiB) are enforced by the Python runner.
  */
-import { getOnnxSession, imageDataToFloatTensor, ort } from './onnx'
 
-export { UPSCALE_MODELS } from './model-catalogs.js'
+const SUPPORTED_SCALES = new Set([2, 4])
 
-const MODEL_URL = import.meta.env.VITE_REALESRGAN_ONNX || ''
-
-const SUPPORTED = new Set(['esrgan', 'realesrgan', 'realesrgan-x2', 'a-esrgan'])
-
-export function realesrganConfigured() {
-  return Boolean(MODEL_URL)
+function normalizeScale(scale) {
+  const value = Number(scale)
+  if (!Number.isInteger(value) || !SUPPORTED_SCALES.has(value)) {
+    throw new Error('Real-ESRGAN scale must be 2 or 4.')
+  }
+  return value
 }
 
-async function viaServer(imageBlob, scale = 2, model = 'realesrgan') {
+async function canvasToBlob(canvas) {
+  if (!canvas) throw new Error('Could not read canvas')
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error('Could not read canvas'))),
+      'image/png',
+    )
+  })
+}
+
+async function viaServer(imageBlob, scale) {
   const form = new FormData()
   form.append('image', imageBlob, 'image.png')
   form.append('scale', String(scale))
-  form.append('model', model)
-  const res = await fetch('/api/ai/upscale', { method: 'POST', body: form })
-  if (!res.ok) throw new Error(await res.text())
-  if (res.headers.get('content-type')?.includes('json')) {
-    const data = await res.json()
-    throw new Error(data.detail || 'Upscale failed')
+  const response = await fetch('/api/ai/upscale', { method: 'POST', body: form })
+  if (!response.ok) {
+    const contentType = response.headers.get('content-type') || ''
+    if (contentType.includes('json')) {
+      const data = await response.json()
+      throw new Error(data.detail || 'Upscale failed')
+    }
+    throw new Error(await response.text() || 'Upscale failed')
   }
-  const blob = await res.blob()
-  const engine = res.headers.get('X-Upscale-Engine') || `${model}-server`
+  const blob = await response.blob()
+  const engine = response.headers.get('X-Upscale-Engine') || `realesrgan-x${scale}-server`
   return { blob, url: URL.createObjectURL(blob), engine }
-}
-
-/** Convert ONNX float tensor NCHW → PNG blob URL. */
-async function tensorToPngUrl(tensor, fallbackW, fallbackH) {
-  const dims = tensor.dims || []
-  let c = 3
-  let h = fallbackH
-  let w = fallbackW
-  if (dims.length === 4) {
-    c = dims[1]
-    h = dims[2]
-    w = dims[3]
-  } else if (dims.length === 3) {
-    c = dims[0]
-    h = dims[1]
-    w = dims[2]
-  }
-  const data = tensor.data
-  const canvas = document.createElement('canvas')
-  canvas.width = w
-  canvas.height = h
-  const ctx = canvas.getContext('2d')
-  const imageData = ctx.createImageData(w, h)
-  const plane = w * h
-  const maxSample = Math.max(...Array.from({ length: Math.min(64, data.length) }, (_, i) => Math.abs(data[i])))
-  const scale = maxSample > 1.5 ? 1 : 255
-  for (let i = 0; i < plane; i += 1) {
-    const r = data[i] * scale
-    const g = (c > 1 ? data[plane + i] : data[i]) * scale
-    const b = (c > 2 ? data[2 * plane + i] : data[i]) * scale
-    imageData.data[i * 4] = Math.max(0, Math.min(255, Math.round(r)))
-    imageData.data[i * 4 + 1] = Math.max(0, Math.min(255, Math.round(g)))
-    imageData.data[i * 4 + 2] = Math.max(0, Math.min(255, Math.round(b)))
-    imageData.data[i * 4 + 3] = 255
-  }
-  ctx.putImageData(imageData, 0, 0)
-  const blob = await new Promise((resolve, reject) => {
-    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not encode upscaled image'))), 'image/png')
-  })
-  return { blob, url: URL.createObjectURL(blob) }
 }
 
 export async function upscaleWithRealESRGAN({
   imageCanvas,
   imageBlob,
   scale = 2,
-  model = 'realesrgan',
 }) {
-  const mid = String(model || 'realesrgan').toLowerCase()
-  if (!SUPPORTED.has(mid)) {
-    throw new Error(`Unknown upscale model "${model}". Supported: ${[...SUPPORTED].join(', ')}.`)
-  }
-
-  const blob = imageBlob || await new Promise((resolve, reject) => {
-    if (!imageCanvas) {
-      reject(new Error('Could not read canvas'))
-      return
-    }
-    imageCanvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not read canvas'))), 'image/png')
-  })
-
-  if (mid === 'realesrgan' && realesrganConfigured() && imageCanvas) {
-    const ctx = imageCanvas.getContext('2d', { willReadFrequently: true })
-    const imageData = ctx.getImageData(0, 0, imageCanvas.width, imageCanvas.height)
-    const session = await getOnnxSession(MODEL_URL)
-    const input = imageDataToFloatTensor(imageData, {
-      size: Math.max(imageCanvas.width, imageCanvas.height),
-      normalize: false,
-    })
-    const out = await session.run({ input })
-    const tensor = out.output || Object.values(out)[0]
-    if (!tensor?.data) {
-      throw new Error('RealESRGAN ONNX returned no tensor — check VITE_REALESRGAN_ONNX or use the server path')
-    }
-    const png = await tensorToPngUrl(tensor, imageCanvas.width * scale, imageCanvas.height * scale)
-    return { ...png, tensor, engine: 'realesrgan-onnx', ort }
-  }
-
-  return viaServer(blob, scale, mid)
+  const normalizedScale = normalizeScale(scale)
+  const blob = imageBlob || await canvasToBlob(imageCanvas)
+  return viaServer(blob, normalizedScale)
 }
 
 export async function probeRealESRGAN() {
-  if (realesrganConfigured()) return true
   try {
-    const res = await fetch('/api/health', { signal: AbortSignal.timeout(1500) })
-    if (!res.ok) return false
-    const info = await res.json()
+    const response = await fetch('/api/health', { signal: AbortSignal.timeout(1500) })
+    if (!response.ok) return false
+    const info = await response.json()
     return Boolean(info.realesrgan)
   } catch {
     return false

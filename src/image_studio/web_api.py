@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import cv2
 import numpy as np
@@ -19,7 +19,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from PIL import Image
 
-from .ai_pipeline import default_rembg_model
 from .api import jobs_router
 from .api.errors import RequestIdMiddleware
 from .image_validation import MAX_UPLOAD_BYTES, validate_uploaded_image
@@ -57,23 +56,6 @@ app.add_middleware(
 app.include_router(jobs_router)
 
 MAX_IMAGE_BYTES = MAX_UPLOAD_BYTES
-AI_MODEL = default_rembg_model()
-_rembg_session = None
-_rembg_model: str | None = None
-
-
-def _clear_rembg_session() -> None:
-    global _rembg_session, _rembg_model
-    _rembg_session = None
-    _rembg_model = None
-
-
-try:
-    from .resource_guard import register_unload_hook
-
-    register_unload_hook(_clear_rembg_session)
-except Exception:  # noqa: BLE001
-    pass
 
 
 def _reject_upload(exc: ValueError) -> HTTPException:
@@ -119,19 +101,16 @@ def _png_data_url(image: np.ndarray) -> str:
     return "data:image/png;base64," + base64.b64encode(encoded).decode("ascii")
 
 
-def _ai_mask(payload: bytes, model: str) -> np.ndarray:
-    """Return a full-size alpha mask using one reusable local ONNX session."""
-    global _rembg_session, _rembg_model
-    from rembg import new_session, remove
+def _ai_mask(payload: bytes) -> np.ndarray:
+    """Return a full-size alpha mask from the fixed local BiRefNet runner."""
+    from .ai.matte_runner import matte_with_model
 
-    if _rembg_session is None or _rembg_model != model:
-        _rembg_session = new_session(model)
-        _rembg_model = model
-    result = remove(payload, session=_rembg_session, post_process_mask=True)
-    decoded = cv2.imdecode(np.frombuffer(result, np.uint8), cv2.IMREAD_UNCHANGED)
-    if decoded is None or decoded.ndim != 3 or decoded.shape[2] < 4:
-        raise RuntimeError("The AI model did not return an alpha mask.")
-    return decoded[:, :, 3]
+    result = matte_with_model(payload)
+    raw = base64.b64decode(result["mask_png_base64"])
+    decoded = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_GRAYSCALE)
+    if decoded is None:
+        raise RuntimeError("The matte engine did not return an alpha mask.")
+    return decoded
 
 
 def _grabcut_mask(source: np.ndarray, rect: tuple[int, int, int, int], iterations: int) -> np.ndarray:
@@ -164,13 +143,13 @@ async def health() -> dict[str, object]:
         "status": "ok",
         "opencv": cv2.__version__,
         "oxipng": shutil.which("oxipng") is not None,
-        "ai": rembg,
-        "ai_model": default_rembg_model() if rembg else None,
+        "ai": caps["matte"],
+        "ai_model": "matte" if caps["matte"] else None,
         "rembg": rembg,
+        "point_selection": caps["point_selection"],
         "prompt_selection": caps["prompt_selection"],
         "matte": caps.get("matte", False),
         "lama": caps.get("lama", False),
-        "gfpgan": caps.get("gfpgan", False),
         "realesrgan": caps["realesrgan"],
         "device": device,
         "nvidia": bool(device.get("nvidia")) if isinstance(device, dict) else False,
@@ -195,7 +174,6 @@ async def segment_element(
     height: Annotated[int, Form()],
     iterations: Annotated[int, Form()] = 5,
     method: Annotated[str, Form()] = "auto",
-    model: Annotated[str, Form()] = AI_MODEL,
     update_background: Annotated[bool, Form()] = True,
 ) -> dict[str, object]:
     payload = await image.read()
@@ -230,12 +208,12 @@ async def segment_element(
     async with acquire_ai_slot("smart_segment"):
         if use_ai and not use_grabcut_only and importlib.util.find_spec("rembg") is not None:
             try:
-                foreground = await run_blocking(_ai_mask, payload, model)
+                foreground = await run_blocking(_ai_mask, payload)
                 # Limit the general subject mask to the requested object region.
                 region = np.zeros_like(foreground)
                 region[y : y + height, x : x + width] = foreground[y : y + height, x : x + width]
                 foreground = region
-                engine = f"rembg:{model}"
+                engine = "matte"
             except Exception as exc:
                 raise HTTPException(422, f"AI segmentation failed: {exc}") from exc
 
@@ -259,7 +237,7 @@ async def segment_element(
         elif ai_too_empty:
             raise HTTPException(
                 422,
-                "No foreground was found. Choose a cutout engine or draw a larger selection.",
+                "No foreground was found. Draw a larger selection around the object.",
             )
 
         foreground = cv2.morphologyEx(
@@ -341,7 +319,27 @@ async def optimize_png(
     )
 
 
-# --- AI / project API (SAM2 refine via detect, DINO, RealESRGAN, Postgres) ---
+# --- AI / project API -------------------------------------------------------
+
+
+@app.post("/api/ai/point-cut")
+async def ai_point_cut(
+    image: Annotated[UploadFile, File()],
+    x: Annotated[float, Form()],
+    y: Annotated[float, Form()],
+) -> dict[str, object]:
+    """Cut the object under one canvas-space click with fixed point selection."""
+    payload = await image.read()
+    _require_upload_image(payload, image.filename)
+    try:
+        from .ai_pipeline import point_cutout
+
+        async with acquire_ai_slot("point_cut"):
+            return await run_blocking(point_cutout, payload, x, y)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _ai_http_error(exc, default_message="Point cut failed") from exc
 
 
 @app.post("/api/ai/detect")
@@ -387,16 +385,15 @@ async def ai_detect(
 @app.post("/api/ai/matte")
 async def ai_matte(
     image: Annotated[UploadFile, File()],
-    model: Annotated[str, Form()] = "rembg-isnet",
 ) -> dict[str, object]:
-    """Soft alpha matte (BiRefNet / RMBG / rembg) for transparent image layers."""
+    """Soft alpha matte using the fixed local backend."""
     payload = await image.read()
     _require_upload_image(payload, image.filename)
     try:
         from .ai_pipeline import matte_image
 
         async with acquire_ai_slot("matte"):
-            return await run_blocking(matte_image, payload, model or None)
+            return await run_blocking(matte_image, payload)
     except HTTPException:
         raise
     except Exception as exc:
@@ -433,8 +430,7 @@ async def ai_inpaint(
 @app.post("/api/ai/upscale")
 async def ai_upscale(
     image: Annotated[UploadFile, File()],
-    scale: Annotated[int, Form()] = 2,
-    model: Annotated[str, Form()] = "realesrgan",
+    scale: Annotated[Literal[2, 4], Form()] = 2,
 ):
     payload = await image.read()
     _require_upload_image(payload, image.filename)
@@ -442,7 +438,7 @@ async def ai_upscale(
         from .ai_pipeline import upscale_image
 
         async with acquire_ai_slot("upscale"):
-            out, engine = await run_blocking(upscale_image, payload, scale, model)
+            out, engine = await run_blocking(upscale_image, payload, scale)
         return Response(out, media_type="image/png", headers={"X-Upscale-Engine": engine})
     except HTTPException:
         raise

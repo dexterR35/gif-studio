@@ -14,7 +14,7 @@ import {
   trackCutoutApplied,
   trackExportSucceeded,
 } from '../tasks/studio-task-bridge'
-import { cropRectByPixelBounds, sourceFromStageMatrix } from '../lib/image-space.js'
+import { cropRectByPixelBounds, fittedImageNorm, sourceFromStageMatrix } from '../lib/image-space.js'
 import { alphaMaskRgba, visibleMaskRgba } from '../lib/mask-pixels.js'
 import { apiClient } from '../api/js-client.js'
 
@@ -368,10 +368,10 @@ export function StudioProvider({ children }) {
   useEffect(() => {
     useStudioStore.getState().setCapabilities({
       api: apiAvailable,
+      pointSelection: Boolean(apiInfo?.point_selection),
       promptSelection: Boolean(apiInfo?.prompt_selection),
       matte: Boolean(apiInfo?.matte),
       lama: Boolean(apiInfo?.lama),
-      gfpgan: Boolean(apiInfo?.gfpgan),
       realesrgan: Boolean(apiInfo?.realesrgan),
       rembg: Boolean(apiInfo?.rembg || apiInfo?.ai),
       device: apiInfo?.device || null,
@@ -608,9 +608,11 @@ export function StudioProvider({ children }) {
     if (canvasLocked) { setToast('Unlock the artboard to resize'); return }
     const nextWidth = clamp(width, 1, MAX_CANVAS)
     setSettings((current) => {
-      if (!lockAspect) return { ...current, width: nextWidth }
-      const nextHeight = clamp(Math.round(nextWidth / sourceAspect), 1, MAX_CANVAS)
-      return { ...current, width: nextWidth, height: nextHeight }
+      // Keep the base image at native pixels; only the artboard grows or shrinks.
+      const next = { ...current, fit: 'Original size', width: nextWidth }
+      if (!lockAspect) return next
+      next.height = clamp(Math.round(nextWidth / sourceAspect), 1, MAX_CANVAS)
+      return next
     })
   }
 
@@ -618,9 +620,10 @@ export function StudioProvider({ children }) {
     if (canvasLocked) { setToast('Unlock the artboard to resize'); return }
     const nextHeight = clamp(height, 1, MAX_CANVAS)
     setSettings((current) => {
-      if (!lockAspect) return { ...current, height: nextHeight }
-      const nextWidth = clamp(Math.round(nextHeight * sourceAspect), 1, MAX_CANVAS)
-      return { ...current, width: nextWidth, height: nextHeight }
+      const next = { ...current, fit: 'Original size', height: nextHeight }
+      if (!lockAspect) return next
+      next.width = clamp(Math.round(nextHeight * sourceAspect), 1, MAX_CANVAS)
+      return next
     })
   }
 
@@ -904,6 +907,14 @@ export function StudioProvider({ children }) {
   }
 
   const applyKonvaSelection = (payload) => {
+    if (payload?.type === 'point' && payload.point) {
+      setSelectMode(false)
+      setSelection(null)
+      setSelectionPoints([])
+      selectionStart.current = null
+      void runPointCut(payload.point)
+      return
+    }
     if (!payload?.rect) return
     const { rect, points, type } = payload
     setSelectMode(false)
@@ -1039,48 +1050,16 @@ export function StudioProvider({ children }) {
     return id
   }
 
-  /** Map UI matte ids → rembg session names used by /api/segment. */
-  const toSegmentModel = (modelId) => {
-    const map = {
-      birefnet: 'birefnet-general',
-      'birefnet-general': 'birefnet-general',
-      'birefnet-massive': 'birefnet-massive',
-      massive: 'birefnet-massive',
-      'rmbg-2.0': 'bria-rmbg',
-      rmbg: 'bria-rmbg',
-      'bria-rmbg': 'bria-rmbg',
-      'rembg-isnet': 'isnet-general-use',
-      isnet: 'isnet-general-use',
-      'isnet-general-use': 'isnet-general-use',
-    }
-    return map[String(modelId || '').toLowerCase()] || 'isnet-general-use'
-  }
-
-  /** Resolve cutout dropdown id → /api/segment { model, method }. GrabCut is explicit, not a fallback. */
-  const resolveCutoutRequest = (cutoutId, overrides = {}) => {
-    const id = String(overrides.model ?? cutoutId ?? 'birefnet').toLowerCase()
-    if (id === 'opencv-grabcut' || id === 'grabcut' || id === 'opencv') {
-      return { model: 'isnet-general-use', method: 'grabcut' }
-    }
-    if (overrides.method) {
-      return {
-        model: toSegmentModel(id),
-        method: overrides.method,
-      }
-    }
-    return { model: toSegmentModel(id), method: 'ai' }
-  }
-
   /**
-   * Smart segment: rembg (method=ai) or OpenCV GrabCut (method=grabcut) from cutout dropdown.
+   * Smart segment with the fixed backend matte.
    * Creates a floating cutout layer. Base replacement is explicit so selecting a subject
    * never destructively rewrites the plate or bakes other visible layers into it.
    * @param {{ x:number, y:number, w:number, h:number }} rect normalized
-   * @param {{ model?: string, method?: string, name?: string, replaceElementId?: string|null, updateBackground?: boolean }} [opts]
+   * @param {{ name?: string, replaceElementId?: string|null, updateBackground?: boolean }} [opts]
    */
   const extractElement = async (rect, opts = {}) => {
-    const storeCutout = useStudioStore.getState().tools.cutoutModel || 'birefnet'
-    const { model: segmentModel, method } = resolveCutoutRequest(storeCutout, opts)
+    const segmentModel = 'birefnet'
+    const method = 'ai'
     const {
       name = null,
       replaceElementId = null,
@@ -1103,7 +1082,6 @@ export function StudioProvider({ children }) {
       form.append('height', String(Math.round(rect.h * sourceCanvas.height)))
       form.append('iterations', '5')
       form.append('method', method)
-      form.append('model', segmentModel)
       form.append('update_background', updateBackground ? 'true' : 'false')
       const response = await fetch('/api/segment', { method: 'POST', body: form })
       if (!response.ok) {
@@ -1222,15 +1200,13 @@ export function StudioProvider({ children }) {
    * Remove BG on an existing cutout — mattes that layer only.
    * Never rewrites the base image (that caused the smear behind moved layers).
    */
-  const rematteSelectedLayer = async ({ model, method } = {}) => {
+  const rematteSelectedLayer = async () => {
     const el = elements.find((e) => e.id === selectedElement && (e.sourceBitmap || e.bitmap))
     if (!el) {
       setToast('Select a cutout layer to remove its background')
       return
     }
     if (!assertStudioIdle()) return
-    const storeCutout = useStudioStore.getState().tools.cutoutModel || 'birefnet'
-    const { model: segmentModel, method: segMethod } = resolveCutoutRequest(storeCutout, { model, method })
     const src = el.sourceBitmap || el.bitmap
     const w = src.width
     const h = src.height
@@ -1239,7 +1215,7 @@ export function StudioProvider({ children }) {
       return
     }
 
-    // Opaque plate for rembg / GrabCut (transparent holes would confuse the model).
+    // Opaque plate so transparent holes do not confuse the fixed matte.
     const plate = document.createElement('canvas')
     plate.width = w
     plate.height = h
@@ -1251,78 +1227,41 @@ export function StudioProvider({ children }) {
     beginBusy('Removing background…')
     setToast('Removing background…')
     try {
-      let bitmap = document.createElement('canvas')
+      const bitmap = document.createElement('canvas')
       bitmap.width = w
       bitmap.height = h
       let maskCanvas = document.createElement('canvas')
       maskCanvas.width = w
       maskCanvas.height = h
-      let engine = segmentModel
-
-      if (segMethod === 'grabcut') {
-        const blob = await new Promise((resolve, reject) => {
-          plate.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not encode layer'))), 'image/png')
-        })
-        const form = new FormData()
-        form.append('image', blob, 'layer.png')
-        form.append('x', '0')
-        form.append('y', '0')
-        form.append('width', String(w))
-        form.append('height', String(h))
-        form.append('iterations', '5')
-        form.append('method', 'grabcut')
-        form.append('model', segmentModel)
-        form.append('update_background', 'false')
-        const response = await fetch('/api/segment', { method: 'POST', body: form })
-        if (!response.ok) {
-          const detail = await response.json().catch(() => ({}))
-          throw new Error(apiErrorMessage(detail.detail, 'Remove background failed'))
-        }
-        const result = await response.json()
-        engine = result.engine || 'opencv-grabcut'
-        const cutout = new Image()
+      const { matteWithModel } = await import('../ai/matte')
+      const result = await matteWithModel({ imageCanvas: plate })
+      const engine = result.engine || 'matte'
+      if (result.rgba_png_base64) {
+        const img = new Image()
         await new Promise((resolve, reject) => {
-          cutout.onload = resolve
-          cutout.onerror = reject
-          cutout.src = result.cutout
+          img.onload = resolve
+          img.onerror = reject
+          img.src = `data:image/png;base64,${result.rgba_png_base64}`
         })
-        bitmap.getContext('2d').drawImage(cutout, 0, 0, w, h)
-        maskCanvas = alphaMaskCanvas(bitmap)
+        bitmap.getContext('2d').drawImage(img, 0, 0, w, h)
+      } else if (result.mask_png_base64) {
+        const maskImg = new Image()
+        await new Promise((resolve, reject) => {
+          maskImg.onload = resolve
+          maskImg.onerror = reject
+          maskImg.src = `data:image/png;base64,${result.mask_png_base64}`
+        })
+        maskCanvas = visibleMaskCanvas(maskImg, w, h)
+        const bctx = bitmap.getContext('2d')
+        bctx.drawImage(src, 0, 0)
+        bctx.globalCompositeOperation = 'destination-in'
+        bctx.drawImage(maskCanvas, 0, 0)
+        bctx.globalCompositeOperation = 'source-over'
       } else {
-        const { matteWithModel } = await import('../ai/matte')
-        const result = await matteWithModel({
-          imageCanvas: plate,
-          model: String(model || storeCutout),
-        })
-        engine = result.engine || segmentModel
-        if (result.rgba_png_base64) {
-          const img = new Image()
-          await new Promise((resolve, reject) => {
-            img.onload = resolve
-            img.onerror = reject
-            img.src = `data:image/png;base64,${result.rgba_png_base64}`
-          })
-          bitmap.getContext('2d').drawImage(img, 0, 0, w, h)
-        } else if (result.mask_png_base64) {
-          const maskImg = new Image()
-          await new Promise((resolve, reject) => {
-            maskImg.onload = resolve
-            maskImg.onerror = reject
-            maskImg.src = `data:image/png;base64,${result.mask_png_base64}`
-          })
-          maskCanvas = visibleMaskCanvas(maskImg, w, h)
-          const bctx = bitmap.getContext('2d')
-          bctx.drawImage(src, 0, 0)
-          bctx.globalCompositeOperation = 'destination-in'
-          bctx.drawImage(maskCanvas, 0, 0)
-          bctx.globalCompositeOperation = 'source-over'
-        } else {
-          throw new Error('Matte returned no mask')
-        }
-        // Derive mask from alpha when we only got RGBA.
-        if (result.rgba_png_base64) {
-          maskCanvas = alphaMaskCanvas(bitmap)
-        }
+        throw new Error('Matte returned no mask')
+      }
+      if (result.rgba_png_base64) {
+        maskCanvas = alphaMaskCanvas(bitmap)
       }
 
       const opaque = document.createElement('canvas')
@@ -1514,22 +1453,17 @@ export function StudioProvider({ children }) {
    * Select Subject / Remove BG.
    * Remove BG remattes the selected cutout only — never rewrites the base image.
    * Select Subject leaves the base untouched; Clean background is the explicit inpaint action.
-   * @param {{ model?: string, method?: string, target?: 'canvas'|'selection' }} opts
+   * @param {{ target?: 'canvas'|'selection' }} opts
    */
   const runMatteCutout = async ({
-    model,
-    method,
     /** 'canvas' = Select Subject (nearly the full image); 'selection' = Remove BG on selected cutout */
     target = 'canvas',
   } = {}) => {
     const canvas = canvasRef.current
     if (!canvas || !image) { setToast('Open an image first'); return }
     if (!assertStudioIdle()) return
-    const cutoutId = model || useStudioStore.getState().tools.cutoutModel || 'birefnet'
-    const req = { model: cutoutId, ...(method ? { method } : {}) }
-
     if (target === 'selection') {
-      return rematteSelectedLayer(req)
+      return rematteSelectedLayer()
     }
 
     // Select Subject — nearly the full image (GrabCut still wants a thin background rim).
@@ -1537,7 +1471,6 @@ export function StudioProvider({ children }) {
     return extractElement(
       { x: pad, y: pad, w: 1 - pad * 2, h: 1 - pad * 2 },
       {
-        ...req,
         name: 'Subject',
         updateBackground: false,
       },
@@ -1591,6 +1524,45 @@ export function StudioProvider({ children }) {
     setSelectMode(false)
     setMaskEditing(false)
     return true
+  }
+
+  async function runPointCut(point) {
+    const canvas = canvasRef.current
+    if (!canvas || !image) {
+      setToast('Open an image first')
+      return null
+    }
+    if (!apiAvailable || !useStudioStore.getState().capabilities?.pointSelection) {
+      setToast('Point cut needs the local selection service')
+      return null
+    }
+    if (!assertStudioIdle()) return null
+
+    beginBusy('Cutting clicked object…')
+    setToast('Finding the object under your click…')
+    try {
+      const { selectAtPoint } = await import('../ai/prompt-selection')
+      const result = await selectAtPoint({ imageCanvas: canvas, point })
+      if (!result?.cutout_png_base64 || !result?.rect) {
+        throw new Error('No object contour was found at that point')
+      }
+      useStudioStore.getState().setCapabilities({ pointSelection: true })
+      const layerId = await addElementFromDetectCutout(result, {
+        name: 'Object cut',
+        engine: result.engine || 'point-selection',
+      })
+      if (!layerId) throw new Error('Could not create the cutout layer')
+      selectDetectedCutout(layerId)
+      trackCutoutApplied({ method: 'point', kind: 'contour' })
+      setToast('Object contour cut into a new layer')
+      return layerId
+    } catch (error) {
+      console.warn(error)
+      setToast(error?.message || 'Point cut failed')
+      return null
+    } finally {
+      endBusy()
+    }
   }
 
   const runTextDetect = async (prompt) => {
@@ -1866,22 +1838,7 @@ export function StudioProvider({ children }) {
     const rotation = (settings.rotation || 0) + imageEdits.rotation
     const ax = (settings.anchorX ?? 50) / 100
     const ay = (settings.anchorY ?? 50) / 100
-    const fit = settings.fit
-    let udw
-    let udh
-    if (fit === 'Stretch') {
-      udw = 1
-      udh = 1
-    } else if (fit === 'Original size') {
-      udw = iw / settings.width
-      udh = ih / settings.height
-    } else {
-      const contain = Math.min(settings.width / iw, settings.height / ih)
-      const cover = Math.max(settings.width / iw, settings.height / ih)
-      const base = fit === 'Cover' ? cover : contain
-      udw = (iw * base) / settings.width
-      udh = (ih * base) / settings.height
-    }
+    const { w: udw, h: udh } = fittedImageNorm(settings.fit, iw, ih, settings.width, settings.height)
     const cx = 0.5 + ox
     const cy = 0.5 + oy
     const left = cx - udw / 2
@@ -1904,22 +1861,13 @@ export function StudioProvider({ children }) {
     }
     const iw = enhancedLayer.width
     const ih = enhancedLayer.height
-    const fit = enhancedLayer.fit || 'Contain'
-    let udw
-    let udh
-    if (fit === 'Stretch') {
-      udw = 1
-      udh = 1
-    } else if (fit === 'Original size') {
-      udw = iw / settings.width
-      udh = ih / settings.height
-    } else {
-      const contain = Math.min(settings.width / iw, settings.height / ih)
-      const cover = Math.max(settings.width / iw, settings.height / ih)
-      const base = fit === 'Cover' ? cover : contain
-      udw = (iw * base) / settings.width
-      udh = (ih * base) / settings.height
-    }
+    const { w: udw, h: udh } = fittedImageNorm(
+      enhancedLayer.fit || 'Contain',
+      iw,
+      ih,
+      settings.width,
+      settings.height,
+    )
     const scale = (settings.scale ?? 100) / 100
     const ox = (settings.x ?? 0) / 100
     const oy = (settings.y ?? 0) / 100
@@ -2176,15 +2124,14 @@ export function StudioProvider({ children }) {
     setToast(`Artboard set to enhanced size ${enhancedLayer.width} × ${enhancedLayer.height} px`)
   }
 
-  const runUpscaleToEnhanced = async ({ model = 'realesrgan', scale = 2 } = {}) => {
+  const runUpscaleToEnhanced = async ({ scale = 2 } = {}) => {
     if (!image) {
       setToast('Open an image first')
       return
     }
     if (!assertStudioIdle()) return
-    if (String(model).toLowerCase() === 'gfpgan') {
-      throw new Error('GFPGAN slot — place weights under models/gfpgan/, or use Real-ESRGAN')
-    }
+    const normalizedScale = Number(scale)
+    if (![2, 4].includes(normalizedScale)) throw new Error('Real-ESRGAN scale must be 2 or 4.')
     const gen = ++enhanceGenRef.current
     ioLockRef.current = true
     setScaleBusy(true)
@@ -2204,8 +2151,7 @@ export function StudioProvider({ children }) {
           const { upscaleWithRealESRGAN } = await import('../ai/realesrgan')
           const result = await upscaleWithRealESRGAN({
             imageCanvas: srcCanvas,
-            scale,
-            model,
+            scale: normalizedScale,
           })
           setProgress(0.85)
           if (gen !== enhanceGenRef.current) return null
@@ -2221,14 +2167,13 @@ export function StudioProvider({ children }) {
             if (prev?.url && prev.url !== url) revokeBlobUrl(prev.url)
             return {
               id: newStudioId(),
-              name: `Enhanced ${scale}×`,
+              name: `Enhanced ${normalizedScale}×`,
               url,
               image: img,
               width: img.naturalWidth || img.width,
               height: img.naturalHeight || img.height,
-              scale,
-              model,
-              engine: result.engine || model,
+              scale: normalizedScale,
+              engine: result.engine || `Real-ESRGAN ×${normalizedScale}`,
               fit: 'Contain',
               visible: true,
               bytes: blob.size,
@@ -2238,9 +2183,10 @@ export function StudioProvider({ children }) {
           setEnhancedSelected(true)
           setBaseImageSelected(false)
           setImageVisible(false)
-          setToast(`Enhanced · ${scale}× · ${result.engine || model} · original kept for rollback · hide base to preview`)
+          const engine = result.engine || `Real-ESRGAN ×${normalizedScale}`
+          setToast(`Enhanced · ${normalizedScale}× · ${engine} · original kept for rollback · hide base to preview`)
           setProgress(1)
-          return { engine: result.engine || model, scale }
+          return { engine, scale: normalizedScale }
         },
       })
     } catch (err) {

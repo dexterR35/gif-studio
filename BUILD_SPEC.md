@@ -29,10 +29,10 @@ Image Studio helps a user turn one or more still images into a polished, layered
 ### AI
 
 - Box and lasso selection.
+- One-click object cut into a new contour-masked layer.
 - Brush refinement and erasing.
-- OpenCV GrabCut as an explicit method.
-- Local soft-matte models.
-- Prompt-assisted object detection.
+- Fixed local BiRefNet soft matting.
+- Prompt-assisted object detection with SAM and matte edge refinement.
 - Background removal and content-aware cleanup.
 
 ### Text
@@ -44,9 +44,9 @@ Image Studio helps a user turn one or more still images into a polished, layered
 
 ### Scale
 
-- Local enhancement models when installed.
+- Fixed local Real-ESRGAN ×2 and ×4 checkpoints when installed.
 - Source-preserving enhanced layers.
-- Explicit scale and model selection.
+- Explicit ×2 or ×4 scale selection.
 - Separate download of an enhanced layer.
 
 ### Output
@@ -76,7 +76,7 @@ The renderer evaluates one static scene from the authoritative project document.
 
 ## Local API
 
-The API exposes health checks, smart segmentation, matte creation, inpainting, upscaling, PNG optimization, project persistence, and generic background-job management.
+The API exposes health checks, click-point selection, prompt selection, smart segmentation, matte creation, inpainting, upscaling, PNG optimization, project persistence, and generic background-job management.
 
 Every upload must pass:
 

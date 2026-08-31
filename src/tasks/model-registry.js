@@ -5,10 +5,10 @@
 
 const ENGINE_KEYS = [
   'rembg',
+  'point_selection',
   'prompt_selection',
   'matte',
   'realesrgan',
-  'gfpgan',
   'oxipng',
 ]
 
@@ -115,16 +115,16 @@ function taskForEngine(id) {
   const map = {
     rembg: 'matte',
     matte: 'matte',
+    point_selection: 'segment',
     prompt_selection: 'segment',
     realesrgan: 'upscale',
-    gfpgan: 'enhance',
     oxipng: 'optimize',
   }
   return map[id] || id
 }
 
 function qualityForEngine(id) {
-  if (id === 'realesrgan' || id === 'prompt_selection' || id === 'matte') return 'best'
+  if (id === 'realesrgan' || id === 'point_selection' || id === 'prompt_selection' || id === 'matte') return 'best'
   return 'fast'
 }
 

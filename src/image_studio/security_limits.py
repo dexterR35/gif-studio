@@ -37,7 +37,6 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from functools import partial
 from typing import Any
-from weakref import WeakKeyDictionary
 
 from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -100,16 +99,17 @@ _POST_COUNT, _POST_WINDOW = _parse_limit(
 
 # One heavy inference at a time by default.
 _AI_MAX = max(1, int(os.environ.get("IMAGE_STUDIO_AI_MAX_CONCURRENT", "1")))
-_blocking_pools: WeakKeyDictionary[asyncio.AbstractEventLoop, ThreadPoolExecutor] = (
-    WeakKeyDictionary()
+_blocking_pool = ThreadPoolExecutor(
+    max_workers=_AI_MAX,
+    thread_name_prefix="image-studio-ai",
 )
-_blocking_pools_lock = threading.Lock()
 # How long a request may wait in the queue for a free slot / free memory.
 _QUEUE_WAIT_S = max(5.0, float(os.environ.get("IMAGE_STUDIO_AI_QUEUE_WAIT_S", "120")))
 
 _DEFAULT_COOLDOWN_S: dict[str, float] = {
     "smart_segment": 1.0,
     "segment": 1.0,
+    "point_cut": 1.0,
     "detect": 1.5,
     "matte": 1.5,
     "inpaint": 2.0,
@@ -118,6 +118,7 @@ _DEFAULT_COOLDOWN_S: dict[str, float] = {
 
 _AI_PATHS = {
     "/api/segment": ("ai", "smart_segment"),
+    "/api/ai/point-cut": ("ai", "point_cut"),
     "/api/ai/detect": ("ai", "detect"),
     "/api/ai/matte": ("ai", "matte"),
     "/api/ai/inpaint": ("ai", "inpaint"),
@@ -146,22 +147,20 @@ async def run_blocking(
     *args: object,
     **kwargs: object,
 ) -> Any:
-    """Run CPU/model work on the app-owned pool.
+    """Run CPU/model work on the app-owned pool without loop-bound futures.
 
-    The executor is scoped to the active event loop. This keeps embedded hosts
-    and tests that create multiple loops from inheriting a future tied to a
-    closed loop, while retaining an explicit bounded pool on Python 3.14.
+    Some supported Python/selector-loop combinations execute a thread-pool job
+    but fail to wake the event loop when its concurrent future completes. Polling
+    that future keeps the API responsive and also works across fresh ASGI loops.
     """
-    loop = asyncio.get_running_loop()
-    with _blocking_pools_lock:
-        pool = _blocking_pools.get(loop)
-        if pool is None:
-            pool = ThreadPoolExecutor(
-                max_workers=_AI_MAX,
-                thread_name_prefix="image-studio-ai",
-            )
-            _blocking_pools[loop] = pool
-    return await loop.run_in_executor(pool, partial(func, *args, **kwargs))
+    future = _blocking_pool.submit(partial(func, *args, **kwargs))
+    try:
+        while not future.done():
+            await asyncio.sleep(0.01)
+    except BaseException:
+        future.cancel()
+        raise
+    return future.result()
 
 
 def _cooldown(route: str) -> float:

@@ -1,4 +1,21 @@
 /**
+ * Normalized width/height of the base image on the artboard (1 = full board).
+ * Original size keeps native pixels; Contain / Cover / Stretch scale to the board.
+ */
+export function fittedImageNorm(fit, sourceW, sourceH, canvasW, canvasH) {
+  const iw = Math.max(1, Number(sourceW) || 1)
+  const ih = Math.max(1, Number(sourceH) || 1)
+  const cw = Math.max(1, Number(canvasW) || 1)
+  const ch = Math.max(1, Number(canvasH) || 1)
+  if (fit === 'Stretch') return { w: 1, h: 1 }
+  if (fit === 'Original size') return { w: iw / cw, h: ih / ch }
+  const contain = Math.min(cw / iw, ch / ih)
+  const cover = Math.max(cw / iw, ch / ih)
+  const base = fit === 'Cover' ? cover : contain
+  return { w: (iw * base) / cw, h: (ih * base) / ch }
+}
+
+/**
  * Return an affine matrix that maps artboard pixels into source-image pixels.
  * The transform mirrors the base Konva image node, including its canvas anchor,
  * rotation, and flips.

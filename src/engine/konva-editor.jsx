@@ -120,6 +120,7 @@ function anchorNodeProps(box, width, height, anchorX = 50, anchorY = 50) {
  *   overlayBounds?: (ov:object)=>{x:number,y:number,w:number,h:number,rotation:number},
  *   selection?: {x:number,y:number,w:number,h:number}|null,
  *   selectionPoints?: Array<{x:number,y:number}>,
+ *   onSelectionComplete?: (payload:object)=>void,
  *   className?: string,
  * }} props
  */
@@ -475,6 +476,10 @@ export function StudioKonvaStage({
           const pos = stage.getRelativePointerPosition()
           if (!pos) return
           const point = stageToNorm(pos)
+          if (selectionTool === 'Object Cut') {
+            onSelectionComplete?.({ type: 'point', point })
+            return
+          }
           if (selectionTool === 'Polygonal Lasso' || selectionTool === 'Pen Path') {
             const prev = draftRef.current?.points || []
             const next = { kind: selectionTool === 'Pen Path' ? 'pen' : 'polygon', points: [...prev, point] }
@@ -539,6 +544,12 @@ export function StudioKonvaStage({
         }
       }}
       onTouchStart={(e) => {
+        if (selectMode && selectionTool === 'Object Cut') {
+          const stage = stageRef.current
+          const pos = stage?.getRelativePointerPosition()
+          if (pos) onSelectionComplete?.({ type: 'point', point: stageToNorm(pos) })
+          return
+        }
         if (!interactive || selectMode) return
         if (e.target === e.target.getStage()) onSelect?.({ kind: 'image', id: null })
       }}

@@ -17,6 +17,7 @@ describe('openapi paths', () => {
     expect(doc.paths['/api/v1/jobs/{job_id}/cancel']).toBeTruthy()
     expect(doc.paths['/api/v1/jobs/{job_id}/result']).toBeTruthy()
     expect(doc.paths[API_PATHS.optimizePng]).toBeTruthy()
+    expect(doc.paths[API_PATHS.aiPointCut]).toBeTruthy()
     expect(doc.paths[API_PATHS.aiMatte]).toBeTruthy()
     expect(doc.paths[API_PATHS.aiInpaint]).toBeTruthy()
   })

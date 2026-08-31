@@ -8,6 +8,7 @@ import {
   Lasso,
   LoaderCircle,
   Move,
+  MousePointerClick,
   PenTool,
   RotateCcw,
   RotateCw,
@@ -22,6 +23,7 @@ const MOVE_TOOL = 'Move'
 const MASK_TOOL = 'Mask'
 const ERASE_TOOL = 'Erase'
 const REMOVE_TOOL = 'RemoveFromImage'
+const OBJECT_CUT_TOOL = 'Object Cut'
 
 const SELECTION_TOOLS = [
   {
@@ -63,6 +65,7 @@ export function ToolsRail({ floating = false }) {
     baseImageSelected,
     beginMaskErase, maskBrush, setMaskBrush,
     selectionPurpose, setSelectionPurpose, beginRemoveFromImage,
+    image, apiAvailable, apiInfo,
   } = useStudio()
   const caps = useStudioStore((s) => s.capabilities)
   const pendingSelection = useStudioStore((s) => s.tools.pendingSelection)
@@ -107,6 +110,19 @@ export function ToolsRail({ floating = false }) {
     setBaseImageSelected(false)
   }
 
+  const activateObjectCut = () => {
+    if (!image) {
+      setToast('Open an image first')
+      return
+    }
+    if (!apiAvailable || !apiInfo?.point_selection) {
+      setToast('Point cut needs the local selection service')
+      return
+    }
+    activateSelection(OBJECT_CUT_TOOL)
+    setToast('Point cut — click the object you want as a new layer')
+  }
+
   const activateMask = () => {
     if (!selectedElement) {
       setToast('Select a layer first to paint a mask')
@@ -149,6 +165,15 @@ export function ToolsRail({ floating = false }) {
       />
 
       <div className="my-1.5 h-px w-6 bg-white/[.08]" />
+
+      <ToolButton
+        label="Point cut"
+        hint="Click an object to cut its exact contour into a new layer"
+        icon={MousePointerClick}
+        active={activeId === OBJECT_CUT_TOOL}
+        disabled={locked || !image || !apiAvailable || !apiInfo?.point_selection}
+        onClick={activateObjectCut}
+      />
 
       {SELECTION_TOOLS.map((tool) => (
         <ToolButton

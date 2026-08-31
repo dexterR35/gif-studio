@@ -186,7 +186,7 @@ function ArtboardPanel() {
 
   return (
     <>
-      <Section title="Artboard" info="Output board size, separate from the base-image background layer." open>
+      <Section title="Artboard" info="Output board size. Changing it does not scale or re-encode the base image." open>
         <div className="gs-chip-row stretch mb-3">
           <button
             type="button"
@@ -200,13 +200,15 @@ function ArtboardPanel() {
         <CanvasSizeControls
           width={settings.width}
           height={settings.height}
+          fit={settings.fit}
           sourceWidth={source?.width || 0}
           sourceHeight={source?.height || 0}
           onWidthChange={setCanvasWidth}
           onHeightChange={setCanvasHeight}
+          onFitChange={(v) => update('fit', v)}
           onMatchSource={useSourceSize}
           locked={canvasLocked}
-          showFit={false}
+          showFit
         />
       </Section>
     </>
@@ -246,7 +248,7 @@ function BaseTransformPanel() {
         <div className={imageLocked ? 'pointer-events-none opacity-40' : undefined}>
           <SelectField
             label="Image fit"
-            info="How this background sits on the artboard."
+            info="Original size keeps native pixels. Contain / Cover / Stretch scale the image to the artboard."
             value={settings.fit}
             onChange={(v) => update('fit', v)}
           >

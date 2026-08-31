@@ -18,6 +18,7 @@ const REQUIRED_PATHS = [
   '/api/v1/jobs/{job_id}/cancel',
   '/api/v1/jobs/{job_id}/result',
   '/api/optimize-png',
+  '/api/ai/point-cut',
   '/api/ai/detect',
   '/api/ai/matte',
   '/api/ai/inpaint',

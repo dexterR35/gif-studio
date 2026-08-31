@@ -66,80 +66,46 @@ def resolve_grounding_dino() -> tuple[Path, Path] | None:
     return None
 
 
-# --- Matte (BiRefNet / RMBG / rembg) ---------------------------------------
+# --- Matte (fixed BiRefNet) -------------------------------------------------
 
-MATTE_VARIANTS = [
-    {
-        "id": "birefnet",
-        "label": "BiRefNet (soft edges)",
-        "rembg": "birefnet-general",
-        "file": "birefnet-general.onnx",
-    },
-    {
-        "id": "birefnet-massive",
-        "label": "BiRefNet Massive (higher quality)",
-        "rembg": "birefnet-massive",
-        "file": "birefnet-massive.onnx",
-    },
-    {
-        "id": "rmbg-2.0",
-        "label": "RMBG-2.0",
-        "rembg": "bria-rmbg",
-        "file": "rmbg-2.0.onnx",
-        "hf_dir": "rmbg-2.0",
-    },
-    {
-        "id": "rembg-isnet",
-        "label": "rembg isnet-general-use",
-        "rembg": "isnet-general-use",
-        "file": None,
-    },
-]
+BIREFNET = {
+    "id": "birefnet",
+    "label": "BiRefNet",
+    "rembg": "birefnet-general",
+    "file": "birefnet-general.onnx",
+    "url": (
+        "https://github.com/danielgatis/rembg/releases/download/"
+        "v0.0.0/BiRefNet-general-epoch_244.onnx"
+    ),
+    "md5": "7a35a0141cbbc80de11d9c9a28f52697",
+}
 
 
 def list_matte_models() -> list[dict[str, Any]]:
     import importlib.util
 
-    rembg_ok = importlib.util.find_spec("rembg") is not None
-    root = models_dir() / "matte"
-    out = []
-    for spec in MATTE_VARIANTS:
-        path = root / spec["file"] if spec.get("file") else None
-        hf = root / spec["hf_dir"] if spec.get("hf_dir") else None
-        file_ready = bool(path and path.exists() and path.stat().st_size > 1024)
-        hf_ready = bool(hf and (hf / "config.json").exists())
-        # rembg can download/cache its own weights — mark ready if package present
-        ready = rembg_ok and (spec["id"] == "rembg-isnet" or file_ready or hf_ready or rembg_ok)
-        if spec["id"] in {"birefnet", "birefnet-massive", "rmbg-2.0"} and not (file_ready or hf_ready):
-            # Still usable via rembg session name when package installed
-            ready = rembg_ok
-        out.append({
-            "id": spec["id"],
-            "label": spec["label"],
-            "rembg": spec.get("rembg"),
-            "path": str(path) if path else None,
-            "ready": ready,
-            "job": "matte",
-        })
-    return out
+    path = models_dir() / "matte" / BIREFNET["file"]
+    ready = (
+        importlib.util.find_spec("rembg") is not None
+        and path.exists()
+        and path.stat().st_size > 1024
+    )
+    return [{
+        "id": BIREFNET["id"],
+        "label": BIREFNET["label"],
+        "rembg": BIREFNET["rembg"],
+        "path": str(path),
+        "ready": ready,
+        "job": "matte",
+    }]
 
 
-def resolve_matte(model_id: str | None = None) -> dict[str, Any] | None:
-    wanted = (model_id or os.environ.get("MATTE_MODEL") or "rembg-isnet").strip().lower()
-    aliases = {
-        "isnet": "rembg-isnet",
-        "isnet-general-use": "rembg-isnet",
-        "rmbg": "rmbg-2.0",
-        "bria-rmbg": "rmbg-2.0",
-        "birefnet-general": "birefnet",
-        "massive": "birefnet-massive",
-        "birefnet_massive": "birefnet-massive",
-    }
-    wanted = aliases.get(wanted, wanted)
-    for spec in MATTE_VARIANTS:
-        if wanted == spec["id"]:
-            return spec
-    return MATTE_VARIANTS[-1]
+def resolve_matte() -> dict[str, Any] | None:
+    """Return the fixed local BiRefNet spec only when its weight is present."""
+    path = models_dir() / "matte" / BIREFNET["file"]
+    if path.exists() and path.stat().st_size > 1024:
+        return {**BIREFNET, "path": str(path)}
+    return None
 
 
 # --- LaMa (erase / clean background) --------------------------------------
@@ -210,18 +176,21 @@ def resolve_lama(model_id: str | None = None) -> Path | None:
     return None
 
 
-# --- Upscale (+ GFPGAN slot) ----------------------------------------------
+# --- Upscale (fixed Real-ESRGAN ×2 and ×4) --------------------------------
 
 UPSCALE_VARIANTS = [
     {
-        "id": "esrgan",
-        "label": "ESRGAN",
-        "file": "ESRGAN_SRx4_DF2KOST_official-ff704c30.pth",
+        "id": "realesrgan-x2",
+        "label": "Real-ESRGAN ×2",
+        "scale": 2,
+        "file": "RealESRGAN_x2plus.pth",
     },
-    {"id": "realesrgan", "label": "Real-ESRGAN", "file": "RealESRGAN_x4plus.pth"},
-    {"id": "realesrgan-x2", "label": "Real-ESRGAN x2", "file": "RealESRGAN_x2plus.pth"},
-    {"id": "a-esrgan", "label": "A-ESRGAN (anime)", "file": "RealESRGAN_x4plus_anime_6B.pth"},
-    {"id": "gfpgan", "label": "GFPGAN (face polish slot)", "file": "GFPGANv1.4.pth", "dir": "gfpgan"},
+    {
+        "id": "realesrgan-x4",
+        "label": "Real-ESRGAN ×4",
+        "scale": 4,
+        "file": "RealESRGAN_x4plus.pth",
+    },
 ]
 
 
@@ -229,8 +198,7 @@ def list_upscale_models() -> list[dict[str, Any]]:
     root = models_dir() / "realesrgan"
     out = []
     for spec in UPSCALE_VARIANTS:
-        base = models_dir() / spec["dir"] if spec.get("dir") else root
-        path = base / spec["file"]
+        path = root / spec["file"]
         out.append({
             **spec,
             "path": str(path),

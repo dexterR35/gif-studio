@@ -24,7 +24,7 @@ export function capabilityControlState(capabilities, capabilityKey, label) {
   }
 
   // Special cases with clearer copy
-  if (capabilityKey === 'api' || capabilityKey === 'rembg' || capabilityKey === 'promptSelection' || capabilityKey === 'lama') {
+  if (capabilityKey === 'api' || capabilityKey === 'rembg' || capabilityKey === 'pointSelection' || capabilityKey === 'promptSelection' || capabilityKey === 'lama') {
     return {
       ready: false,
       disabled: true,

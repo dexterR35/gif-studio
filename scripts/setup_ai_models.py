@@ -10,6 +10,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -20,19 +23,11 @@ MODELS = ROOT / "models"
 THIRD = ROOT / "third_party"
 
 REALESRGAN_URLS = {
-    "RealESRGAN_x4plus.pth": (
-        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
-    ),
     "RealESRGAN_x2plus.pth": (
         "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth"
     ),
-    "ESRGAN_SRx4_DF2KOST_official-ff704c30.pth": (
-        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.1/"
-        "ESRGAN_SRx4_DF2KOST_official-ff704c30.pth"
-    ),
-    "RealESRGAN_x4plus_anime_6B.pth": (
-        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/"
-        "RealESRGAN_x4plus_anime_6B.pth"
+    "RealESRGAN_x4plus.pth": (
+        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
     ),
 }
 
@@ -50,6 +45,15 @@ GROUNDING_DINO_LARGE = {
         "https://github.com/IDEA-Research/GroundingDINO/releases/download/"
         "v0.1.0-alpha2/groundingdino_swinb_cogcoor.pth"
     ),
+}
+
+BIREFNET = {
+    "file": "birefnet-general.onnx",
+    "url": (
+        "https://github.com/danielgatis/rembg/releases/download/"
+        "v0.0.0/BiRefNet-general-epoch_244.onnx"
+    ),
+    "md5": "7a35a0141cbbc80de11d9c9a28f52697",
 }
 
 BERT_RUNTIME_FILES = (
@@ -93,8 +97,72 @@ def clone_repo(url: str, dest: Path) -> None:
     run(["git", "clone", "--depth", "1", url, str(dest)])
 
 
+def patch_grounding_dino_compat() -> None:
+    """Patch deprecated inference calls in the pinned upstream checkout."""
+    replacements = {
+        "groundingdino/models/GroundingDINO/bertwarper.py": (
+            ("self.config.use_return_dict", "self.config.return_dict"),
+        ),
+        "groundingdino/models/GroundingDINO/transformer.py": (
+            (
+                "torch.cuda.amp.autocast(enabled=False)",
+                'torch.amp.autocast("cuda", enabled=False)',
+            ),
+            (
+                "                torch.linspace(0.5, W_ - 0.5, W_, "
+                "dtype=torch.float32, device=device),\n"
+                "            )",
+                "                torch.linspace(0.5, W_ - 0.5, W_, "
+                "dtype=torch.float32, device=device),\n"
+                '                indexing="ij",\n'
+                "            )",
+            ),
+        ),
+        "groundingdino/models/GroundingDINO/backbone/swin_transformer.py": (
+            ("from timm.models.layers import", "from timm.layers import"),
+            (
+                "torch.meshgrid([coords_h, coords_w])",
+                'torch.meshgrid([coords_h, coords_w], indexing="ij")',
+            ),
+        ),
+        "groundingdino/models/GroundingDINO/fuse_modules.py": (
+            ("from timm.models.layers import", "from timm.layers import"),
+        ),
+        "groundingdino/models/GroundingDINO/utils.py": (
+            (
+                "            torch.linspace(0, W_ - 1, W_, "
+                "dtype=torch.float32, device=memory.device),\n"
+                "        )",
+                "            torch.linspace(0, W_ - 1, W_, "
+                "dtype=torch.float32, device=memory.device),\n"
+                '            indexing="ij",\n'
+                "        )",
+            ),
+            (r"\sum{hw}", "sum(hw)"),
+        ),
+        "groundingdino/util/box_ops.py": (
+            ("torch.meshgrid(y, x)", 'torch.meshgrid(y, x, indexing="ij")'),
+        ),
+        "groundingdino/util/get_tokenlizer.py": (
+            ('    print("final text_encoder_type: {}".format(text_encoder_type))\n', ""),
+        ),
+    }
+    root = THIRD / "GroundingDINO"
+    for relative, changes in replacements.items():
+        path = root / relative
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        patched = text
+        for old, new in changes:
+            patched = patched.replace(old, new)
+        if patched != text:
+            path.write_text(patched, encoding="utf-8")
+            print(f"  patched compatibility → {path.relative_to(ROOT)}")
+
+
 def setup_realesrgan() -> None:
-    print("\n[Real-ESRGAN / ESRGAN / A-ESRGAN] GitHub releases → models/realesrgan/")
+    print("\n[Real-ESRGAN ×2 / ×4] GitHub releases → models/realesrgan/")
     for name, url in REALESRGAN_URLS.items():
         download(url, MODELS / "realesrgan" / name)
 
@@ -105,25 +173,47 @@ def setup_sam2() -> None:
     print("  install package: pip install 'git+https://github.com/facebookresearch/sam2.git'")
 
 
-def setup_matte_dirs() -> None:
-    print("\n[Matte] BiRefNet / RMBG via rembg — models/matte/")
-    (MODELS / "matte").mkdir(parents=True, exist_ok=True)
-    print("  rembg downloads session weights on first use (birefnet-general, isnet, …)")
-    print("  optional: drop ONNX under models/matte/; pip install rembg")
+def file_md5(path: Path) -> str:
+    digest = hashlib.md5()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def setup_birefnet() -> None:
+    """Install the single fixed matte weight under models/, never at runtime."""
+    print("\n[BiRefNet] fixed soft-edge matte → models/matte/")
+    dest = MODELS / "matte" / BIREFNET["file"]
+    if dest.exists() and file_md5(dest) != BIREFNET["md5"]:
+        print("  replacing invalid BiRefNet checkpoint")
+        dest.unlink()
+
+    # Reuse rembg's legacy cache when present instead of downloading another 928 MiB.
+    xdg_home = Path(os.environ.get("XDG_DATA_HOME", "~")).expanduser()
+    legacy = xdg_home / ".u2net" / BIREFNET["file"]
+    if not dest.exists() and legacy.exists() and file_md5(legacy) == BIREFNET["md5"]:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        print(f"  copying existing cache → {dest.relative_to(ROOT)}")
+        shutil.copy2(legacy, dest)
+
+    download(BIREFNET["url"], dest)
+    digest = file_md5(dest)
+    if digest != BIREFNET["md5"]:
+        dest.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"BiRefNet checkpoint checksum failed ({digest} != {BIREFNET['md5']}); "
+            "file removed"
+        )
+    print(f"  MD5 ok: {digest}")
 
 
 def setup_lama() -> None:
     print("\n[LaMa] FULL big-lama erase → models/lama/big-lama.pt (~206 MB)")
     print("  (Places FFCResNetGenerator — same as lama-cleaner / IOPaint, not lite)")
     dest = MODELS / "lama" / "big-lama.pt"
-    import hashlib
-
     def checksum() -> str:
-        h = hashlib.md5()
-        with dest.open("rb") as fh:
-            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-                h.update(chunk)
-        return h.hexdigest()
+        return file_md5(dest)
 
     if dest.exists() and dest.stat().st_size > 1024:
         digest = checksum()
@@ -139,14 +229,6 @@ def setup_lama() -> None:
         )
     print(f"  MD5 ok: {digest}")
     print("  runtime: image_studio.ai.lama_runner (HD crop + pad_mod 8)")
-
-
-def setup_slots() -> None:
-    print("\n[Slots] GFPGAN / LaMa dirs")
-    for name in ("gfpgan", "lama"):
-        (MODELS / name).mkdir(parents=True, exist_ok=True)
-    print("  gfpgan/   — GFPGANv1.4.pth face polish slot")
-    print("  lama/     — big-lama.pt from setup_lama()")
 
 
 def setup_bert_local() -> None:
@@ -173,6 +255,7 @@ def setup_grounding_dino(install_pkg: bool) -> None:
         "https://github.com/IDEA-Research/GroundingDINO.git",
         THIRD / "GroundingDINO",
     )
+    patch_grounding_dino_compat()
     cfg_dir = THIRD / "GroundingDINO" / "groundingdino" / "config"
     spec = GROUNDING_DINO_LARGE
     download(spec["url"], MODELS / "groundingdino" / spec["file"])
@@ -203,7 +286,7 @@ def main() -> int:
     parser.add_argument(
         "--selection-only",
         action="store_true",
-        help="Install only the fixed prompt-selection checkpoints and runtime",
+        help="Install only the fixed point/prompt selection checkpoints and runtime",
     )
     args = parser.parse_args()
 
@@ -214,10 +297,9 @@ def main() -> int:
     setup_grounding_dino(
         install_pkg=not args.no_install_dino,
     )
+    setup_birefnet()
     if not args.selection_only:
         setup_realesrgan()
-        setup_matte_dirs()
-        setup_slots()
         setup_lama()
     print("\nDone. Runtime inference is local-only.")
     print("  pip install -r requirements-ai.txt")

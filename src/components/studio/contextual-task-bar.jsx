@@ -1,40 +1,19 @@
 /**
  * Photoshop-style Contextual Task Bar — compact horizontal actions over the preview.
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   Eraser,
   ImageMinus,
   LoaderCircle,
-  MoreHorizontal,
+  ScanSearch,
   Scissors,
-  Sparkles,
   UserRound,
 } from 'lucide-react'
 import { useStudio } from '../../context/studio-provider'
 import { useStudioStore } from '../../store/studio-store'
 import { capabilityButtonProps } from '../../a11y/capability-honesty'
 import { cn } from '../../lib/cn'
-
-const MATTE_FALLBACK = [
-  { id: 'birefnet', label: 'BiRefNet (soft edges)' },
-  { id: 'birefnet-massive', label: 'BiRefNet Massive (higher quality)' },
-  { id: 'rmbg-2.0', label: 'RMBG-2.0' },
-  { id: 'rembg-isnet', label: 'rembg isnet' },
-]
-
-function optionLabel(m) {
-  if (m.ready === false) {
-    if (/\((missing|needs HF)/i.test(m.label)) return m.label
-    return `${m.label} (missing)`
-  }
-  return m.label
-}
-
-function pickReady(options, currentId) {
-  if (options.some((m) => m.id === currentId && m.ready !== false)) return currentId
-  return options.find((m) => m.ready !== false)?.id || currentId
-}
 
 function BarBtn({
   disabled,
@@ -87,44 +66,19 @@ export function ContextualTaskBar() {
     confirmCutSelection,
     selectionPurpose,
     pendingSelection,
+    runTextDetect,
     setToast,
   } = useStudio()
   const caps = useStudioStore((s) => s.capabilities)
-  const cutoutModel = useStudioStore((s) => s.tools.cutoutModel)
-  const setCutoutModel = useStudioStore((s) => s.setCutoutModel)
 
   const [busy, setBusy] = useState('')
-  const [menuOpen, setMenuOpen] = useState(false)
-  const rootRef = useRef(null)
+  const [prompt, setPrompt] = useState('')
 
   const inpaintBtn = capabilityButtonProps(caps, 'lama', 'Remove from image')
+  const detectBtn = capabilityButtonProps(caps, 'promptSelection', 'Find & cut out')
   const inpaintEngine = 'LaMa'
   const eraseSelect = selectMode && selectionPurpose === 'erase'
   const hasPendingCut = Boolean(pendingSelection?.rect)
-
-  const cutoutOptions = useMemo(() => (
-    caps.models?.matte?.length ? caps.models.matte : MATTE_FALLBACK
-  ), [caps.models])
-
-  useEffect(() => {
-    setCutoutModel((id) => pickReady(cutoutOptions, id || 'birefnet'))
-  }, [cutoutOptions, setCutoutModel])
-
-  useEffect(() => {
-    if (!menuOpen) return undefined
-    const onDoc = (e) => {
-      if (!rootRef.current?.contains(e.target)) setMenuOpen(false)
-    }
-    const onKey = (e) => {
-      if (e.key === 'Escape') setMenuOpen(false)
-    }
-    document.addEventListener('pointerdown', onDoc)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('pointerdown', onDoc)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [menuOpen])
 
   const selectedCutout = useMemo(
     () => elements.find((el) => el.id === selectedElement && (el.sourceBitmap || el.bitmap)),
@@ -134,11 +88,10 @@ export function ContextualTaskBar() {
   const locked = Boolean(busy || studioLocked)
   // Keep bar visible while drawing erase selection or waiting for Cut.
   const hidden = !image || (selectMode && !eraseSelect && !hasPendingCut) || (maskEditing && !hasPendingCut)
-  const cutoutLabel = cutoutOptions.find((m) => m.id === cutoutModel)?.label || cutoutModel
+  const cutoutLabel = 'BiRefNet'
 
   const run = async (label, fn) => {
     setBusy(label)
-    setMenuOpen(false)
     try {
       await fn()
     } catch (err) {
@@ -216,14 +169,51 @@ export function ContextualTaskBar() {
   return (
     <div className="pointer-events-none absolute left-1/2 top-0 z-30 w-max max-w-[calc(100%-1rem)] -translate-x-1/2 pt-2.5">
       <div
-        ref={rootRef}
         className={cn(
-          'pointer-events-auto relative flex items-center gap-1.5 rounded-[var(--control-radius)]',
+          'pointer-events-auto relative flex max-w-full items-center gap-1.5 overflow-x-auto rounded-[var(--control-radius)]',
           'border border-white/[.08] bg-panel px-1.5 py-1.5',
         )}
         role="toolbar"
         aria-label="Contextual task bar"
       >
+        <label className="flex min-w-0 items-center">
+          <span className="sr-only">Text prompt</span>
+          <input
+            type="text"
+            value={prompt}
+            disabled={locked}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="chair . person . dog ."
+            onChange={(event) => setPrompt(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter') return
+              event.preventDefault()
+              if (!prompt.trim() || locked || detectBtn.disabled) return
+              run('Detect', () => runTextDetect(prompt))
+            }}
+            className={cn(
+              'h-8 w-[10.5rem] min-w-[7rem] rounded-[var(--control-radius)] border-0 bg-control',
+              'px-2.5 text-[11px] font-medium text-zinc-200 outline-none',
+              'placeholder:text-zinc-600',
+              'hover:bg-[var(--color-control-hover)]',
+              'focus:bg-[var(--color-control-hover)]',
+              'disabled:opacity-50',
+            )}
+          />
+        </label>
+        <BarBtn
+          disabled={locked || !prompt.trim() || detectBtn.disabled}
+          busy={busy === 'Detect'}
+          icon={ScanSearch}
+          title={detectBtn.disabled
+            ? detectBtn.title
+            : 'Find & cut out — describe the object, then run'}
+          onClick={() => run('Detect', () => runTextDetect(prompt))}
+        />
+
+        <div className="mx-0.5 h-4 w-px shrink-0 bg-white/[.12]" aria-hidden="true" />
+
         <BarBtn
           disabled={locked || inpaintBtn.disabled}
           busy={busy === 'RemoveObject'}
@@ -242,7 +232,6 @@ export function ContextualTaskBar() {
           icon={UserRound}
           title={`Select subject · ${cutoutLabel} · base stays untouched`}
           onClick={() => run('SelectSubject', () => runMatteCutout({
-            model: cutoutModel,
             target: 'canvas',
           }))}
         >
@@ -257,7 +246,6 @@ export function ContextualTaskBar() {
             ? `Remove background on “${selectedCutout.name}” only · base stays untouched · ${cutoutLabel}`
             : 'Select a cutout layer first'}
           onClick={() => run('RemoveBG', () => runMatteCutout({
-            model: cutoutModel,
             target: 'selection',
           }))}
         >
@@ -278,57 +266,6 @@ export function ContextualTaskBar() {
           Clean background
         </BarBtn>
 
-        <BarBtn
-          disabled={locked}
-          busy={busy === 'Matte'}
-          icon={Sparkles}
-          title={`${cutoutLabel} → layer`}
-          onClick={() => run('Matte', () => runMatteCutout({
-            model: cutoutModel,
-            target: 'canvas',
-          }))}
-        />
-
-        <div className="relative">
-          <BarBtn
-            disabled={locked}
-            icon={MoreHorizontal}
-            title="More · cutout engine"
-            className={menuOpen ? 'bg-acid/10 text-acid' : ''}
-            onClick={() => setMenuOpen((v) => !v)}
-          />
-
-          {menuOpen && (
-            <div
-              className={cn(
-                'absolute right-0 top-[calc(100%+6px)] z-40 w-56 rounded-[var(--control-radius)]',
-                'border border-white/[.08] bg-panel p-2',
-              )}
-              role="menu"
-            >
-              <label className="block">
-                <span className="gs-label">Cutout engine</span>
-                <div className="gs-select-wrap">
-                  <select
-                    value={cutoutModel}
-                    disabled={locked}
-                    onChange={(e) => setCutoutModel(e.target.value)}
-                    className="gs-select focus-ring"
-                  >
-                    {cutoutOptions.map((m) => (
-                      <option key={m.id} value={m.id} disabled={m.ready === false}>
-                        {optionLabel(m)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </label>
-              <p className="mt-2 text-[10px] leading-snug text-zinc-600">
-                Soft matte engine for Select subject and Remove background.
-              </p>
-            </div>
-          )}
-        </div>
       </div>
     </div>
   )

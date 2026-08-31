@@ -13,6 +13,7 @@ export const API_PATHS = {
   jobResult: (jobId) => `/api/v1/jobs/${encodeURIComponent(jobId)}/result`,
   optimizePng: '/api/optimize-png',
   aiMatte: '/api/ai/matte',
+  aiPointCut: '/api/ai/point-cut',
   aiDetect: '/api/ai/detect',
   aiInpaint: '/api/ai/inpaint',
   aiUpscale: '/api/ai/upscale',

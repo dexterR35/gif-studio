@@ -1,7 +1,7 @@
-"""Image upscaling with ESRGAN, Real-ESRGAN, and A-ESRGAN.
+"""Image upscaling with fixed Real-ESRGAN ×2 and ×4 weights.
 
-Real-ESRGAN / ESRGAN / A-ESRGAN use xinntao weights via Spandrel or
-realesrgan+basicsr. Missing weights or packages raise.
+The two Real-ESRGAN checkpoints use Spandrel or realesrgan+basicsr. Missing
+weights or packages raise; no alternate model family is accepted.
 
 Guards: refuse output > 5k px on a side; refuse if estimated peak RAM > 20 GB;
 tile + limit torch/OMP threads so upscale does not freeze the machine.
@@ -21,7 +21,7 @@ from urllib.request import urlretrieve
 import cv2
 import numpy as np
 
-from .paths import decode_bgr, encode_png, env_path, models_dir, torch_device
+from .paths import decode_bgr, encode_png, models_dir, torch_device
 
 # Hard product limits — keep upscale from locking the PC / blowing RAM.
 MAX_UPSCALE_DIMENSION = 5000
@@ -31,62 +31,40 @@ DEFAULT_UPSCALE_TILE = 256
 # Keep CPU inference from saturating all cores.
 DEFAULT_UPSCALE_THREADS = 2
 
-# model id → (filename, url, net_scale, num_block)
-MODEL_SPECS: dict[str, dict[str, Any]] = {
-    "esrgan": {
-        "file": "ESRGAN_SRx4_DF2KOST_official-ff704c30.pth",
+# Output scale → exact fixed Real-ESRGAN checkpoint.
+MODEL_SPECS: dict[int, dict[str, Any]] = {
+    2: {
+        "file": "RealESRGAN_x2plus.pth",
         "url": (
-            "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.1/"
-            "ESRGAN_SRx4_DF2KOST_official-ff704c30.pth"
+            "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/"
+            "RealESRGAN_x2plus.pth"
         ),
-        "net_scale": 4,
         "num_block": 23,
-        "label": "esrgan",
     },
-    "realesrgan": {
+    4: {
         "file": "RealESRGAN_x4plus.pth",
         "url": (
             "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/"
             "RealESRGAN_x4plus.pth"
         ),
-        "file_x2": "RealESRGAN_x2plus.pth",
-        "url_x2": (
-            "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/"
-            "RealESRGAN_x2plus.pth"
-        ),
-        "net_scale": 4,
         "num_block": 23,
-        "label": "realesrgan",
-    },
-    "a-esrgan": {
-        "file": "RealESRGAN_x4plus_anime_6B.pth",
-        "url": (
-            "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/"
-            "RealESRGAN_x4plus_anime_6B.pth"
-        ),
-        "net_scale": 4,
-        "num_block": 6,
-        "label": "a-esrgan",
     },
 }
 
-ALIASES = {
-    "esrgan": "esrgan",
-    "real-esrgan": "realesrgan",
-    "realesrgan": "realesrgan",
-    "realesrgan-x2": "realesrgan-x2",
-    "a-esrgan": "a-esrgan",
-    "aesrgan": "a-esrgan",
-    "anime": "a-esrgan",
-}
+SUPPORTED_SCALES = frozenset(MODEL_SPECS)
 
 
-def normalize_model(model: str | None) -> str:
-    key = (model or "realesrgan").strip().lower().replace("_", "-")
-    if key not in ALIASES:
-        known = ", ".join(sorted(set(ALIASES.values())))
-        raise RuntimeError(f"Unknown upscale model {model!r}. Supported: {known}.")
-    return ALIASES[key]
+def normalize_scale(scale: int) -> int:
+    try:
+        numeric = float(scale)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Real-ESRGAN scale must be 2 or 4.") from exc
+    if not numeric.is_integer():
+        raise ValueError("Real-ESRGAN scale must be 2 or 4.")
+    value = int(numeric)
+    if value not in SUPPORTED_SCALES:
+        raise ValueError("Real-ESRGAN scale must be 2 or 4.")
+    return value
 
 
 def estimate_upscale_memory_bytes(width: int, height: int, scale: int) -> int:
@@ -106,7 +84,7 @@ def check_upscale_limits(width: int, height: int, scale: int) -> dict[str, Any]:
     """Validate upscale size/memory. Raises ValueError if unsafe."""
     w = max(1, int(width))
     h = max(1, int(height))
-    s = max(1, min(4, int(scale)))
+    s = normalize_scale(scale)
     ow, oh = w * s, h * s
     mem = estimate_upscale_memory_bytes(w, h, s)
     info = {
@@ -190,22 +168,15 @@ def _upscale_resource_limits():
             pass
 
 
-def _weight_path(model: str, scale: int) -> Path:
-    custom = env_path("REALESRGAN_MODEL", "IMAGE_STUDIO_REALESRGAN")
-    if custom and model in {"realesrgan", "realesrgan-x2"}:
-        return custom
-    if model == "realesrgan-x2":
-        return models_dir() / "realesrgan" / "RealESRGAN_x2plus.pth"
-    spec = MODEL_SPECS.get(model) or MODEL_SPECS["realesrgan"]
-    if model == "realesrgan" and int(scale) == 2 and spec.get("file_x2"):
-        return models_dir() / "realesrgan" / spec["file_x2"]
+def _weight_path(scale: int) -> Path:
+    spec = MODEL_SPECS[normalize_scale(scale)]
     return models_dir() / "realesrgan" / spec["file"]
 
 
-def _ensure_weights(model: str, scale: int) -> Path:
+def _ensure_weights(scale: int) -> Path:
     """Require local weights under models/realesrgan (no runtime Hub downloads)."""
-    mid = "realesrgan" if model == "realesrgan-x2" else model
-    path = _weight_path(model, scale)
+    normalized_scale = normalize_scale(scale)
+    path = _weight_path(normalized_scale)
     if path.exists() and path.stat().st_size > 1024:
         return path
     # Optional one-shot fetch from GitHub releases (not Hugging Face)
@@ -218,11 +189,7 @@ def _ensure_weights(model: str, scale: int) -> Path:
             "Run: python scripts/setup_ai_models.py"
         )
     path.parent.mkdir(parents=True, exist_ok=True)
-    spec = MODEL_SPECS[mid]
-    if (model == "realesrgan-x2" or (model == "realesrgan" and int(scale) == 2)) and spec.get("url_x2"):
-        url = spec["url_x2"]
-    else:
-        url = spec["url"]
+    url = MODEL_SPECS[normalized_scale]["url"]
     tmp = path.with_suffix(path.suffix + ".part")
     urlretrieve(url, tmp)
     tmp.replace(path)
@@ -249,38 +216,28 @@ def realesrgan_ready() -> bool:
     return spandrel_ready() or realesrgan_package_ready()
 
 
-def upscale_available(model: str | None = None, scale: int = 2) -> bool:
+def upscale_available(scale: int = 2) -> bool:
     try:
-        mid = normalize_model(model)
-    except RuntimeError:
+        normalized_scale = normalize_scale(scale)
+    except (TypeError, ValueError):
         return False
     if not realesrgan_ready():
         return False
     try:
-        path = _weight_path(mid, scale)
+        path = _weight_path(normalized_scale)
         return path.exists() and path.stat().st_size > 1024
     except Exception:
         return False
 
 
-def _spec_key(model: str) -> str:
-    if model == "realesrgan-x2":
-        return "realesrgan"
-    return model
-
-
-@lru_cache(maxsize=6)
-def _realesrganer(model: str, net_scale: int):
+@lru_cache(maxsize=2)
+def _realesrganer(net_scale: int):
     from basicsr.archs.rrdbnet_arch import RRDBNet
     from realesrgan import RealESRGANer
 
-    key = _spec_key(model)
-    spec = MODEL_SPECS[key]
-    if model == "realesrgan-x2" or (model == "realesrgan" and int(net_scale) == 2):
-        net_scale = 2
-    else:
-        net_scale = int(spec["net_scale"])
-    weights = _ensure_weights(model, net_scale)
+    net_scale = normalize_scale(net_scale)
+    spec = MODEL_SPECS[net_scale]
+    weights = _ensure_weights(net_scale)
     num_block = int(spec["num_block"])
     model_net = RRDBNet(
         num_in_ch=3,
@@ -305,54 +262,47 @@ def _realesrganer(model: str, net_scale: int):
         half=half,
         device=device,
     )
-    return upsampler, f"{spec['label']}-x{net_scale}", net_scale
+    return upsampler, f"realesrgan-x{net_scale}"
 
 
-@lru_cache(maxsize=6)
-def _spandrel_model(model: str, net_scale: int):
+@lru_cache(maxsize=2)
+def _spandrel_model(net_scale: int):
     from spandrel import ImageModelDescriptor, ModelLoader
 
-    weights = _ensure_weights(model, net_scale)
+    net_scale = normalize_scale(net_scale)
+    weights = _ensure_weights(net_scale)
     loaded = ModelLoader().load_from_file(str(weights))
     if not isinstance(loaded, ImageModelDescriptor):
         raise RuntimeError(f"Unexpected Spandrel model type: {type(loaded)}")
+    loaded_scale = int(loaded.scale)
+    if loaded_scale != net_scale:
+        raise RuntimeError(
+            f"Real-ESRGAN checkpoint scale mismatch: expected ×{net_scale}, "
+            f"loaded ×{loaded_scale}."
+        )
     device = torch_device()
     loaded.to(device).eval()
-    label = MODEL_SPECS[_spec_key(model)]["label"]
-    return loaded, f"{label}-spandrel-x{loaded.scale}", int(loaded.scale), device
+    engine = f"realesrgan-x{loaded_scale}-spandrel"
+    return loaded, engine, device
 
 
 def upscale_with_realesrgan(
     payload: bytes,
     scale: int = 2,
-    model: str = "realesrgan",
 ) -> tuple[bytes, str]:
     """Return (png_bytes, engine_name). Enforces 5k / 20 GiB guards; runs under thread caps."""
-    scale = max(1, min(4, int(scale)))
-    mid = normalize_model(model)
+    scale = normalize_scale(scale)
     image = decode_bgr(payload)
     h, w = image.shape[:2]
     check_upscale_limits(w, h, scale)
 
     with _upscale_resource_limits():
-        if mid not in MODEL_SPECS and mid != "realesrgan-x2":
-            raise RuntimeError(
-                f"Unknown upscale model {model!r}. "
-                f"Supported: {', '.join(sorted(set(ALIASES.values())))}."
-            )
-
         # Prefer Spandrel — works on modern Python without broken basicsr builds.
         if spandrel_ready():
-            return _upscale_spandrel(image, scale, mid)
+            return _upscale_spandrel(image, scale)
 
         if realesrgan_package_ready():
-            if mid == "realesrgan-x2":
-                net_scale = 2
-            elif mid == "realesrgan" and scale <= 2:
-                net_scale = 2
-            else:
-                net_scale = MODEL_SPECS[_spec_key(mid)]["net_scale"]
-            upsampler, engine, _built = _realesrganer(mid, int(net_scale))
+            upsampler, engine = _realesrganer(scale)
             if image.ndim == 2:
                 bgr = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
             else:
@@ -366,15 +316,8 @@ def upscale_with_realesrgan(
     )
 
 
-def _upscale_spandrel(image: np.ndarray, outscale: int, model: str) -> tuple[bytes, str]:
-
-    if model == "realesrgan-x2":
-        net_scale_hint = 2
-    elif model == "realesrgan" and outscale <= 2:
-        net_scale_hint = 2
-    else:
-        net_scale_hint = MODEL_SPECS[_spec_key(model)]["net_scale"]
-    loaded, engine, net_scale, device = _spandrel_model(model, int(net_scale_hint))
+def _upscale_spandrel(image: np.ndarray, outscale: int) -> tuple[bytes, str]:
+    loaded, engine, device = _spandrel_model(outscale)
     if image.ndim == 2:
         rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
     elif image.shape[2] == 4:
@@ -390,12 +333,6 @@ def _upscale_spandrel(image: np.ndarray, outscale: int, model: str) -> tuple[byt
     else:
         bgr = _spandrel_tiled(loaded, rgb, device, tile=tile, pad=16)
 
-    if outscale != net_scale:
-        bgr = cv2.resize(
-            bgr,
-            (int(w * outscale), int(h * outscale)),
-            interpolation=cv2.INTER_LANCZOS4,
-        )
     return encode_png(bgr), engine
 
 

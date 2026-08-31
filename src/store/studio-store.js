@@ -34,8 +34,6 @@ const INITIAL_TOOLS = {
   extractTolerance: 42,
   maskEditing: false,
   maskBrush: { mode: 'Hide', size: 48, hardness: 70, opacity: 100, feather: 8 },
-  /** Soft-matte rembg id, or ``opencv-grabcut`` for explicit OpenCV GrabCut. */
-  cutoutModel: 'birefnet',
   /**
    * What a finished marquee/lasso does:
    * - cutout: lift selection into a floating layer
@@ -114,10 +112,10 @@ export const useStudioStore = create((set, get) => ({
   capabilities: {
     opencv: false,
     onnx: false,
+    pointSelection: false,
     promptSelection: false,
     matte: false,
     lama: false,
-    gfpgan: false,
     realesrgan: false,
     rembg: false,
     api: false,
@@ -259,9 +257,6 @@ export const useStudioStore = create((set, get) => ({
     const next = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
     return { tools: { ...state.tools, maskBrush: next } }
   }),
-  setCutoutModel: (updater) => set((state) => ({
-    tools: { ...state.tools, cutoutModel: apply(state.tools.cutoutModel, updater) },
-  })),
   setSelectionPurpose: (updater) => set((state) => ({
     tools: { ...state.tools, selectionPurpose: apply(state.tools.selectionPurpose, updater) },
   })),

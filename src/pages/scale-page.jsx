@@ -37,29 +37,26 @@ export default function ScalePage() {
     downloadBusy, scaleBusy, studioLocked, setToast,
   } = useStudio()
   const caps = useStudioStore((s) => s.capabilities)
-  const [upscaleModel, setUpscaleModel] = useState('realesrgan')
   const [upscaleScale, setUpscaleScale] = useState(2)
 
   const upscaleOptions = useMemo(
-    () => (caps.models?.upscale?.length ? caps.models.upscale : UPSCALE_MODELS)
-      .filter((model) => model.id !== 'gfpgan'),
+    () => (caps.models?.upscale?.length ? caps.models.upscale : UPSCALE_MODELS),
     [caps.models],
   )
 
   useEffect(() => {
-    const readyUp = upscaleOptions.find((m) => m.ready !== false && m.id !== 'gfpgan')
-    if (readyUp) {
-      setUpscaleModel((id) => (upscaleOptions.some((m) => m.id === id && m.ready !== false) ? id : readyUp.id))
-    }
-  }, [upscaleOptions])
+    const selected = upscaleOptions.find((option) => Number(option.scale) === upscaleScale)
+    if (selected?.ready !== false) return
+    const ready = upscaleOptions.find((option) => option.ready !== false)
+    if (ready) setUpscaleScale(Number(ready.scale))
+  }, [upscaleOptions, upscaleScale])
 
   const ioLocked = Boolean(studioLocked)
   const device = deviceLabel(caps.device)
   const hasEnhanced = Boolean(enhancedLayer?.image)
-  const browserOnnxReady = Boolean(import.meta.env.VITE_REALESRGAN_ONNX)
-  const selectedUpscaleReady = caps.realesrgan && upscaleOptions.some((model) => (
-    model.id === upscaleModel && model.ready !== false
-  )) || (upscaleModel === 'realesrgan' && browserOnnxReady)
+  const selectedUpscaleReady = Boolean(caps.realesrgan && upscaleOptions.some((option) => (
+    Number(option.scale) === upscaleScale && option.ready !== false
+  )))
   const largerThanCanvas = hasEnhanced
     && (enhancedLayer.width > settings.width || enhancedLayer.height > settings.height)
 
@@ -69,7 +66,7 @@ export default function ScalePage() {
       return
     }
     try {
-      await runUpscaleToEnhanced({ model: upscaleModel, scale: upscaleScale })
+      await runUpscaleToEnhanced({ scale: upscaleScale })
     } catch (err) {
       setToast(err?.message || 'Upscale failed')
     }
@@ -83,20 +80,15 @@ export default function ScalePage() {
         open
       >
         <div className="space-y-2">
-          <SelectField label="Upscale model" value={upscaleModel} onChange={setUpscaleModel}>
+          <SelectField
+            label="Real-ESRGAN scale"
+            value={String(upscaleScale)}
+            onChange={(value) => setUpscaleScale(Number(value))}
+          >
             {upscaleOptions.map((m) => (
-              <option key={m.id} value={m.id} disabled={m.ready === false}>
+              <option key={m.id} value={m.scale} disabled={m.ready === false}>
                 {optionLabel(m)}
               </option>
-            ))}
-          </SelectField>
-          <SelectField
-            label="Scale"
-            value={String(upscaleScale)}
-            onChange={(v) => setUpscaleScale(Number(v))}
-          >
-            {[2, 3, 4].map((s) => (
-              <option key={s} value={s}>{s}×</option>
             ))}
           </SelectField>
           <Button
@@ -112,7 +104,7 @@ export default function ScalePage() {
             {scaleBusy ? 'Upscaling…' : `Upscale ${upscaleScale}× → layer`}
           </Button>
           <p className="text-[10px] leading-snug text-zinc-600">
-            GFPGAN is a face-polish slot when weights exist. Size/RAM caps are enforced on the API.
+            Fixed local Real-ESRGAN ×2 and ×4 checkpoints. Size/RAM caps are enforced on the API.
           </p>
         </div>
       </Section>

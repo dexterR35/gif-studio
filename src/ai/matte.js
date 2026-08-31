@@ -1,13 +1,12 @@
-/** Soft matte — BiRefNet / RMBG / rembg via /api/ai/matte */
+/** Fixed BiRefNet soft matte via /api/ai/matte. */
 import { postMatte } from '../api/ai-fetch.js'
 
-export async function matteWithModel({ imageCanvas, imageBlob, model = 'rembg-isnet', signal } = {}) {
+export async function matteWithModel({ imageCanvas, imageBlob, signal } = {}) {
   const blob = imageBlob || await new Promise((resolve, reject) => {
     imageCanvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not read canvas'))), 'image/png')
   })
   const form = new FormData()
   form.append('image', blob, 'image.png')
-  if (model) form.append('model', model)
   return postMatte(form, { signal })
 }
 

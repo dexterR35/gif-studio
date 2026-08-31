@@ -2,7 +2,7 @@
 export const INITIAL = {
   width: 480,
   height: 300,
-  fit: 'Contain',
+  fit: 'Original size',
   background: '#111114',
   transparent: false,
   reducePalette: false,
