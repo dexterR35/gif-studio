@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { TEXT_DEFAULT, MAX_TEXT_LAYERS } from '../lib/presets'
+import { TEXT_DEFAULT, MAX_TEXT_LAYERS, SYSTEM_FONTS } from '../lib/presets'
 import { measureTextLayerPx, textLayerBoundsPct } from '../lib/text-measure'
 import { IMAGE_EDITS_DEFAULT } from '../lib/project-document'
 import { HEALTH_TIMEOUT_MS } from '../lib/catalogs'
@@ -17,6 +17,7 @@ import {
 import { cropRectByPixelBounds, fittedImageNorm, sourceFromStageMatrix } from '../lib/image-space.js'
 import { alphaMaskRgba, visibleMaskRgba } from '../lib/mask-pixels.js'
 import { apiClient } from '../api/js-client.js'
+import { StudioSessionPersistence } from '../persistence/studio-session-persistence.js'
 
 const StudioContext = createContext(null)
 
@@ -42,6 +43,27 @@ const blobUrlFromCanvas = (canvas, type = 'image/png') => new Promise((resolve, 
     resolve(URL.createObjectURL(blob))
   }, type)
 })
+
+const imageFromUrl = (url) => new Promise((resolve, reject) => {
+  const img = new Image()
+  img.onload = () => resolve(img)
+  img.onerror = reject
+  img.src = url
+})
+
+const canvasFromBlob = async (blob) => {
+  const url = URL.createObjectURL(blob)
+  try {
+    const img = await imageFromUrl(url)
+    const canvas = document.createElement('canvas')
+    canvas.width = img.naturalWidth || img.width
+    canvas.height = img.naturalHeight || img.height
+    canvas.getContext('2d').drawImage(img, 0, 0)
+    return canvas
+  } finally {
+    revokeBlobUrl(url)
+  }
+}
 
 /** Array index 0 = back, last = front. direction: -1 back, +1 front, 'back', 'front'. */
 function moveInStack(list, id, direction) {
@@ -150,8 +172,17 @@ export function StudioProvider({ children }) {
   const loadGenerationRef = useRef(0)
   const sourceUrlRef = useRef(null)
   const sourceLoadPolicyRef = useRef({ url: null, preserveCanvasSize: false })
+  const persistenceRef = useRef(null)
+  if (!persistenceRef.current) persistenceRef.current = new StudioSessionPersistence()
+  const persistenceTimerRef = useRef(null)
+  const hydrationGenerationRef = useRef(0)
+  const customFontsRef = useRef(new Map())
+  const [persistenceReady, setPersistenceReady] = useState(false)
 
   // ── Zustand: durable doc is V2 (`s.project`); editor view for Konva / arrays ──
+  const project = useStudioStore((s) => s.project)
+  const selectionState = useStudioStore((s) => s.selection)
+  const toolsState = useStudioStore((s) => s.tools)
   const settings = useStudioStore((s) => s.editor.settings)
   const source = useStudioStore((s) => s.editor.source)
   const elements = useStudioStore((s) => s.editor.elements)
@@ -297,6 +328,14 @@ export function StudioProvider({ children }) {
     if (prevUrl && prevUrl !== nextUrl) revokeBlobUrl(prevUrl)
   }
 
+  const clearPersistedSession = async () => {
+    if (persistenceTimerRef.current) {
+      clearTimeout(persistenceTimerRef.current)
+      persistenceTimerRef.current = null
+    }
+    await persistenceRef.current.clear()
+  }
+
   const update = (key, value) => {
     const nextValue = typeof value === 'number' ? nice(value, Number.isInteger(value) ? 0 : 1) : value
     setSettings((s) => ({ ...s, [key]: nextValue }))
@@ -334,6 +373,219 @@ export function StudioProvider({ children }) {
     // Do NOT revoke blob URLs here — Strict Mode remount would break the load.
     return () => { cancelled = true }
   }, [source?.url])
+
+  // Hydrate the latest workspace before autosave is enabled. Binary data comes from
+  // IndexedDB; localStorage only contains the Project V2 document and small UI state.
+  useEffect(() => {
+    const generation = ++hydrationGenerationRef.current
+    let cancelled = false
+    const createdUrls = []
+    const isCancelled = () => cancelled || generation !== hydrationGenerationRef.current
+
+    const restoreCanvas = async (ref) => {
+      if (!ref) return null
+      try {
+        const blob = await persistenceRef.current.readBlob(ref)
+        return blob ? await canvasFromBlob(blob) : null
+      } catch {
+        return null
+      }
+    }
+
+    const restore = async () => {
+      try {
+        const saved = await persistenceRef.current.load()
+        if (isCancelled()) return
+        if (!saved) {
+          setPersistenceReady(true)
+          return
+        }
+
+        const sourceBlob = await persistenceRef.current.readBlob(saved.assets?.source)
+        if (!sourceBlob) {
+          await persistenceRef.current.clear()
+          if (!isCancelled()) setPersistenceReady(true)
+          return
+        }
+
+        useStudioStore.getState().loadProject(saved.project)
+        const restoredEditor = useStudioStore.getState().editor
+        const sourceUrl = URL.createObjectURL(sourceBlob)
+        createdUrls.push(sourceUrl)
+
+        const restoredElements = await Promise.all((restoredEditor.elements || []).map(async (element) => {
+          const refs = saved.assets?.elements?.[element.id] || {}
+          const [bitmap, sourceBitmap, maskCanvas, cleanup] = await Promise.all([
+            restoreCanvas(refs.bitmap),
+            restoreCanvas(refs.sourceBitmap),
+            restoreCanvas(refs.maskCanvas),
+            restoreCanvas(refs.cleanup),
+          ])
+          return {
+            ...element,
+            ...(bitmap ? { bitmap } : {}),
+            ...(sourceBitmap ? { sourceBitmap } : {}),
+            ...(maskCanvas ? { maskCanvas } : {}),
+            ...(cleanup ? { cleanup } : {}),
+          }
+        }))
+
+        const restoredOverlays = await Promise.all((restoredEditor.overlays || []).map(async (overlay) => {
+          const ref = saved.assets?.overlays?.[overlay.id]
+          if (!ref) return overlay
+          try {
+            const blob = await persistenceRef.current.readBlob(ref)
+            if (!blob) return overlay
+            const url = URL.createObjectURL(blob)
+            createdUrls.push(url)
+            const overlayImage = await imageFromUrl(url)
+            return { ...overlay, url, image: overlayImage }
+          } catch {
+            return overlay
+          }
+        }))
+
+        let restoredEnhanced = restoredEditor.enhancedLayer
+        const enhancedRef = saved.assets?.enhanced
+        if (enhancedRef && restoredEnhanced) {
+          try {
+            const blob = await persistenceRef.current.readBlob(enhancedRef)
+            if (blob) {
+              const url = URL.createObjectURL(blob)
+              createdUrls.push(url)
+              restoredEnhanced = {
+                ...restoredEnhanced,
+                ...(enhancedRef.layer || {}),
+                url,
+                image: await imageFromUrl(url),
+                width: enhancedRef.width || restoredEnhanced.width,
+                height: enhancedRef.height || restoredEnhanced.height,
+              }
+            }
+          } catch { /* keep enhanced metadata even if its bitmap is unavailable */ }
+        }
+
+        const restoredFontFamilies = []
+        for (const [family, ref] of Object.entries(saved.assets?.fonts || {})) {
+          try {
+            const blob = await persistenceRef.current.readBlob(ref)
+            if (!blob) continue
+            const buffer = await blob.arrayBuffer()
+            const face = new FontFace(family, buffer.slice(0))
+            await face.load()
+            document.fonts.add(face)
+            customFontsRef.current.set(family, {
+              family,
+              name: ref.name || family,
+              mimeType: ref.mimeType,
+              buffer,
+            })
+            restoredFontFamilies.push(family)
+          } catch { /* one bad font must not block the project */ }
+        }
+
+        if (isCancelled()) return
+        const sourceMeta = useStudioStore.getState().editor.source || {}
+        replaceSource({
+          ...sourceMeta,
+          name: saved.assets.source.name || sourceMeta.name || 'image',
+          mimeType: saved.assets.source.mimeType,
+          storageKey: saved.assets.source.key,
+          width: saved.assets.source.width || sourceMeta.width,
+          height: saved.assets.source.height || sourceMeta.height,
+          url: sourceUrl,
+          kind: 'image',
+        }, { preserveCanvasSize: true })
+        setElements(restoredElements)
+        setOverlays(restoredOverlays)
+        setEnhancedLayer(restoredEnhanced)
+        if (restoredFontFamilies.length) {
+          setFontOptions((current) => [...new Set([...current, ...restoredFontFamilies])])
+        }
+
+        const store = useStudioStore.getState()
+        store.patchSelection(saved.selection || {})
+        store.patchTools({
+          ...(saved.tools || {}),
+          selectMode: false,
+          selection: null,
+          selectionPoints: [],
+          maskEditing: false,
+          pendingSelection: null,
+        })
+        store.patchUi(saved.ui || {})
+        setPersistenceReady(true)
+      } catch (error) {
+        console.warn('[persistence] Could not restore workspace', error)
+        await persistenceRef.current.clear().catch(() => {})
+        if (!isCancelled()) setPersistenceReady(true)
+      }
+    }
+
+    restore()
+    return () => {
+      cancelled = true
+      hydrationGenerationRef.current += 1
+      createdUrls.forEach(revokeBlobUrl)
+    }
+  }, [])
+
+  // Debounced full-workspace autosave. Project/settings stay small in localStorage;
+  // source pixels, overlays, cutouts, masks, enhanced output, and fonts use IndexedDB.
+  useEffect(() => {
+    if (!persistenceReady) return undefined
+    if (persistenceTimerRef.current) clearTimeout(persistenceTimerRef.current)
+    const current = useStudioStore.getState()
+    if (!current.editor.source?.url) {
+      persistenceRef.current.clear().catch((error) => {
+        console.warn('[persistence] Could not clear empty workspace', error)
+      })
+      return undefined
+    }
+    persistenceTimerRef.current = setTimeout(() => {
+      persistenceTimerRef.current = null
+      const latest = useStudioStore.getState()
+      persistenceRef.current.save({
+        project: latest.project,
+        editor: latest.editor,
+        selection: latest.selection,
+        tools: latest.tools,
+        ui: latest.ui,
+        fonts: customFontsRef.current,
+      }).catch((error) => {
+        console.warn('[persistence] Could not save workspace', error)
+      })
+    }, 650)
+    return () => {
+      if (persistenceTimerRef.current) {
+        clearTimeout(persistenceTimerRef.current)
+        persistenceTimerRef.current = null
+      }
+    }
+  }, [persistenceReady, project, selectionState, toolsState, lockAspect])
+
+  useEffect(() => {
+    if (!persistenceReady) return undefined
+    const persistNow = () => {
+      if (document.visibilityState !== 'hidden') return
+      if (persistenceTimerRef.current) {
+        clearTimeout(persistenceTimerRef.current)
+        persistenceTimerRef.current = null
+      }
+      const latest = useStudioStore.getState()
+      if (!latest.editor.source?.url) return
+      persistenceRef.current.save({
+        project: latest.project,
+        editor: latest.editor,
+        selection: latest.selection,
+        tools: latest.tools,
+        ui: latest.ui,
+        fonts: customFontsRef.current,
+      }).catch(() => {})
+    }
+    document.addEventListener('visibilitychange', persistNow)
+    return () => document.removeEventListener('visibilitychange', persistNow)
+  }, [persistenceReady])
 
   useEffect(() => {
     let cancelled = false
@@ -579,20 +831,32 @@ export function StudioProvider({ children }) {
       setSelectedOverlay(null)
       setSettings((current) => ({ ...current }))
       setImageEdits({ ...IMAGE_EDITS_DEFAULT })
+      setFontOptions([...SYSTEM_FONTS])
     }
 
     const url = URL.createObjectURL(file)
     const probe = new Image()
-    probe.onload = () => {
+    probe.onload = async () => {
       if (isStale()) { revokeBlobUrl(url); return }
       if (Math.max(probe.naturalWidth, probe.naturalHeight) > MAX_UPLOAD_DIMENSION) {
         revokeBlobUrl(url)
         setToast(`Image dimensions must be at most ${MAX_UPLOAD_DIMENSION}×${MAX_UPLOAD_DIMENSION} px (got ${probe.naturalWidth}×${probe.naturalHeight}).`)
         return
       }
+      await clearPersistedSession()
+      if (isStale()) { revokeBlobUrl(url); return }
+      customFontsRef.current.clear()
       resetLayers()
       // Canvas size is applied when the image loads (original size, capped at MAX_CANVAS).
-      replaceSource({ name: file.name, width: probe.naturalWidth, height: probe.naturalHeight, url, kind: 'image' })
+      replaceSource({
+        name: file.name,
+        width: probe.naturalWidth,
+        height: probe.naturalHeight,
+        mimeType: file.type || 'image/png',
+        storageKey: 'workspace:source',
+        url,
+        kind: 'image',
+      })
       trackImportCommitted({ kind: 'image', width: probe.naturalWidth, height: probe.naturalHeight })
       setToast(`Image loaded at ${probe.naturalWidth} × ${probe.naturalHeight} px`)
     }
@@ -658,13 +922,17 @@ export function StudioProvider({ children }) {
   }
 
   const reset = () => {
-    const current = useStudioStore.getState().project
+    const current = useStudioStore.getState().editor
     if (current.enhancedLayer?.url) revokeBlobUrl(current.enhancedLayer.url)
     ;(current.overlays || []).forEach((overlay) => revokeBlobUrl(overlay.url))
     replaceSource(null)
     setImage(null)
     busyDepthRef.current = 0
     ioLockRef.current = false
+    customFontsRef.current.clear()
+    void clearPersistedSession().catch((error) => {
+      console.warn('[persistence] Could not clear workspace', error)
+    })
     useStudioStore.getState().resetStudio()
     setToast('Project cleared — open an image to start')
   }
@@ -2080,13 +2348,18 @@ export function StudioProvider({ children }) {
     if (!file) return
     try {
       const family = file.name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ')
-      const face = new FontFace(family, await file.arrayBuffer()); await face.load(); document.fonts.add(face)
+      const buffer = await file.arrayBuffer()
+      const face = new FontFace(family, buffer.slice(0)); await face.load(); document.fonts.add(face)
+      customFontsRef.current.set(family, {
+        family,
+        name: file.name,
+        mimeType: file.type || 'font/woff2',
+        buffer,
+      })
       setFontOptions((current) => current.includes(family) ? current : [...current, family]); updateText('font', family)
       setToast(`${family} font loaded locally`)
     } catch { setToast('This font file could not be loaded') }
   }
-  const imageFromUrl = (url) => new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = url })
-
   const clearEnhancedLayer = () => {
     setEnhancedLayer((current) => {
       if (current?.url) revokeBlobUrl(current.url)

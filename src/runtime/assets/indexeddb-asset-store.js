@@ -94,6 +94,18 @@ export class IndexedDbAssetStore {
     await idbRequest(store.delete(key))
   }
 
+  /** Remove every asset owned by this store. */
+  async clear() {
+    const db = await this._db()
+    if (!db) {
+      this._memory.clear()
+      return
+    }
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    const store = tx.objectStore(STORE_NAME)
+    await idbRequest(store.clear())
+  }
+
   async has(key) {
     const buf = await this.get(key)
     return buf != null
