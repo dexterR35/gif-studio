@@ -4,7 +4,8 @@ python-multipart>=0.0.20
 opencv-python-headless>=5.0.0.93
 numpy>=1.26
 Pillow>=10.2
-rembg[cpu]>=2.0.76
+# Setup installs one ONNX backend: GPU on NVIDIA hosts, otherwise CPU.
+rembg>=2.0.76
 # Optional persistence / AI extras
 sqlalchemy>=2.0
 psycopg[binary]>=3.1

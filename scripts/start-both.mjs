@@ -15,6 +15,7 @@ const bin = isWin ? 'Scripts' : 'bin'
 const pyExe = isWin ? 'python.exe' : 'python'
 const WEB_HOST = '127.0.0.1'
 const WEB_PORT = 5173
+const API_FALLBACK_PORT = 8060
 
 function loadDotEnv() {
   const envPath = path.join(root, '.env')
@@ -104,14 +105,22 @@ function buildEnv() {
 
 async function preflight(env) {
   const apiHost = env.IMAGE_STUDIO_API_HOST || '127.0.0.1'
-  const apiPort = Number(env.IMAGE_STUDIO_API_PORT || '8000')
+  const configuredApiPort = Number(env.IMAGE_STUDIO_API_PORT || '8000')
+  let apiPort = configuredApiPort
 
   if (!(await portAvailable(apiHost, apiPort))) {
-    console.error(
-      `API port ${apiHost}:${apiPort} is already in use.\n` +
-        'Stop the other process or change IMAGE_STUDIO_API_PORT in .env',
-    )
-    process.exit(1)
+    if (apiPort === 8000 && (await portAvailable(apiHost, API_FALLBACK_PORT))) {
+      apiPort = API_FALLBACK_PORT
+      env.IMAGE_STUDIO_API_PORT = String(apiPort)
+      env.VITE_API_PROXY = `http://${apiHost}:${apiPort}`
+      console.log(`API port ${apiHost}:${configuredApiPort} is in use; using ${apiPort} instead.`)
+    } else {
+      console.error(
+        `API port ${apiHost}:${apiPort} is already in use.\n` +
+          'Stop the other process or change IMAGE_STUDIO_API_PORT in .env',
+      )
+      process.exit(1)
+    }
   }
   if (!(await portAvailable(WEB_HOST, WEB_PORT))) {
     console.error(

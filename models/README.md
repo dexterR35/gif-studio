@@ -31,7 +31,9 @@ runtime inference never downloads them.
 
 Upscaling has exactly two fixed choices: Real-ESRGAN ×2 and Real-ESRGAN ×4.
 
-Device auto-selects **CUDA → MPS → CPU**. Override with `IMAGE_STUDIO_TORCH_DEVICE=cpu|cuda|mps`.
+Device auto-selects **CUDA → CPU** for every model runner. BiRefNet uses
+ONNX Runtime in `CUDAExecutionProvider → CPUExecutionProvider` order. Override
+with `IMAGE_STUDIO_TORCH_DEVICE=cpu|cuda|mps`.
 
 Build contracts: [`BUILD_SPEC.md`](../BUILD_SPEC.md). Check `/api/health` for
 `device` and `models.*.ready`.

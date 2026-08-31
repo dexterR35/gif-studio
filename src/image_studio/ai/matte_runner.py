@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 
 from .local_models import resolve_matte
+from .paths import onnx_providers
 
 
 def matte_ready() -> bool:
@@ -32,9 +33,15 @@ def _birefnet_session():
             "BiRefNet is unavailable. Run: python scripts/setup_ai_models.py"
         )
     os.environ["U2NET_HOME"] = str(os.path.dirname(spec["path"]))
+    providers = onnx_providers()
+    if providers[0] == "CUDAExecutionProvider":
+        import onnxruntime as ort
+
+        if hasattr(ort, "preload_dlls"):
+            ort.preload_dlls(directory="")
     from rembg import new_session
 
-    return new_session(spec["rembg"])
+    return new_session(spec["rembg"], providers=providers)
 
 
 def matte_with_model(payload: bytes) -> dict[str, Any]:

@@ -49,7 +49,9 @@ def nvidia_present() -> bool:
         if torch.cuda.is_available() and torch.cuda.device_count() > 0:
             return True
     except Exception:  # noqa: BLE001
-        return False
+        # A broken or CPU-only torch install must not hide physical NVIDIA
+        # hardware from setup/health diagnostics.
+        pass
     smi = shutil.which("nvidia-smi")
     if not smi:
         return False
@@ -62,6 +64,20 @@ def nvidia_present() -> bool:
             check=False,
         )
         return proc.returncode == 0 and "GPU" in (proc.stdout or "")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+@lru_cache(maxsize=1)
+def cuda_usable() -> bool:
+    """True only when PyTorch can execute a real CUDA kernel on this GPU."""
+    try:
+        import torch
+
+        if not torch.cuda.is_available() or torch.cuda.device_count() < 1:
+            return False
+        probe = torch.ones(1, device="cuda")
+        return float(probe.item()) == 1.0
     except Exception:  # noqa: BLE001
         return False
 
@@ -84,10 +100,10 @@ def torch_device():
     if prefer == "cpu":
         return torch.device("cpu")
     if prefer.startswith("cuda"):
-        if torch.cuda.is_available():
+        if cuda_usable():
             return torch.device(prefer if ":" in prefer else "cuda")
         raise RuntimeError(
-            "IMAGE_STUDIO_TORCH_DEVICE requests CUDA but no NVIDIA GPU / CUDA is available. "
+            "IMAGE_STUDIO_TORCH_DEVICE requests CUDA but no compatible CUDA GPU is usable. "
             "Unset the env var to fall back to CPU, or install CUDA torch."
         )
     if prefer == "mps":
@@ -95,12 +111,33 @@ def torch_device():
             return torch.device("mps")
         raise RuntimeError("IMAGE_STUDIO_TORCH_DEVICE=mps but MPS is not available.")
 
-    # Auto: NVIDIA first, then CPU (system RAM). No silent MPS.
-    if torch.cuda.is_available() and nvidia_present():
-        return torch.device("cuda")
-    if torch.cuda.is_available():
+    # Auto: CUDA first, then CPU (system RAM). Every torch-backed model uses
+    # this selector, so the policy stays consistent across all runners.
+    if cuda_usable():
         return torch.device("cuda")
     return torch.device("cpu")
+
+
+def onnx_providers() -> list[str]:
+    """Return ONNX providers in CUDA-first, CPU-fallback order.
+
+    ``CPUExecutionProvider`` is always included so ONNX Runtime can fall back
+    for unsupported operators or when no CUDA provider is installed.
+    """
+    prefer = (os.environ.get("IMAGE_STUDIO_TORCH_DEVICE") or "").strip().lower()
+    if prefer == "cpu":
+        return ["CPUExecutionProvider"]
+
+    try:
+        import onnxruntime as ort
+
+        available = set(ort.get_available_providers())
+    except Exception:  # noqa: BLE001
+        return ["CPUExecutionProvider"]
+
+    if "CUDAExecutionProvider" in available and nvidia_present():
+        return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    return ["CPUExecutionProvider"]
 
 
 def host_memory_bytes() -> int | None:
@@ -158,14 +195,18 @@ def device_runtime_info() -> dict[str, Any]:
             info["ram_bytes"] = mem
             info["ram_gib"] = round(mem / (1024 ** 3), 2)
         return info
+    providers = onnx_providers()
     info: dict[str, Any] = {
         "device": str(device),
         "nvidia": nvidia_present(),
-        "cuda": bool(torch.cuda.is_available()),
+        "cuda": cuda_usable(),
+        "cuda_detected": bool(torch.cuda.is_available()),
         "cpu": True,
         "fallback": "cpu" if device.type == "cpu" else None,
         "policy": "nvidia→cpu (override IMAGE_STUDIO_TORCH_DEVICE)",
         "torch": True,
+        "onnx_device": "cuda" if providers[0] == "CUDAExecutionProvider" else "cpu",
+        "onnx_providers": providers,
     }
     if mem is not None:
         info["ram_bytes"] = mem
@@ -180,7 +221,17 @@ def device_runtime_info() -> dict[str, Any]:
         except Exception:  # noqa: BLE001
             pass
     elif device.type == "cpu":
-        info["note"] = "No NVIDIA CUDA — running on CPU / system RAM (slower)."
+        info["note"] = (
+            "CUDA was detected but cannot execute on this GPU/PyTorch build; "
+            "using CPU / system RAM."
+            if torch.cuda.is_available()
+            else (
+                "NVIDIA GPU detected, but CUDA PyTorch is unavailable; "
+                "using CPU / system RAM."
+                if nvidia_present()
+                else "No NVIDIA CUDA — running on CPU / system RAM (slower)."
+            )
+        )
     return info
 
 
@@ -202,7 +253,14 @@ def model_device_policy() -> dict[str, dict[str, Any]]:
         except RuntimeError as exc:
             device = f"error:{exc}"
 
-    def row(*, prefers: str, cpu_ok: bool, requires_nvidia: bool = False, note: str = "") -> dict[str, Any]:
+    def row(
+        *,
+        prefers: str,
+        cpu_ok: bool,
+        requires_nvidia: bool = False,
+        note: str = "",
+        active_device: str | None = None,
+    ) -> dict[str, Any]:
         available = True
         reason = None
         if requires_nvidia and not nvidia:
@@ -214,7 +272,7 @@ def model_device_policy() -> dict[str, dict[str, Any]]:
             "requires_nvidia": requires_nvidia,
             "available_on_this_host": available,
             "unavailable_reason": reason,
-            "active_device": device if available else None,
+            "active_device": (active_device or device) if available else None,
             "note": note or (
                 "CUDA when NVIDIA present, else CPU/RAM"
                 if cpu_ok
@@ -222,9 +280,16 @@ def model_device_policy() -> dict[str, dict[str, Any]]:
             ),
         }
 
+    providers = onnx_providers()
+    onnx_device = "cuda" if providers[0] == "CUDAExecutionProvider" else "cpu"
     return {
         "opencv": row(prefers="cpu", cpu_ok=True, note="Always CPU"),
-        "matte_rembg": row(prefers="cpu", cpu_ok=True, note="ONNX / CPU ok"),
+        "matte_rembg": row(
+            prefers="cuda",
+            cpu_ok=True,
+            active_device=onnx_device,
+            note="ONNX CUDA when available, else CPU",
+        ),
         "grounding_dino": row(prefers="cuda", cpu_ok=True),
         "sam2": row(prefers="cuda", cpu_ok=True),
         "realesrgan": row(prefers="cuda", cpu_ok=True, note="Tiled; 5k / 20 GiB server caps"),

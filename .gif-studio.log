@@ -1,0 +1,16 @@
+
+> image-studio-web@1.0.0 start
+> node scripts/start-both.mjs
+
+API port 127.0.0.1:8000 is in use; using 8060 instead.
+Starting API + web…
+  web  http://127.0.0.1:5173
+  api  http://127.0.0.1:8060
+[35m[api][0m INFO:     Will watch for changes in these directories: ['C:\\Users\\marian.iordache\\Desktop\\projects\\gif-studio\\src']
+[35m[api][0m INFO:     Uvicorn running on http://127.0.0.1:8060 (Press CTRL+C to quit)
+[35m[api][0m INFO:     Started reloader process [23732] using WatchFiles
+[36m[web][0m   VITE v6.4.3  ready in 674 ms
+[36m[web][0m   ➜  Local:   http://127.0.0.1:5173/
+[35m[api][0m INFO:     Started server process [25036]
+[35m[api][0m INFO:     Waiting for application startup.
+[35m[api][0m INFO:     Application startup complete.

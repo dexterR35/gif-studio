@@ -23,6 +23,7 @@ const force = process.argv.includes('--force')
 const minimal = process.argv.includes('--minimal') || process.argv.includes('--no-ai')
 const skipModels = process.argv.includes('--skip-models')
 const setupMarker = path.join(root, 'models', '.setup-complete')
+const cudaTorchFailureMarker = path.join(root, 'models', '.cuda-torch-unavailable')
 
 function log(step) {
   console.log(`\n→ ${step}`)
@@ -108,6 +109,82 @@ function pipPackageInstalled(vpy, packageName) {
 
 function pythonImportOk(vpy, snippet) {
   return capture(vpy, ['-c', snippet]).status === 0
+}
+
+function nvidiaGpuPresent() {
+  const result = capture('nvidia-smi', ['-L'])
+  return result.status === 0 && /GPU\s+\d+/i.test(result.stdout || '')
+}
+
+function torchCudaReady(vpy) {
+  return pythonImportOk(
+    vpy,
+    "import torch; x = torch.ones(1, device='cuda'); raise SystemExit(0 if x.item() == 1 else 1)",
+  )
+}
+
+function defaultTorchIndex() {
+  const result = capture('nvidia-smi', [
+    '--query-gpu=compute_cap',
+    '--format=csv,noheader,nounits',
+  ])
+  const capability = Number.parseFloat((result.stdout || '').trim().split(/\s+/)[0])
+  // Current cu128 wheels require Turing (7.5) or newer. CUDA 12.6 wheels
+  // retain Pascal support for cards such as the GTX 1080 Ti (6.1).
+  const channel = Number.isFinite(capability) && capability < 7.5 ? 'cu126' : 'cu128'
+  return `https://download.pytorch.org/whl/${channel}`
+}
+
+function onnxCudaReady(vpy) {
+  return pythonImportOk(
+    vpy,
+    "from importlib.metadata import version; import onnxruntime as ort; raise SystemExit(0 if version('onnxruntime-gpu').startswith('1.26.') and 'CUDAExecutionProvider' in ort.get_available_providers() else 1)",
+  )
+}
+
+function installOnnxRuntime(vpy, preferCuda) {
+  if (preferCuda && onnxCudaReady(vpy)) {
+    skip('ONNX Runtime CUDA provider')
+    return
+  }
+
+  if (!preferCuda && pythonImportOk(vpy, 'import onnxruntime')) {
+    skip('ONNX Runtime CPU provider')
+    return
+  }
+
+  // ORT 1.27+ targets CUDA 13, which drops Pascal. The 1.26 line targets
+  // CUDA 12.8 and its extras install the matching CUDA/cuDNN runtime DLLs.
+  const wanted = preferCuda
+    ? 'onnxruntime-gpu[cuda,cudnn]==1.26.0'
+    : 'onnxruntime'
+  log(`Installing ${preferCuda ? 'CUDA' : 'CPU'} ONNX Runtime`)
+  const result = spawnSync(vpy, ['-m', 'pip', 'install', '--upgrade', wanted], {
+    cwd: root,
+    stdio: 'inherit',
+    shell: isWin,
+  })
+  if (result.status === 0) {
+    return
+  }
+
+  if (preferCuda) {
+    console.warn('\n! CUDA ONNX Runtime install failed; installing CPU fallback.')
+    run('Installing CPU ONNX Runtime fallback', vpy, [
+      '-m',
+      'pip',
+      'install',
+      '--upgrade',
+      'onnxruntime',
+    ])
+    return
+  }
+  fail('Installing CPU ONNX Runtime', result.status)
+}
+
+function preferCuda() {
+  const requested = (process.env.IMAGE_STUDIO_TORCH_DEVICE || '').trim().toLowerCase()
+  return requested !== 'cpu' && nvidiaGpuPresent()
 }
 
 function pipUpToDate(vpy, venvExisted) {
@@ -208,6 +285,9 @@ runIfNeeded(
   ['-m', 'pip', 'install', '-e', '.'],
 )
 
+const cudaPreferred = preferCuda()
+installOnnxRuntime(vpy, cudaPreferred)
+
 if (!minimal) {
   runIfNeeded(
     'Installing AI dependencies (PyTorch, transformers, …)',
@@ -216,6 +296,57 @@ if (!minimal) {
     vpy,
     ['-m', 'pip', 'install', '-r', 'requirements-ai.txt'],
   )
+
+  const retryCudaTorch = force || !existsSync(cudaTorchFailureMarker)
+  if (cudaPreferred && retryCudaTorch && !torchCudaReady(vpy)) {
+    const torchIndex = process.env.IMAGE_STUDIO_TORCH_INDEX_URL
+      || defaultTorchIndex()
+    log(`NVIDIA detected; installing CUDA PyTorch from ${torchIndex}`)
+    const cudaTorch = spawnSync(vpy, [
+      '-m',
+      'pip',
+      'install',
+      '--force-reinstall',
+      '--no-deps',
+      'torch',
+      'torchvision',
+      '--index-url',
+      torchIndex,
+    ], {
+      cwd: root,
+      stdio: 'inherit',
+      shell: isWin,
+    })
+    if (cudaTorch.status !== 0 || !torchCudaReady(vpy)) {
+      console.warn(
+        '\n! CUDA PyTorch is unavailable for this Python/platform; '
+        + 'restoring the CPU PyTorch fallback.',
+      )
+      run('Restoring CPU PyTorch fallback', vpy, [
+        '-m',
+        'pip',
+        'install',
+        '--force-reinstall',
+        '--no-deps',
+        'torch',
+        'torchvision',
+      ])
+      writeFileSync(
+        cudaTorchFailureMarker,
+        'CUDA PyTorch failed its kernel probe; use npm run setup -- --force to retry.\n',
+        'utf8',
+      )
+    }
+  } else if (cudaPreferred && !retryCudaTorch) {
+    console.log(
+      '\n✓ CUDA PyTorch previously failed its kernel probe — using CPU fallback '
+      + '(run setup with --force to retry)',
+    )
+  } else if (cudaPreferred) {
+    skip('CUDA PyTorch')
+  } else {
+    console.log('\n✓ No usable NVIDIA GPU requested/detected — PyTorch will use CPU')
+  }
 
   runIfNeeded(
     'Installing SAM 2 (facebookresearch/sam2)',
@@ -231,7 +362,7 @@ if (!minimal) {
   )
 
   if (!skipModels) {
-    const modelArgs = ['scripts/setup_ai_models.py']
+    const modelArgs = ['-X', 'utf8', 'scripts/setup_ai_models.py']
     if (!force && modelsReady() && groundingDinoReady(vpy)) {
       skip('AI model weights (models/)')
     } else {
