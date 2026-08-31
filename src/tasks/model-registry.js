@@ -5,13 +5,10 @@
 
 const ENGINE_KEYS = [
   'rembg',
-  'sam2',
-  'sam3',
-  'grounding_dino',
+  'prompt_selection',
   'matte',
   'realesrgan',
   'gfpgan',
-  'gifsicle',
   'oxipng',
 ]
 
@@ -25,7 +22,6 @@ const ENGINE_KEYS = [
  *     status: 'available'|'unavailable'|'experimental',
  *     runtime: 'browser'|'server',
  *     qualityTier: 'fast'|'balanced'|'best',
- *     supportsAnimated: boolean,
  *     supportsCancellation: boolean,
  *     reasonUnavailable?: string,
  *     revision?: string,
@@ -64,7 +60,6 @@ export function buildModelRegistry(health) {
       status: available ? 'available' : 'unavailable',
       runtime: 'server',
       qualityTier: qualityForEngine(id),
-      supportsAnimated: animatedSupport(id),
       supportsCancellation: true,
       reasonUnavailable: available ? undefined : `${id} not available on local backend`,
       revision: models[id]?.revision || models[id]?.version || undefined,
@@ -87,7 +82,6 @@ function unavailableEngine(id, reason) {
     status: 'unavailable',
     runtime: 'server',
     qualityTier: qualityForEngine(id),
-    supportsAnimated: animatedSupport(id),
     supportsCancellation: true,
     reasonUnavailable: reason,
   }
@@ -105,7 +99,6 @@ function normalizeEngine(id, structured, models) {
     status: status === 'experimental' ? 'experimental' : (available ? 'available' : 'unavailable'),
     runtime: structured.runtime || 'server',
     qualityTier: structured.qualityTier || qualityForEngine(id),
-    supportsAnimated: structured.supportsAnimated ?? animatedSupport(id),
     supportsCancellation: structured.supportsCancellation !== false,
     reasonUnavailable: available
       ? undefined
@@ -122,24 +115,17 @@ function taskForEngine(id) {
   const map = {
     rembg: 'matte',
     matte: 'matte',
-    sam2: 'segment',
-    sam3: 'segment',
-    grounding_dino: 'detect',
+    prompt_selection: 'segment',
     realesrgan: 'upscale',
     gfpgan: 'enhance',
-    gifsicle: 'export',
     oxipng: 'optimize',
   }
   return map[id] || id
 }
 
 function qualityForEngine(id) {
-  if (id === 'realesrgan' || id === 'sam2' || id === 'sam3' || id === 'matte') return 'best'
+  if (id === 'realesrgan' || id === 'prompt_selection' || id === 'matte') return 'best'
   return 'fast'
-}
-
-function animatedSupport(id) {
-  return id === 'gifsicle' || id === 'realesrgan'
 }
 
 /**

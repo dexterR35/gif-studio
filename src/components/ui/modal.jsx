@@ -1,6 +1,5 @@
 import { AlertTriangle, Check, Info, LoaderCircle, XCircle } from 'lucide-react'
 import { cn } from '../../lib/cn'
-import { Progress } from './progress'
 
 export function Modal({ open, children, className }) {
   if (!open) return null
@@ -10,20 +9,6 @@ export function Modal({ open, children, className }) {
         {children}
       </div>
     </div>
-  )
-}
-
-export function ExportModal({ open, frames, progress }) {
-  return (
-    <Modal open={open}>
-      <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-acid/10 text-acid">
-        <LoaderCircle className="h-6 w-6 animate-spin" />
-      </div>
-      <h2 className="display mt-4 text-lg font-bold">Building your GIF</h2>
-      <p className="mt-2 text-xs text-zinc-500">Rendering {frames} frames locally in your browser.</p>
-      <Progress value={progress * 100} className="mt-5" />
-      <p className="mt-2 text-right font-mono text-[10px] text-zinc-600">{Math.round(progress * 100)}%</p>
-    </Modal>
   )
 }
 
@@ -42,7 +27,7 @@ export function BusyOverlay({ open, message = 'Working…' }) {
       aria-label={message}
     >
       <div className="pointer-events-none absolute bottom-8 left-1/2 flex max-w-[min(92vw,360px)] -translate-x-1/2 items-center gap-2.5 rounded-xl border border-white/10 bg-panel/95 px-4 py-3 shadow-2xl">
-        <LoaderCircle className="h-4 w-4 shrink-0 animate-spin text-acid" />
+        <LoaderCircle className="h-4 w-4 shrink-0 text-acid" />
         <span className="text-xs font-semibold text-zinc-100">{message}</span>
       </div>
     </div>

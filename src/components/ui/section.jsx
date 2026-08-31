@@ -4,7 +4,7 @@ import { cn } from '../../lib/cn'
 import { InfoTip } from './info-tip'
 
 /**
- * Shared collapsible used by side-panel sections and the effect timeline.
+ * Shared collapsible used by side-panel sections.
  * Styles: `.gs-section*` in index.css
  */
 export function Collapsible({
@@ -42,7 +42,7 @@ export function Collapsible({
   )
 }
 
-/** Side-panel section — same collapsible logic as the timeline. */
+/** Side-panel section. */
 export function Section(props) {
   return <Collapsible {...props} />
 }

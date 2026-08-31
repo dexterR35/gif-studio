@@ -24,11 +24,13 @@ export function capabilityControlState(capabilities, capabilityKey, label) {
   }
 
   // Special cases with clearer copy
-  if (capabilityKey === 'api' || capabilityKey === 'rembg' || capabilityKey === 'sam2') {
+  if (capabilityKey === 'api' || capabilityKey === 'rembg' || capabilityKey === 'promptSelection' || capabilityKey === 'lama') {
     return {
       ready: false,
       disabled: true,
-      reason: `${name} requires the local FastAPI backend (npm run api)`,
+      reason: capabilityKey === 'lama'
+        ? `${name} requires local LaMa (python scripts/setup_ai_models.py → models/lama/big-lama.pt + PyTorch)`
+        : `${name} requires the local FastAPI backend (npm run api)`,
     }
   }
 

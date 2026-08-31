@@ -32,4 +32,13 @@ export async function postMatte(formData, opts = {}) {
   return aiPost(API_PATHS.aiMatte, formData, opts)
 }
 
+/**
+ * LaMa / OpenCV inpaint via js-client.
+ * @param {FormData} formData
+ * @param {{ signal?: AbortSignal, fetchImpl?: typeof fetch }} [opts]
+ */
+export async function postInpaint(formData, opts = {}) {
+  return aiPost(API_PATHS.aiInpaint, formData, opts)
+}
+
 export { API_PATHS }

@@ -3,7 +3,7 @@
  */
 
 import { createEmptyEditorSession } from '../../lib/editor-session.js'
-import { usToMs } from '../timeline/time.js'
+import { TEXT_DEFAULT } from '../../lib/presets.js'
 import { flattenLayerOrder } from '../layers/layer-order.js'
 
 function scalePercent(value, fallback = 100) {
@@ -37,6 +37,12 @@ function isOverlayLayer(layer) {
 export function layerToCutoutElement(layer) {
   const mm = layer.mediaMapping || {}
   const t = layer.transform || {}
+  const sourceRect = mm.sourceRect || {
+    x: mm.x != null ? Number(mm.x) : Number(t.x) || 0,
+    y: mm.y != null ? Number(mm.y) : Number(t.y) || 0,
+    w: mm.w != null ? Number(mm.w) : 0,
+    h: mm.h != null ? Number(mm.h) : 0,
+  }
   return {
     id: layer.id,
     name: layer.name || 'Cutout',
@@ -44,6 +50,12 @@ export function layerToCutoutElement(layer) {
     y: mm.y != null ? Number(mm.y) : Number(t.y) || 0,
     w: mm.w != null ? Number(mm.w) : 0,
     h: mm.h != null ? Number(mm.h) : 0,
+    sourceRect: {
+      x: Number(sourceRect.x) || 0,
+      y: Number(sourceRect.y) || 0,
+      w: Number(sourceRect.w) || 0,
+      h: Number(sourceRect.h) || 0,
+    },
     rotation: Number(t.rotationDeg) || 0,
     scaleX: scalePercent(t.scaleX, 100),
     scaleY: scalePercent(t.scaleY, 100),
@@ -52,21 +64,13 @@ export function layerToCutoutElement(layer) {
     opacity: opacityPercent(layer.opacity),
     anchorX: mm.anchorX != null ? Number(mm.anchorX) : Math.round((Number(t.anchorX) || 0.5) * 100),
     anchorY: mm.anchorY != null ? Number(mm.anchorY) : Math.round((Number(t.anchorY) || 0.5) * 100),
-    motion: layer.cutoutMotion || 'None',
-    amplitude: mm.amplitude != null ? Number(mm.amplitude) : 5,
-    speed: mm.speed != null ? Number(mm.speed) : 1,
-    depth: mm.depth != null ? Number(mm.depth) : 50,
     visible: layer.visible !== false,
     locked: Boolean(layer.locked),
     cutoutMode: mm.cutoutMode,
     engine: mm.engine,
     smart: mm.smart,
-    poseJoints: mm.poseJoints || undefined,
   }
 }
-
-/** @deprecated use layerToCutoutElement */
-export const v2LayerToElement = layerToCutoutElement
 
 /**
  * @param {object | null | undefined} project
@@ -101,6 +105,7 @@ export function projectToEditorView(project, opts = {}) {
       const t = layer.transform || {}
       const style = layer.style || {}
       textLayers.push({
+        ...TEXT_DEFAULT,
         id: layer.id,
         name: layer.name || 'Text',
         text: String(layer.text ?? ''),
@@ -115,6 +120,12 @@ export function projectToEditorView(project, opts = {}) {
         letterSpacing: Number(style.letterSpacing) || 0,
         lineHeight: Number(style.lineHeight) || 1.1,
         boxWidth: style.boxWidth != null ? Number(style.boxWidth) : null,
+        shadowColor: style.shadowColor || '#000000',
+        shadowBlur: Number(style.shadowBlur) || 0,
+        shadowX: Number(style.shadowX) || 0,
+        shadowY: Number(style.shadowY) || 0,
+        decoration: style.decoration || 'None',
+        casing: style.casing || 'As typed',
         x: Number(t.x) || 50,
         y: Number(t.y) || 50,
         scaleX: scalePercent(t.scaleX, 100),
@@ -160,7 +171,14 @@ export function projectToEditorView(project, opts = {}) {
         x: mm.x != null ? Number(mm.x) : Number(t.x) || 0,
         y: mm.y != null ? Number(mm.y) : Number(t.y) || 0,
         scale: mm.scale != null ? Number(mm.scale) : scalePercent(t.scaleX, 100),
+        width: mm.width != null ? Number(mm.width) : 30,
+        scaleX: scalePercent(t.scaleX, 100),
+        scaleY: scalePercent(t.scaleY, 100),
         rotation: Number(t.rotationDeg) || 0,
+        flipX: Boolean(t.flipX),
+        flipY: Boolean(t.flipY),
+        anchorX: Math.round((Number(t.anchorX) || 0.5) * 100),
+        anchorY: Math.round((Number(t.anchorY) || 0.5) * 100),
         opacity: opacityPercent(layer.opacity),
         visible: layer.visible !== false,
         locked: Boolean(layer.locked),
@@ -173,30 +191,29 @@ export function projectToEditorView(project, opts = {}) {
 
   const canvas = project.canvas || {}
   const exportSettings = project.exportSettings || {}
-  const timeline = project.timeline || {}
-  const durationSec = timeline.durationUs != null
-    ? usToMs(timeline.durationUs) / 1000
-    : (previous.settings?.duration || 10)
+  const legacySettings = project.extensions?.legacySettings || {}
+  const previousSettings = previous.settings || {}
 
   const settings = {
     ...empty.settings,
-    ...(previous.settings || {}),
-    width: Number(canvas.width) || previous.settings?.width || 480,
-    height: Number(canvas.height) || previous.settings?.height || 300,
-    duration: durationSec,
-    fps: Number(exportSettings.fps) || previous.settings?.fps || 24,
-    quality: exportSettings.quality || previous.settings?.quality || 'High quality',
-    loop: exportSettings.loop != null ? Number(exportSettings.loop) : (previous.settings?.loop ?? 0),
-    palette: Number(exportSettings.paletteSize) || previous.settings?.palette || 256,
-    dither: exportSettings.dither !== false,
-    disposal: Number(exportSettings.disposal) || previous.settings?.disposal || 2,
+    width: Number(canvas.width) || previousSettings.width || 480,
+    height: Number(canvas.height) || previousSettings.height || 300,
+    fit: legacySettings.fit || previousSettings.fit || empty.settings.fit,
+    scale: Number(legacySettings.scale ?? previousSettings.scale ?? 100),
+    x: Number(legacySettings.x ?? previousSettings.x ?? 0),
+    y: Number(legacySettings.y ?? previousSettings.y ?? 0),
+    rotation: Number(legacySettings.rotation ?? previousSettings.rotation ?? 0),
+    opacity: Number(legacySettings.opacity ?? previousSettings.opacity ?? 100),
+    anchorX: Number(legacySettings.anchorX ?? previousSettings.anchorX ?? 50),
+    anchorY: Number(legacySettings.anchorY ?? previousSettings.anchorY ?? 50),
+    imageFilters: legacySettings.imageFilters || previousSettings.imageFilters || [],
+    reducePalette: Boolean(exportSettings.reducePalette ?? previousSettings.reducePalette),
     transparent: Boolean(
       exportSettings.transparent ?? (canvas.background?.kind === 'transparent'),
     ),
     background: canvas.background?.kind === 'solid'
       ? (canvas.background.color || '#111114')
-      : (previous.settings?.background || '#111114'),
-    ...(project.extensions?.legacySettings || {}),
+      : (previousSettings.background || '#111114'),
   }
 
   let projectedElements = elements

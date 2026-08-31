@@ -39,12 +39,11 @@ describe('V2-only store bridge', () => {
       y: 0.2,
       w: 0.3,
       h: 0.4,
+      sourceRect: { x: 0.05, y: 0.15, w: 0.35, h: 0.45 },
       scaleX: 100,
       scaleY: 100,
       rotation: 15,
       opacity: 80,
-      motion: 'Float',
-      amplitude: 7,
       visible: true,
       locked: false,
     }]
@@ -52,36 +51,42 @@ describe('V2-only store bridge', () => {
     const { project: v2 } = migrateV1ToV2(legacy)
     expect(v2.layers['cut-1'].mediaMapping.w).toBe(0.3)
     expect(v2.layers['cut-1'].mediaMapping.h).toBe(0.4)
+    expect(v2.layers['cut-1'].mediaMapping.sourceRect).toEqual({
+      x: 0.05, y: 0.15, w: 0.35, h: 0.45,
+    })
 
     const back = projectToEditorView(v2, { previousEditor: legacy })
     expect(back.elements).toHaveLength(1)
     expect(back.elements[0].id).toBe('cut-1')
     expect(back.elements[0].w).toBe(0.3)
     expect(back.elements[0].h).toBe(0.4)
-    expect(back.elements[0].motion).toBe('Float')
-    expect(back.elements[0].amplitude).toBe(7)
+    expect(back.elements[0].sourceRect).toEqual({
+      x: 0.05, y: 0.15, w: 0.35, h: 0.45,
+    })
+    expect(back.elements[0].rotation).toBe(15)
+    expect(back.elements[0].opacity).toBe(80)
   })
 
   it('applyElementsToProjectV2 upserts and removes cutouts without wiping background', () => {
     const legacy = createLegacyImportFixture()
     legacy.source = { name: 'a.png', width: 32, height: 32, storageKey: 'fixtures/a.png' }
-    legacy.elements = [{ id: 'a', name: 'A', x: 0, y: 0, w: 0.2, h: 0.2, motion: 'None' }]
+    legacy.elements = [{ id: 'a', name: 'A', x: 0, y: 0, w: 0.2, h: 0.2 }]
     const { project: v2 } = migrateV1ToV2(legacy)
     expect(v2.layers['layer-background']).toBeTruthy()
 
     const next = applyElementsToProjectV2(v2, [
-      { id: 'a', name: 'A2', x: 0.1, y: 0.1, w: 0.2, h: 0.2, motion: 'Bounce' },
-      { id: 'b', name: 'B', x: 0.5, y: 0.5, w: 0.1, h: 0.1, motion: 'None' },
+      { id: 'a', name: 'A2', x: 0.1, y: 0.1, w: 0.2, h: 0.2 },
+      { id: 'b', name: 'B', x: 0.5, y: 0.5, w: 0.1, h: 0.1 },
     ])
     expect(next.layers['layer-background']).toBeTruthy()
     expect(next.layers.a.name).toBe('A2')
-    expect(next.layers.a.cutoutMotion).toBe('Bounce')
+    expect(next.layers.a.mediaMapping.x).toBe(0.1)
     expect(next.layers.b).toBeTruthy()
     expect(next.rootLayerIds).toContain('a')
     expect(next.rootLayerIds).toContain('b')
 
     const removed = applyElementsToProjectV2(next, [
-      { id: 'b', name: 'B', x: 0.5, y: 0.5, w: 0.1, h: 0.1, motion: 'None' },
+      { id: 'b', name: 'B', x: 0.5, y: 0.5, w: 0.1, h: 0.1 },
     ])
     expect(removed.layers.a).toBeUndefined()
     expect(removed.layers.b).toBeTruthy()
@@ -103,7 +108,7 @@ describe('V2-only store bridge', () => {
       y: 0,
       w: 0.5,
       h: 0.5,
-      motion: 'None',
+      sourceRect: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
       bitmap,
       sourceBitmap: bitmap,
       maskCanvas: bitmap,
@@ -113,6 +118,12 @@ describe('V2-only store bridge', () => {
     expect(result.editor.elements[0].bitmap).toBe(bitmap)
     expect(result.project.layers['cut-reg']).toBeTruthy()
     expect(result.project.layers['cut-reg'].mediaMapping.w).toBe(0.5)
+    expect(result.project.layers['cut-reg'].mediaMapping.sourceRect).toEqual({
+      x: 0.1, y: 0.2, w: 0.3, h: 0.4,
+    })
+    expect(result.editor.elements[0].sourceRect).toEqual({
+      x: 0.1, y: 0.2, w: 0.3, h: 0.4,
+    })
     expect(result.project.rootLayerIds).toContain('cut-reg')
   })
 
@@ -138,9 +149,7 @@ describe('V2-only store bridge', () => {
         x: 0.2, y: 0.3, scaleX: 1, scaleY: 1, rotationDeg: 0, anchorX: 0.5, anchorY: 0.5,
       },
       effects: [],
-      animationTrackIds: [],
       assetId: 'asset-c1',
-      cutoutMotion: 'None',
       mediaMapping: {
         kind: 'cutout-rect',
         legacyKind: 'element',
@@ -164,7 +173,7 @@ describe('V2-only store bridge', () => {
     const legacy = createLegacyImportFixture()
     legacy.name = 'Legacy'
     legacy.source = { name: 'a.png', width: 32, height: 32, storageKey: 'fixtures/a.png' }
-    legacy.elements = [{ id: 'e1', name: 'Cut', x: 0, y: 0, w: 0.2, h: 0.2, motion: 'None' }]
+    legacy.elements = [{ id: 'e1', name: 'Cut', x: 0, y: 0, w: 0.2, h: 0.2 }]
     const pair = loadProjectPair(legacy)
     expect(pair.project.schemaVersion).toBe(2)
     expect(pair.project.layers.e1).toBeTruthy()
@@ -174,7 +183,7 @@ describe('V2-only store bridge', () => {
   it('applyOverlaysToProjectV2 keeps cutouts and inserts overlays after them', () => {
     const legacy = createLegacyImportFixture()
     legacy.source = { name: 'a.png', width: 32, height: 32, storageKey: 'fixtures/a.png' }
-    legacy.elements = [{ id: 'cut-a', name: 'Cut', x: 0, y: 0, w: 0.2, h: 0.2, motion: 'None' }]
+    legacy.elements = [{ id: 'cut-a', name: 'Cut', x: 0, y: 0, w: 0.2, h: 0.2 }]
     const { project: v2 } = migrateV1ToV2(legacy)
 
     const next = applyOverlaysToProjectV2(v2, [{

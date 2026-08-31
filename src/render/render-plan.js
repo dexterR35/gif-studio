@@ -9,9 +9,6 @@ import { RENDER_PASS_KINDS } from './eval-order.js'
 
 /**
  * @typedef {object} RenderPlan
- * @property {number} timeUs
- * @property {string} projectSeed
- * @property {number} frameIndex
  * @property {{ width: number, height: number, background: object, colorSpace: string }} canvas
  * @property {RenderPass[]} passes
  * @property {string[]} evalOrder
@@ -23,9 +20,6 @@ import { RENDER_PASS_KINDS } from './eval-order.js'
  */
 export function createRenderPlan(partial = {}) {
   return {
-    timeUs: partial.timeUs ?? 0,
-    projectSeed: partial.projectSeed ?? '0',
-    frameIndex: partial.frameIndex ?? 0,
     canvas: partial.canvas ?? {
       width: 1,
       height: 1,

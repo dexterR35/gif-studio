@@ -1,10 +1,10 @@
 /**
- * AI / export routing — local-backend-first for Best quality and export.
+ * AI routing — local-backend-first for Best quality.
  * Browser ONNX is degraded/offline only. NEVER silently swap engines.
  */
 
 /**
- * @typedef {'local-backend'|'browser-onnx'|'offline-encoder'|'unavailable'} RouteTarget
+ * @typedef {'local-backend'|'browser-onnx'|'unavailable'} RouteTarget
  */
 
 /**
@@ -30,8 +30,7 @@ export function resolveRoute(input) {
   const tier = input.qualityTier || 'balanced'
   const api = Boolean(input.apiAvailable)
   const engineOk = input.engineAvailable !== false
-  const isExport = kind === 'export' || kind.startsWith('export')
-  const isBest = tier === 'best' || isExport
+  const isBest = tier === 'best'
 
   if (isBest) {
     if (api && engineOk) {
@@ -40,9 +39,7 @@ export function resolveRoute(input) {
         engineLabel: 'local-python-api',
         degraded: false,
         requiresApproval: false,
-        reason: isExport
-          ? 'Export defaults to local Python backend'
-          : 'Best quality routes to local Python backend',
+        reason: 'Best quality routes to local Python backend',
       }
     }
     if (input.preferOffline || input.allowBrowserFallback) {
@@ -56,8 +53,8 @@ export function resolveRoute(input) {
         }
       }
       return {
-        target: isExport ? 'offline-encoder' : 'browser-onnx',
-        engineLabel: isExport ? 'gifenc-or-ffmpeg-wasm' : 'browser-onnx',
+        target: 'browser-onnx',
+        engineLabel: 'browser-onnx',
         degraded: true,
         requiresApproval: false,
         reason: 'User-approved degraded offline/browser path',
@@ -68,7 +65,7 @@ export function resolveRoute(input) {
       engineLabel: 'none',
       degraded: true,
       requiresApproval: false,
-      reason: 'Local backend required for Best/export; unavailable',
+      reason: 'Local backend required for Best quality; unavailable',
     }
   }
 

@@ -1,6 +1,5 @@
 import { StudioError } from '../errors/studio-error.js'
 import { migrateLayersFromV1 } from '../layers/migrate-layers.js'
-import { msToUs } from '../timeline/time.js'
 import { createEmptyProjectV2 } from './create-empty-v2.js'
 import { validateProjectV2 } from './validate-project.js'
 
@@ -65,8 +64,7 @@ export function cloneV1Snapshot(value) {
  * Pure V1 → V2 migration.
  * Retains an immutable backup of the original document in the return value.
  *
- * MEGA overlay: enhancedLayer becomes replace assetId + rollbackAssetId
- * (not an invisible underlay). Cutout motion defaults to None.
+ * Enhanced layers become replace assets with a rollback reference.
  *
  * @param {object} v1
  * @returns {{
@@ -113,68 +111,16 @@ export function migrateV1ToV2(v1) {
   }
 
   const settings = v1.settings || {}
-  const durationSec = Number(settings.duration) || 10
   const empty = createEmptyProjectV2({
     name: v1.name || 'Untitled',
     width: Number(settings.width) || 480,
     height: Number(settings.height) || 300,
     transparent: Boolean(settings.transparent),
     backgroundColor: settings.background || '#111114',
-    durationUs: msToUs(durationSec * 1000),
     id: v1.id || undefined,
   })
 
   const { layers, rootLayerIds, assets } = migrateLayersFromV1(v1)
-
-  // Parallax → timeline modifier track on background if present
-  const tracks = {}
-  const trackOrder = []
-  if (v1.parallax?.enabled && layers['layer-background']) {
-    const trackId = 'track-parallax-x'
-    tracks[trackId] = {
-      id: trackId,
-      target: { layerId: 'layer-background', property: 'x' },
-      mode: 'additive',
-      keyframes: [],
-      modifiers: [{
-        id: 'mod-parallax',
-        type: 'Drift',
-        amplitude: Number(v1.parallax.strength) || 6,
-        speed: Number(v1.parallax.speed) || 1,
-      }],
-    }
-    trackOrder.push(trackId)
-    layers['layer-background'].animationTrackIds = [
-      ...(layers['layer-background'].animationTrackIds || []),
-      trackId,
-    ]
-  }
-
-  // Simple keyframe migration (V1 keyframes often percent-based)
-  if (Array.isArray(v1.keyframes) && v1.keyframes.length && layers['layer-background']) {
-    for (const kf of v1.keyframes) {
-      if (!kf || typeof kf !== 'object') continue
-      const prop = kf.property || kf.prop
-      if (!prop) continue
-      const trackId = `track-kf-${prop}`
-      if (!tracks[trackId]) {
-        tracks[trackId] = {
-          id: trackId,
-          target: { layerId: 'layer-background', property: prop },
-          mode: 'absolute',
-          keyframes: [],
-          modifiers: [],
-        }
-        trackOrder.push(trackId)
-        layers['layer-background'].animationTrackIds.push(trackId)
-      }
-      tracks[trackId].keyframes.push({
-        timeUs: msToUs((Number(kf.t) || Number(kf.time) || 0) * 1000),
-        value: Number(kf.value) || 0,
-        easing: kf.easing || settings.easing || 'linear',
-      })
-    }
-  }
 
   const project = {
     ...empty,
@@ -196,20 +142,9 @@ export function migrateV1ToV2(v1) {
     assets,
     layers,
     rootLayerIds,
-    timeline: {
-      durationUs: msToUs(durationSec * 1000),
-      loopMode: settings.loop === 1 ? 'once' : 'loop',
-      tracks,
-      trackOrder,
-    },
     exportSettings: {
-      format: 'gif',
-      fps: Number(settings.fps) || 24,
-      quality: settings.quality || 'High quality',
-      loop: Number.isFinite(Number(settings.loop)) ? Number(settings.loop) : 0,
-      paletteSize: Number(settings.palette) || 256,
-      dither: settings.dither !== false,
-      disposal: Number(settings.disposal) || 2,
+      format: 'png',
+      reducePalette: Boolean(settings.reducePalette),
       transparent: Boolean(settings.transparent),
     },
     extensions: {
@@ -217,9 +152,15 @@ export function migrateV1ToV2(v1) {
       migratedFrom: 1,
       legacyFontOptions: Array.isArray(v1.fontOptions) ? v1.fontOptions : undefined,
       legacySettings: {
-        preset: settings.preset,
         fit: settings.fit,
-        motion: settings.motion || 'None',
+        scale: Number(settings.scale ?? 100),
+        x: Number(settings.x ?? 0),
+        y: Number(settings.y ?? 0),
+        rotation: Number(settings.rotation ?? 0),
+        opacity: Number(settings.opacity ?? 100),
+        anchorX: Number(settings.anchorX ?? 50),
+        anchorY: Number(settings.anchorY ?? 50),
+        imageFilters: Array.isArray(settings.imageFilters) ? settings.imageFilters : [],
       },
     },
   }

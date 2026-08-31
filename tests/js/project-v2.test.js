@@ -14,17 +14,17 @@ describe('ProjectDocumentV2', () => {
   })
 
   it('empty v2 validates', () => {
-    const doc = createEmptyProjectV2({ name: 'Test', projectSeed: 'seed-fixed' })
+    const doc = createEmptyProjectV2({ name: 'Test' })
     const result = validateProjectV2(doc)
     expect(result.ok).toBe(true)
     expect(result.project.schemaVersion).toBe(2)
-    expect(result.project.timeline.durationUs).toBeGreaterThan(0)
+    expect(result.project.exportSettings.format).toBe('png')
   })
 
   it('legacy import migrates to v2 with backup note', () => {
     const legacy = createLegacyImportFixture()
     legacy.name = 'Legacy'
-    legacy.settings = { ...legacy.settings, width: 320, height: 200, duration: 2, fps: 12 }
+    legacy.settings = { ...legacy.settings, width: 320, height: 200 }
     legacy.source = {
       storageKey: 'fixtures/static_opaque.png',
       mimeType: 'image/png',
@@ -89,7 +89,6 @@ describe('ProjectDocumentV2', () => {
       y: 4,
       w: 8,
       h: 8,
-      motion: 'None',
       visible: true,
       locked: false,
       bitmap: fakeCanvas,
@@ -130,7 +129,7 @@ describe('ProjectDocumentV2', () => {
   })
 
   it('serialize hydrate round-trip preserves revision', () => {
-    const doc = createEmptyProjectV2({ projectSeed: 'round-trip' })
+    const doc = createEmptyProjectV2()
     doc.assets['a1'] = {
       id: 'a1',
       kind: 'image',
@@ -153,9 +152,7 @@ describe('ProjectDocumentV2', () => {
         x: 0, y: 0, scaleX: 1, scaleY: 1, rotationDeg: 0, anchorX: 0.5, anchorY: 0.5,
       },
       effects: [],
-      animationTrackIds: [],
       assetId: 'a1',
-      cutoutMotion: 'None',
     }
     doc.rootLayerIds = ['l1']
 

@@ -117,7 +117,7 @@ export function buildUnifiedLayerList(project, editorSession = {}) {
           name: entity.name || name,
           visible: entity.visible !== false,
           locked: Boolean(entity.locked),
-          subtitle: entity.motion || 'None',
+          subtitle: entity.cutoutMode || 'Cutout',
           legacyEntity: entity,
         }
       }

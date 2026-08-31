@@ -1,16 +1,13 @@
 export { getOnnxSession, probeOnnx, imageDataToFloatTensor, ort } from './onnx'
 export {
-  detectWithGroundingDino,
-  detectObjects,
-  probeGroundingDino,
-  groundingDinoConfigured,
-} from './grounding-dino'
-export {
-  detectBodyPose,
-  detectBodyAndJoints,
-  loadPoseLandmarker,
-  probeMediaPipe,
-  probePose,
-} from './mediapipe'
+  selectByPrompt,
+  probePromptSelection,
+} from './prompt-selection'
 export { upscaleWithRealESRGAN, probeRealESRGAN, realesrganConfigured } from './realesrgan'
 export { matteWithModel, probeMatte } from './matte'
+export {
+  inpaintRegion,
+  inpaintWithLama,
+  probeInpaint,
+  probeLama,
+} from './inpaint'

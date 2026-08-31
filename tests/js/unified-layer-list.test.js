@@ -12,8 +12,8 @@ describe('buildUnifiedLayerList', () => {
     const legacy = createLegacyImportFixture()
     legacy.source = { name: 'a.png', width: 32, height: 32, url: null, kind: 'image' }
     legacy.elements = [
-      { id: 'cut-1', name: 'Cut A', motion: 'None', visible: true, locked: false },
-      { id: 'cut-2', name: 'Cut B', motion: 'None', visible: true, locked: false },
+      { id: 'cut-1', name: 'Cut A', visible: true, locked: false },
+      { id: 'cut-2', name: 'Cut B', visible: true, locked: false },
     ]
     const { project: v2 } = migrateV1ToV2(legacy)
     const rows = buildUnifiedLayerList(v2, legacy)

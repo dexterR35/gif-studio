@@ -74,7 +74,7 @@ function ensureSetup() {
     'importlib.import_module("cv2")',
     'importlib.import_module("fastapi")',
     'importlib.import_module("uvicorn")',
-    'importlib.import_module("gif_studio.web_api")',
+    'importlib.import_module("image_studio.web_api")',
   ].join('; ')
 
   const check = spawnSync(vpy, ['-c', probe], {
@@ -103,13 +103,13 @@ function buildEnv() {
 }
 
 async function preflight(env) {
-  const apiHost = env.GIF_STUDIO_API_HOST || '127.0.0.1'
-  const apiPort = Number(env.GIF_STUDIO_API_PORT || '8000')
+  const apiHost = env.IMAGE_STUDIO_API_HOST || '127.0.0.1'
+  const apiPort = Number(env.IMAGE_STUDIO_API_PORT || '8000')
 
   if (!(await portAvailable(apiHost, apiPort))) {
     console.error(
       `API port ${apiHost}:${apiPort} is already in use.\n` +
-        'Stop the other process or change GIF_STUDIO_API_PORT in .env',
+        'Stop the other process or change IMAGE_STUDIO_API_PORT in .env',
     )
     process.exit(1)
   }

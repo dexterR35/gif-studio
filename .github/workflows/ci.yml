@@ -32,7 +32,4 @@ jobs:
           pip install -r requirements-web.txt -r requirements-dev.txt
           pip install -e .
       - name: Pytest
-        run: pytest tests/test_engine.py tests/test_cli.py tests/test_api_v1_jobs.py -q
-      - name: UI smoke (optional PySide)
-        run: pytest tests/test_ui_smoke.py -q
-        continue-on-error: true
+        run: pytest -q

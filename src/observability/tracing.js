@@ -81,9 +81,9 @@ export function startSpan(name, attrs = {}) {
       record.endMs = typeof performance !== 'undefined' ? performance.now() : Date.now()
       record.status = String(status || 'ok')
       Object.assign(record.attrs, safeAttrs(endAttrs))
-      const durationMs = record.endMs - record.startMs
+      const elapsedMs = record.endMs - record.startMs
       if (consoleEnabled && typeof console !== 'undefined' && console.debug) {
-        console.debug(`[trace] end ${record.name}`, durationMs.toFixed(1), 'ms', record.status, record.attrs)
+        console.debug(`[trace] end ${record.name}`, elapsedMs.toFixed(1), 'ms', record.status, record.attrs)
       }
     },
   }

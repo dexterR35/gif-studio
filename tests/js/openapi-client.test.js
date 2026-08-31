@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createApiClient, API_PATHS, createRequestId } from '../../src/api/js-client.js'
 import { mapApiError, isProblemJson } from '../../src/api/error-mapping.js'
-import { postMatte } from '../../src/api/ai-fetch.js'
+import { postInpaint, postMatte } from '../../src/api/ai-fetch.js'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -16,8 +16,9 @@ describe('openapi paths', () => {
     expect(doc.paths['/api/v1/jobs/{job_id}']).toBeTruthy()
     expect(doc.paths['/api/v1/jobs/{job_id}/cancel']).toBeTruthy()
     expect(doc.paths['/api/v1/jobs/{job_id}/result']).toBeTruthy()
-    expect(doc.paths[API_PATHS.export]).toBeTruthy()
+    expect(doc.paths[API_PATHS.optimizePng]).toBeTruthy()
     expect(doc.paths[API_PATHS.aiMatte]).toBeTruthy()
+    expect(doc.paths[API_PATHS.aiInpaint]).toBeTruthy()
   })
 })
 
@@ -83,6 +84,23 @@ describe('js-client', () => {
     const { data } = await client.createJob({ kind: 'export', params: {} })
     expect(data.job_id).toBe('j1')
   })
+
+  it('posts PNG optimization as a binary request', async () => {
+    const fetchImpl = vi.fn(async (url, init) => {
+      expect(url).toBe('/api/optimize-png')
+      expect(init.method).toBe('POST')
+      expect(init.body).toBeInstanceOf(FormData)
+      return new Response(new Blob(['png']), {
+        status: 200,
+        headers: { 'Content-Type': 'image/png' },
+      })
+    })
+    const client = createApiClient({ fetchImpl })
+    const form = new FormData()
+    form.append('image', new Blob(['png']), 'source.png')
+    const { data } = await client.postOptimizePng(form)
+    expect(data).toBeInstanceOf(Response)
+  })
 })
 
 describe('error-mapping', () => {
@@ -106,8 +124,25 @@ describe('ai-fetch / matte proof', () => {
       })
     })
     const form = new FormData()
-    form.append('image', new Blob(['x']), 'frame.png')
+    form.append('image', new Blob(['x']), 'source.png')
     const data = await postMatte(form, { fetchImpl })
     expect(data.mask).toBe('data:...')
+  })
+
+  it('postInpaint uses the shared client and documented route', async () => {
+    const fetchImpl = vi.fn(async (url, init) => {
+      expect(url).toBe('/api/ai/inpaint')
+      expect(init.method).toBe('POST')
+      expect(init.headers.get('X-Request-Id')).toBeTruthy()
+      return new Response(JSON.stringify({ fill: 'opencv-content-aware' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    })
+    const form = new FormData()
+    form.append('image', new Blob(['image']), 'plate.png')
+    form.append('mask', new Blob(['mask']), 'mask.png')
+    const data = await postInpaint(form, { fetchImpl })
+    expect(data.fill).toBe('opencv-content-aware')
   })
 })

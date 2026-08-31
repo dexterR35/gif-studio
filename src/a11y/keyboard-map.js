@@ -26,10 +26,6 @@ export const KEYBOARD_MAP = Object.freeze({
     key: 'Escape',
     description: 'Cancel active tool / clear selection chrome',
   },
-  playPause: {
-    key: ' ',
-    description: 'Play / pause timeline preview',
-  },
   deleteLayer: {
     key: 'Delete',
     description: 'Delete selected layer',

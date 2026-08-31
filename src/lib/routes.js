@@ -1,35 +1,31 @@
-/** Central route map for the GIF studio app. */
+/** Central route map for the image studio app. */
 export const ROUTES = {
   home: '/',
-  gif: {
-    root: '/gif',
-    ai: '/gif/ai',
-    motion: '/gif/motion',
-    text: '/gif/text',
-    timeline: '/gif/timeline',
-    scale: '/gif/scale',
-    output: '/gif/output',
+  studio: {
+    root: '/studio',
+    ai: '/studio/ai',
+    text: '/studio/text',
+    scale: '/studio/scale',
+    output: '/studio/output',
   },
 }
 
-/** Tab order: AI → Motion → Text → Timeline → Scale → Export. */
-export const GIF_WORKSPACES = [
+/** Primary editing workspaces. */
+export const WORKSPACES = [
   'ai',
-  'motion',
   'text',
-  'timeline',
   'scale',
   'output',
 ]
 
 /** Workspaces that keep layers + inspector (not full-width focus panels). */
-export const LAYER_WORKSPACES = new Set(['ai', 'motion', 'text'])
+export const LAYER_WORKSPACES = new Set(['ai', 'text'])
 
-export function gifWorkspacePath(workspace = 'ai') {
-  return `/gif/${workspace}`
+export function workspacePath(workspace = 'ai') {
+  return `/studio/${workspace}`
 }
 
 export function workspaceFromPath(pathname) {
-  const match = pathname.match(/^\/gif\/([^/]+)/)
-  return match?.[1] && GIF_WORKSPACES.includes(match[1]) ? match[1] : 'ai'
+  const match = pathname.match(/^\/studio\/([^/]+)/)
+  return match?.[1] && WORKSPACES.includes(match[1]) ? match[1] : 'ai'
 }

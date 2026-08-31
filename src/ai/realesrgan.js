@@ -4,17 +4,11 @@
  */
 import { getOnnxSession, imageDataToFloatTensor, ort } from './onnx'
 
+export { UPSCALE_MODELS } from './model-catalogs.js'
+
 const MODEL_URL = import.meta.env.VITE_REALESRGAN_ONNX || ''
 
 const SUPPORTED = new Set(['esrgan', 'realesrgan', 'realesrgan-x2', 'a-esrgan'])
-
-/** Fallback list when /api/health has not loaded yet. */
-export const UPSCALE_MODELS = [
-  { id: 'esrgan', label: 'ESRGAN', ready: false },
-  { id: 'realesrgan', label: 'Real-ESRGAN', ready: false },
-  { id: 'realesrgan-x2', label: 'Real-ESRGAN x2', ready: false },
-  { id: 'a-esrgan', label: 'A-ESRGAN (anime)', ready: false },
-]
 
 export function realesrganConfigured() {
   return Boolean(MODEL_URL)
@@ -22,7 +16,7 @@ export function realesrganConfigured() {
 
 async function viaServer(imageBlob, scale = 2, model = 'realesrgan') {
   const form = new FormData()
-  form.append('image', imageBlob, 'frame.png')
+  form.append('image', imageBlob, 'image.png')
   form.append('scale', String(scale))
   form.append('model', model)
   const res = await fetch('/api/ai/upscale', { method: 'POST', body: form })

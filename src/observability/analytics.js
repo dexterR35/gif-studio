@@ -38,7 +38,6 @@ export const PRODUCT_EVENTS = Object.freeze({
   IMPORT_COMMITTED: 'import_committed',
   CUTOUT_APPLIED: 'cutout_applied',
   EXPORT_SUCCEEDED: 'export_succeeded',
-  TIMELINE_EDIT_COMMITTED: 'timeline_edit_committed',
 })
 
 /** @type {Array<{ name: string, props: Record<string, string|number|boolean>, ts: number }>} */
@@ -142,8 +141,4 @@ export function trackCutoutApplied(props = {}) {
 
 export function trackExportSucceeded(props = {}) {
   trackProductEvent(PRODUCT_EVENTS.EXPORT_SUCCEEDED, props)
-}
-
-export function trackTimelineEditCommitted(props = {}) {
-  trackProductEvent(PRODUCT_EVENTS.TIMELINE_EDIT_COMMITTED, props)
 }

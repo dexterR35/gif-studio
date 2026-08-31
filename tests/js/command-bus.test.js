@@ -7,7 +7,7 @@ import {
 } from '../../src/commands/index.js'
 
 function projectWithRaster() {
-  const doc = createEmptyProjectV2({ projectSeed: 'cmd' })
+  const doc = createEmptyProjectV2()
   doc.assets['orig'] = {
     id: 'orig',
     kind: 'image',
@@ -30,9 +30,7 @@ function projectWithRaster() {
       x: 0, y: 0, scaleX: 1, scaleY: 1, rotationDeg: 0, anchorX: 0.5, anchorY: 0.5,
     },
     effects: [],
-    animationTrackIds: [],
     assetId: 'orig',
-    cutoutMotion: 'None',
   }
   doc.rootLayerIds = ['bg']
   return doc

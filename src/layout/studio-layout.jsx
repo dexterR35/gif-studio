@@ -5,7 +5,7 @@ import {
   LIVE_REGION_ASSERTIVE_ID,
   LIVE_REGION_POLITE_ID,
 } from '../a11y/live-region'
-import { BusyOverlay, ExportModal, FloatingPanel, Toast } from '../components/ui'
+import { BusyOverlay, FloatingPanel, Toast } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
 import { LAYER_WORKSPACES } from '../lib/routes'
 import { InspectorAside } from './inspector-aside'
@@ -17,21 +17,20 @@ import { StudioHeader } from './studio-header'
 import { ToolsRail } from './tools-rail'
 import { WorkspaceNav } from './workspace-nav'
 
-const FOCUS_TABS = new Set(['timeline', 'scale', 'output'])
+const FOCUS_TABS = new Set(['scale', 'output'])
 
 const FOCUS_TITLES = {
-  timeline: 'Timeline',
   scale: 'Scale',
   output: 'Export',
 }
 
 export function StudioLayout() {
   const {
-    mobilePanel, setMobilePanel, exporting, frames, progress, toast,
+    mobilePanel, setMobilePanel, toast,
     artboardSelected, baseImageSelected, selectedElements, clearLayerSelection, selectedText, setSelectedText,
     selectedOverlay, setSelectedOverlay,
     maskEditing, setMaskEditing, selectMode, setSelectMode, cancelSelection,
-    activeTab, setPlaying, poseRig, image,
+    activeTab, image,
     studioLocked, busyLabel, scaleBusy, downloadBusy, segmenting,
   } = useStudio()
 
@@ -40,13 +39,11 @@ export function StudioLayout() {
   const [floatingTools, setFloatingTools] = useState(false)
 
   const isFocus = FOCUS_TABS.has(activeTab)
-  const isOutput = activeTab === 'output'
   const hasLayers = LAYER_WORKSPACES.has(activeTab)
-  const showTools = activeTab === 'ai' || activeTab === 'motion'
+  const showTools = activeTab === 'ai'
   const showSelectDetect = !isFocus && Boolean(image)
-  const jointsOpen = Boolean(poseRig?.panelOpen && poseRig?.joints?.length)
   const inspectorOpen = hasLayers && (
-    maskEditing || selectMode || jointsOpen || artboardSelected
+    maskEditing || selectMode || artboardSelected
     || Boolean(selectedText) || baseImageSelected || selectedElements.length > 0 || Boolean(selectedOverlay)
   )
 
@@ -76,11 +73,8 @@ export function StudioLayout() {
     cancelSelection()
     setSelectMode(false)
     setMobilePanel(false)
-    if (isOutput) setPlaying(true)
-    return () => {
-      if (isOutput) setPlaying(false)
-    }
-  }, [isFocus, isOutput]) // eslint-disable-line react-hooks/exhaustive-deps
+    return undefined
+  }, [isFocus]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Tools that need a selection target only clear when leaving layer workspaces.
   useEffect(() => {
@@ -229,8 +223,7 @@ export function StudioLayout() {
         </FloatingPanel>
       )}
 
-      <ExportModal open={exporting} frames={frames} progress={progress} />
-      <BusyOverlay open={studioLocked && !exporting} message={busyMessage} />
+      <BusyOverlay open={studioLocked} message={busyMessage} />
       <Toast message={toast} />
     </div>
   )

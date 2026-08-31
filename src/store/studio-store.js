@@ -17,7 +17,6 @@ const INITIAL_SELECTION = {
   selectedElements: [],
   selectedText: null,
   selectedOverlay: null,
-  selectedMotionEffect: null,
   baseImageSelected: false,
   enhancedSelected: false,
   artboardSelected: false,
@@ -37,6 +36,17 @@ const INITIAL_TOOLS = {
   maskBrush: { mode: 'Hide', size: 48, hardness: 70, opacity: 100, feather: 8 },
   /** Soft-matte rembg id, or ``opencv-grabcut`` for explicit OpenCV GrabCut. */
   cutoutModel: 'birefnet',
+  /**
+   * What a finished marquee/lasso does:
+   * - cutout: lift selection into a floating layer
+   * - erase: LaMa-remove that region from the base image (lama-cleaner style)
+   */
+  selectionPurpose: 'cutout',
+  /**
+   * After drawing a selection in erase mode — wait for Cut / Cancel.
+   * @type {null | { rect: {x:number,y:number,w:number,h:number}, points: Array<{x:number,y:number}>|null }}
+   */
+  pendingSelection: null,
 }
 
 const INITIAL_UI = {
@@ -45,7 +55,6 @@ const INITIAL_UI = {
   toast: null,
   dropActive: false,
   lockAspect: true,
-  gpuPreview: false,
 }
 
 function classifyToastMessage(message) {
@@ -57,7 +66,7 @@ function classifyToastMessage(message) {
   if (/unlock|wait for|draw a|enter a|open an|need at least|select a/.test(m)) {
     return 'warning'
   }
-  if (/ready|loaded|added|imported|exported|saved|copied|success|contour|parallax on|optimized|downloaded/.test(m)) {
+  if (/ready|loaded|added|imported|exported|saved|copied|success|contour|optimized|downloaded/.test(m)) {
     return 'success'
   }
   return 'info'
@@ -79,9 +88,6 @@ function normalizeToast(input) {
 }
 
 const INITIAL_SESSION = {
-  playing: false,
-  progress: 0,
-  exporting: false,
   downloadBusy: false,
   scaleBusy: false,
   lastExport: null,
@@ -107,21 +113,16 @@ export const useStudioStore = create((set, get) => ({
   session: { ...INITIAL_SESSION },
   capabilities: {
     opencv: false,
-    pixi: false,
-    ffmpeg: false,
     onnx: false,
-    mediapipe: false,
-    sam2: false,
-    sam3: false,
-    groundingDino: false,
+    promptSelection: false,
     matte: false,
+    lama: false,
     gfpgan: false,
     realesrgan: false,
     rembg: false,
     api: false,
     device: null,
     models: null,
-    allowHuggingFace: false,
   },
 
   // ── Project document (V2) + editor view ───────────────────────────
@@ -180,30 +181,10 @@ export const useStudioStore = create((set, get) => ({
     return commitEditorPatch(state, { imageEdits })
   }),
 
-  setParallax: (updater) => set((state) => {
-    const prev = state.editor.parallax
-    const parallax = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater }
-    return commitEditorPatch(state, { parallax })
-  }),
-
   setFontOptions: (updater) => set((state) => {
     const fontOptions = apply(state.editor.fontOptions, updater)
     return commitEditorPatch(state, { fontOptions })
   }),
-
-  setKeyframes: (keyframes) => set((state) => commitEditorPatch(state, { keyframes })),
-
-  addKeyframe: (kf) => set((state) => commitEditorPatch(state, {
-    keyframes: [...(state.editor.keyframes || []), kf],
-  })),
-
-  updateKeyframe: (id, patch) => set((state) => commitEditorPatch(state, {
-    keyframes: (state.editor.keyframes || []).map((k) => (k.id === id ? { ...k, ...patch } : k)),
-  })),
-
-  removeKeyframe: (id) => set((state) => commitEditorPatch(state, {
-    keyframes: (state.editor.keyframes || []).filter((k) => k.id !== id),
-  })),
 
   // ── Selection / layers chrome ─────────────────────────────────────
   setSelectedElements: (updater) => set((state) => ({
@@ -217,12 +198,6 @@ export const useStudioStore = create((set, get) => ({
   })),
   setSelectedOverlay: (updater) => set((state) => ({
     selection: { ...state.selection, selectedOverlay: apply(state.selection.selectedOverlay, updater) },
-  })),
-  setSelectedMotionEffect: (updater) => set((state) => ({
-    selection: {
-      ...state.selection,
-      selectedMotionEffect: apply(state.selection.selectedMotionEffect, updater),
-    },
   })),
   setBaseImageSelected: (updater) => set((state) => ({
     selection: { ...state.selection, baseImageSelected: apply(state.selection.baseImageSelected, updater) },
@@ -254,7 +229,6 @@ export const useStudioStore = create((set, get) => ({
       selectedElements: [],
       selectedText: null,
       selectedOverlay: null,
-      selectedMotionEffect: null,
       baseImageSelected: false,
       enhancedSelected: false,
       artboardSelected: false,
@@ -287,6 +261,12 @@ export const useStudioStore = create((set, get) => ({
   }),
   setCutoutModel: (updater) => set((state) => ({
     tools: { ...state.tools, cutoutModel: apply(state.tools.cutoutModel, updater) },
+  })),
+  setSelectionPurpose: (updater) => set((state) => ({
+    tools: { ...state.tools, selectionPurpose: apply(state.tools.selectionPurpose, updater) },
+  })),
+  setPendingSelection: (updater) => set((state) => ({
+    tools: { ...state.tools, pendingSelection: apply(state.tools.pendingSelection, updater) },
   })),
   patchTools: (partial) => set((state) => ({
     tools: { ...state.tools, ...partial },
@@ -324,23 +304,11 @@ export const useStudioStore = create((set, get) => ({
   setLockAspect: (updater) => set((state) => ({
     ui: { ...state.ui, lockAspect: apply(state.ui.lockAspect, updater) },
   })),
-  setGpuPreview: (updater) => set((state) => ({
-    ui: { ...state.ui, gpuPreview: apply(state.ui.gpuPreview, updater) },
-  })),
   patchUi: (partial) => set((state) => ({
     ui: { ...state.ui, ...partial },
   })),
 
-  // ── Session / playback / IO ───────────────────────────────────────
-  setPlaying: (updater) => set((state) => ({
-    session: { ...state.session, playing: apply(state.session.playing, updater) },
-  })),
-  setProgress: (updater) => set((state) => ({
-    session: { ...state.session, progress: apply(state.session.progress, updater) },
-  })),
-  setExporting: (updater) => set((state) => ({
-    session: { ...state.session, exporting: apply(state.session.exporting, updater) },
-  })),
+  // ── Session / IO ──────────────────────────────────────────────────
   setDownloadBusy: (updater) => set((state) => ({
     session: { ...state.session, downloadBusy: apply(state.session.downloadBusy, updater) },
   })),

@@ -42,21 +42,21 @@ export function incrementCounter(name, delta = 1, opts = {}) {
 
 /**
  * @param {string} name
- * @param {number} durationMs
+ * @param {number} elapsedMs
  * @param {{ requestId?: string }} [opts]
  */
-export function recordTimer(name, durationMs, opts = {}) {
-  if (!name || !Number.isFinite(durationMs)) return
+export function recordTimer(name, elapsedMs, opts = {}) {
+  if (!name || !Number.isFinite(elapsedMs)) return
   let arr = timers.get(name)
   if (!arr) {
     arr = []
     timers.set(name, arr)
   }
-  arr.push(durationMs)
+  arr.push(elapsedMs)
   if (arr.length > MAX_TIMER_SAMPLES) arr.shift()
   const rid = opts.requestId ?? currentRequestId
   if (rid && typeof console !== 'undefined' && console.debug) {
-    console.debug(`[telemetry] timer:${name}`, durationMs.toFixed(1), 'ms', { requestId: rid })
+    console.debug(`[telemetry] timer:${name}`, elapsedMs.toFixed(1), 'ms', { requestId: rid })
   }
 }
 

@@ -4,14 +4,12 @@
 Weights go under ``models/``. Grounding DINO is cloned to ``third_party/``.
 
 Usage:
-  python scripts/setup_ai_models.py              # all local ckpts (default)
-  python scripts/setup_ai_models.py --tiny-only  # SAM2 tiny + DINO Swin-T only
+  python scripts/setup_ai_models.py
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -38,39 +36,36 @@ REALESRGAN_URLS = {
     ),
 }
 
-SAM2_URLS = {
-    "sam2.1_hiera_tiny.pt": (
-        "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt"
-    ),
-    "sam2.1_hiera_small.pt": (
-        "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt"
-    ),
-    "sam2.1_hiera_base_plus.pt": (
-        "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt"
-    ),
-    "sam2.1_hiera_large.pt": (
+SAM2_LARGE = {
+    "file": "sam2.1_hiera_large.pt",
+    "url": (
         "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt"
     ),
 }
 
-GROUNDING_DINO = [
-    {
-        "file": "groundingdino_swint_ogc.pth",
-        "config": "GroundingDINO_SwinT_OGC.py",
-        "url": (
-            "https://github.com/IDEA-Research/GroundingDINO/releases/download/"
-            "v0.1.0-alpha/groundingdino_swint_ogc.pth"
-        ),
-    },
-    {
-        "file": "groundingdino_swinb_cogcoor.pth",
-        "config": "GroundingDINO_SwinB_cfg.py",
-        "url": (
-            "https://github.com/IDEA-Research/GroundingDINO/releases/download/"
-            "v0.1.0-alpha2/groundingdino_swinb_cogcoor.pth"
-        ),
-    },
-]
+GROUNDING_DINO_LARGE = {
+    "file": "groundingdino_swinb_cogcoor.pth",
+    "config": "GroundingDINO_SwinB_cfg.py",
+    "url": (
+        "https://github.com/IDEA-Research/GroundingDINO/releases/download/"
+        "v0.1.0-alpha2/groundingdino_swinb_cogcoor.pth"
+    ),
+}
+
+BERT_RUNTIME_FILES = (
+    "config.json",
+    "model.safetensors",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocab.txt",
+)
+
+# Same torchscript weight lama-cleaner / IOPaint uses for full big-lama erase.
+# MD5 e3aa4aaa15225a33ec84f9f4bc47e500 — not a small/lite model.
+LAMA_URL = (
+    "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt"
+)
+LAMA_MD5 = "e3aa4aaa15225a33ec84f9f4bc47e500"
 
 
 def download(url: str, dest: Path) -> None:
@@ -104,13 +99,9 @@ def setup_realesrgan() -> None:
         download(url, MODELS / "realesrgan" / name)
 
 
-def setup_sam2(tiny_only: bool) -> None:
-    print("\n[SAM2] Meta CDN → models/sam2/")
-    items = list(SAM2_URLS.items())
-    if tiny_only:
-        items = items[:1]
-    for name, url in items:
-        download(url, MODELS / "sam2" / name)
+def setup_sam2() -> None:
+    print("\n[SAM 2.1 Large] Meta CDN → models/sam2/")
+    download(SAM2_LARGE["url"], MODELS / "sam2" / SAM2_LARGE["file"])
     print("  install package: pip install 'git+https://github.com/facebookresearch/sam2.git'")
 
 
@@ -121,187 +112,121 @@ def setup_matte_dirs() -> None:
     print("  optional: drop ONNX under models/matte/; pip install rembg")
 
 
+def setup_lama() -> None:
+    print("\n[LaMa] FULL big-lama erase → models/lama/big-lama.pt (~206 MB)")
+    print("  (Places FFCResNetGenerator — same as lama-cleaner / IOPaint, not lite)")
+    dest = MODELS / "lama" / "big-lama.pt"
+    import hashlib
+
+    def checksum() -> str:
+        h = hashlib.md5()
+        with dest.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    if dest.exists() and dest.stat().st_size > 1024:
+        digest = checksum()
+        if digest != LAMA_MD5:
+            print(f"  replacing invalid checkpoint: MD5 {digest} != {LAMA_MD5}")
+            dest.unlink()
+    download(LAMA_URL, dest)
+    digest = checksum()
+    if digest != LAMA_MD5:
+        dest.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"LaMa checkpoint checksum failed ({digest} != {LAMA_MD5}); file removed"
+        )
+    print(f"  MD5 ok: {digest}")
+    print("  runtime: image_studio.ai.lama_runner (HD crop + pad_mod 8)")
+
+
 def setup_slots() -> None:
-    print("\n[Slots] GFPGAN / SAM3 dirs")
-    for name in ("gfpgan", "sam3"):
+    print("\n[Slots] GFPGAN / LaMa dirs")
+    for name in ("gfpgan", "lama"):
         (MODELS / name).mkdir(parents=True, exist_ok=True)
     print("  gfpgan/   — GFPGANv1.4.pth face polish slot")
-    print("  sam3/     — use --with-sam3 after HF access is granted")
-
-
-def setup_sam3() -> None:
-    """Clone facebookresearch/sam3, pip install -e, download gated Hub weights."""
-    print("\n[SAM3] https://github.com/facebookresearch/sam3 (gated Hugging Face)")
-    dest_pkg = THIRD / "sam3"
-    dest_w = MODELS / "sam3"
-    dest_w.mkdir(parents=True, exist_ok=True)
-
-    clone_repo("https://github.com/facebookresearch/sam3.git", dest_pkg)
-    try:
-        run([sys.executable, "-m", "pip", "install", "-e", str(dest_pkg)])
-    except subprocess.CalledProcessError as exc:
-        print(f"  WARNING: pip install sam3 failed ({exc})")
-        print("  Retry: pip install -e third_party/sam3")
-
-    # Official Hub layout: facebook/sam3 → sam3.pt
-    ckpt = dest_w / "sam3.pt"
-    if ckpt.exists() and ckpt.stat().st_size > 1024 * 1024:
-        print(f"  skip (exists): {ckpt.relative_to(ROOT)}")
-        return
-
-    try:
-        from huggingface_hub import hf_hub_download
-    except ImportError:
-        print("  WARNING: huggingface_hub missing — cannot download sam3.pt")
-        print("  pip install huggingface_hub && hf auth login")
-        return
-
-    print("  downloading facebook/sam3 → models/sam3/sam3.pt (requires HF access + login)")
-    try:
-        path = hf_hub_download(
-            repo_id="facebook/sam3",
-            filename="sam3.pt",
-            local_dir=str(dest_w),
-        )
-        # Ensure canonical name if hub laid out differently
-        downloaded = Path(path)
-        if downloaded.resolve() != ckpt.resolve() and downloaded.exists():
-            if not ckpt.exists():
-                downloaded.replace(ckpt)
-        print(f"  ready: {ckpt.relative_to(ROOT)}")
-    except Exception as exc:  # noqa: BLE001
-        print(f"  WARNING: sam3.pt download failed ({exc})")
-        print("  1. Request access: https://huggingface.co/facebook/sam3")
-        print("  2. hf auth login")
-        print("  3. Re-run: python scripts/setup_ai_models.py --with-sam3")
-        print("  Or copy sam3.pt manually into models/sam3/")
+    print("  lama/     — big-lama.pt from setup_lama()")
 
 
 def setup_bert_local() -> None:
-    """Optional BERT for official .pth path — stored under models/ once."""
+    """Download the required BERT text encoder under models/ once."""
     dest = MODELS / "groundingdino" / "bert-base-uncased"
-    if (dest / "config.json").exists():
+    if all((dest / name).exists() for name in BERT_RUNTIME_FILES):
         print(f"  skip (exists): {dest.relative_to(ROOT)}")
         return
     print("  downloading google-bert/bert-base-uncased → models/groundingdino/bert-base-uncased")
     print("  (one-time; inference uses this folder, not the Hub)")
-    try:
-        from huggingface_hub import snapshot_download
+    from huggingface_hub import snapshot_download
 
-        snapshot_download(
-            repo_id="google-bert/bert-base-uncased",
-            local_dir=str(dest),
-        )
-    except Exception as exc:  # noqa: BLE001
-        print(f"  WARNING: BERT download failed ({exc})")
+    snapshot_download(
+        repo_id="google-bert/bert-base-uncased",
+        local_dir=str(dest),
+        allow_patterns=[*BERT_RUNTIME_FILES, "special_tokens_map.json"],
+    )
 
 
-def setup_dino_transformers(tiny_only: bool) -> None:
-    """Primary runtime path: Transformers snapshots on disk (local_files_only)."""
-    try:
-        from huggingface_hub import snapshot_download
-    except ImportError:
-        print("  WARNING: huggingface_hub missing — cannot download Transformers DINO snapshots")
-        return
-    repos = [
-        ("IDEA-Research/grounding-dino-tiny", MODELS / "groundingdino" / "hf-tiny"),
-    ]
-    if not tiny_only:
-        repos.append(
-            ("IDEA-Research/grounding-dino-base", MODELS / "groundingdino" / "hf-base"),
-        )
-    for repo_id, dest in repos:
-        if (dest / "config.json").exists():
-            print(f"  skip (exists): {dest.relative_to(ROOT)}")
-            continue
-        print(f"  downloading {repo_id} → {dest.relative_to(ROOT)}")
-        print("  (one-time; runtime uses local_files_only — no Hub)")
-        try:
-            snapshot_download(repo_id=repo_id, local_dir=str(dest))
-        except Exception as exc:  # noqa: BLE001
-            print(f"  WARNING: {repo_id} failed ({exc})")
-
-
-def setup_grounding_dino(tiny_only: bool, install_pkg: bool) -> None:
-    print("\n[Grounding DINO] local Transformers snapshots + optional official .pth")
-    setup_dino_transformers(tiny_only=tiny_only)
+def setup_grounding_dino(install_pkg: bool) -> None:
+    print("\n[Grounding DINO Swin-B] official checkpoint + local BERT")
 
     clone_repo(
         "https://github.com/IDEA-Research/GroundingDINO.git",
         THIRD / "GroundingDINO",
     )
-    specs = GROUNDING_DINO[:1] if tiny_only else GROUNDING_DINO
     cfg_dir = THIRD / "GroundingDINO" / "groundingdino" / "config"
-    for spec in specs:
-        download(spec["url"], MODELS / "groundingdino" / spec["file"])
-        cfg_src = cfg_dir / spec["config"]
-        cfg_dst = MODELS / "groundingdino" / spec["config"]
-        if cfg_src.exists():
-            cfg_dst.parent.mkdir(parents=True, exist_ok=True)
-            cfg_dst.write_text(cfg_src.read_text(encoding="utf-8"), encoding="utf-8")
-            print(f"  copied config → {cfg_dst.relative_to(ROOT)}")
-        else:
-            print(f"  WARNING: config missing at {cfg_src}")
+    spec = GROUNDING_DINO_LARGE
+    download(spec["url"], MODELS / "groundingdino" / spec["file"])
+    cfg_src = cfg_dir / spec["config"]
+    cfg_dst = MODELS / "groundingdino" / spec["config"]
+    if not cfg_src.exists():
+        raise FileNotFoundError(f"Grounding DINO config missing: {cfg_src}")
+    cfg_dst.parent.mkdir(parents=True, exist_ok=True)
+    cfg_dst.write_text(cfg_src.read_text(encoding="utf-8"), encoding="utf-8")
+    print(f"  copied config → {cfg_dst.relative_to(ROOT)}")
 
     setup_bert_local()
 
     if install_pkg and (THIRD / "GroundingDINO").is_dir():
-        print("  optional: official package already installed or skip with --no-install-dino")
-        # Keep install best-effort; Transformers local path is primary.
-        try:
-            run(
-                [sys.executable, "-m", "pip", "install", "-e", ".", "--no-build-isolation"],
-                cwd=THIRD / "GroundingDINO",
-            )
-        except subprocess.CalledProcessError as exc:
-            print(f"  WARNING: official package install skipped ({exc})")
+        run(
+            [sys.executable, "-m", "pip", "install", "-e", ".", "--no-build-isolation"],
+            cwd=THIRD / "GroundingDINO",
+        )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--tiny-only",
-        action="store_true",
-        help="Smaller set: SAM2 tiny + DINO Swin-T",
-    )
     parser.add_argument(
         "--no-install-dino",
         action="store_true",
         help="Skip pip install -e third_party/GroundingDINO",
     )
     parser.add_argument(
-        "--with-sam3",
+        "--selection-only",
         action="store_true",
-        help="Install sam3 package + download facebook/sam3 weights (gated HF)",
+        help="Install only the fixed prompt-selection checkpoints and runtime",
     )
-    # Keep old flags as no-op aliases
-    parser.add_argument("--skip-rife", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--skip-depth", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--rife-hf", default=None, help=argparse.SUPPRESS)
-    parser.add_argument("--no-rife-hf", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--local-ckpts", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     MODELS.mkdir(parents=True, exist_ok=True)
     THIRD.mkdir(parents=True, exist_ok=True)
 
-    setup_realesrgan()
-    setup_sam2(tiny_only=args.tiny_only)
+    setup_sam2()
     setup_grounding_dino(
-        tiny_only=args.tiny_only,
         install_pkg=not args.no_install_dino,
     )
-    setup_matte_dirs()
-    setup_slots()
-    if args.with_sam3:
-        setup_sam3()
-
-    print("\nDone. Local-only inference (GIF_STUDIO_ALLOW_HF unset).")
+    if not args.selection_only:
+        setup_realesrgan()
+        setup_matte_dirs()
+        setup_slots()
+        setup_lama()
+    print("\nDone. Runtime inference is local-only.")
     print("  pip install -r requirements-ai.txt")
     print("  pip install 'git+https://github.com/facebookresearch/sam2.git'")
     print("  pip install rembg")
-    print("  See docs/GIF_STUDIO_MEGA_SENIOR_BUILD.md (§10 AI subsystem).")
-    print("Device auto-selects CUDA → MPS → CPU (override: GIF_STUDIO_TORCH_DEVICE).")
+    if not args.selection_only:
+        print("  LaMa: models/lama/big-lama.pt (downloaded above)")
+    print("  See models/README.md and BUILD_SPEC.md.")
+    print("Device auto-selects CUDA → MPS → CPU (override: IMAGE_STUDIO_TORCH_DEVICE).")
     print("Check /api/health for device + models.*.ready flags.")
     return 0
 

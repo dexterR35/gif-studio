@@ -35,7 +35,7 @@ export function WorkspaceTabs({ tabs, value, onChange, className, disabled = fal
           disabled={disabled}
           onClick={() => onChange(id)}
           className={cn(
-            'flex h-8 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-1 text-[8px] font-bold uppercase tracking-normal transition sm:px-2 sm:text-[10px] sm:tracking-[.08em]',
+            'flex h-8 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-1 text-[8px] font-bold uppercase tracking-normal sm:px-2 sm:text-[10px] sm:tracking-[.08em]',
             value === id
               ? 'bg-acid text-black shadow-tab'
               : 'text-zinc-500 hover:bg-white/[.05] hover:text-white',

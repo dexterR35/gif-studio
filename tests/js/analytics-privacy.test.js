@@ -23,7 +23,7 @@ describe('analytics privacy denylist', () => {
 
   it('strips denylisted and unsafe fields', () => {
     const clean = sanitizeAnalyticsProps({
-      format: 'gif',
+      format: 'png',
       width: 480,
       height: 300,
       pixels: new Uint8Array([1, 2, 3]),
@@ -40,7 +40,7 @@ describe('analytics privacy denylist', () => {
     })
 
     expect(clean).toEqual({
-      format: 'gif',
+      format: 'png',
       width: 480,
       height: 300,
       engine: 'rembg',
@@ -66,14 +66,14 @@ describe('analytics privacy denylist', () => {
 
   it('tracks only sanitized props for product events', () => {
     trackProductEvent(PRODUCT_EVENTS.EXPORT_SUCCEEDED, {
-      format: 'gif',
+      format: 'png',
       prompt: 'should not appear',
       pixels: [1, 2, 3],
-      durationMs: 1200,
+      elapsedMs: 1200,
     })
     const buf = getAnalyticsBuffer()
     expect(buf).toHaveLength(1)
     expect(buf[0].name).toBe('export_succeeded')
-    expect(buf[0].props).toEqual({ format: 'gif', durationMs: 1200 })
+    expect(buf[0].props).toEqual({ format: 'png', elapsedMs: 1200 })
   })
 })

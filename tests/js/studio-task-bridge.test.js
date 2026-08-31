@@ -35,10 +35,10 @@ describe('studio-task-bridge', () => {
   })
 
   it('tracks import without denylisted urls', () => {
-    trackImportCommitted({ kind: 'gif', frameCount: 3, url: 'blob:http://evil' })
+    trackImportCommitted({ kind: 'image', width: 64, url: 'blob:http://evil' })
     const buf = getAnalyticsBuffer()
     expect(buf[0].name).toBe('import_committed')
     expect(buf[0].props.url).toBeUndefined()
-    expect(buf[0].props.frameCount).toBe(3)
+    expect(buf[0].props.width).toBe(64)
   })
 })

@@ -11,9 +11,10 @@ export const API_PATHS = {
   job: (jobId) => `/api/v1/jobs/${encodeURIComponent(jobId)}`,
   jobCancel: (jobId) => `/api/v1/jobs/${encodeURIComponent(jobId)}/cancel`,
   jobResult: (jobId) => `/api/v1/jobs/${encodeURIComponent(jobId)}/result`,
-  export: '/api/export',
+  optimizePng: '/api/optimize-png',
   aiMatte: '/api/ai/matte',
   aiDetect: '/api/ai/detect',
+  aiInpaint: '/api/ai/inpaint',
   aiUpscale: '/api/ai/upscale',
 }
 
@@ -89,7 +90,12 @@ export function createApiClient(options = {}) {
       body: formData,
       ...init,
     }),
-    postExport: (formData, init = {}) => request(API_PATHS.export, {
+    postAiInpaint: (formData, init = {}) => request(API_PATHS.aiInpaint, {
+      method: 'POST',
+      body: formData,
+      ...init,
+    }),
+    postOptimizePng: (formData, init = {}) => request(API_PATHS.optimizePng, {
       method: 'POST',
       body: formData,
       parseJson: false,

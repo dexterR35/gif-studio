@@ -17,14 +17,14 @@ export function InfoTip({ children, className, side = 'bottom' }) {
         type="button"
         aria-label="More info"
         onClick={(e) => e.stopPropagation()}
-        className="peer focus-ring grid h-4 w-4 shrink-0 place-items-center rounded-full text-zinc-600 transition hover:text-zinc-300"
+        className="peer focus-ring grid h-4 w-4 shrink-0 place-items-center rounded-full text-zinc-600 hover:text-zinc-300"
       >
         <CircleHelp className="h-3.5 w-3.5" />
       </button>
       <span
         role="tooltip"
         className={cn(
-          'pointer-events-none absolute z-50 w-56 rounded-lg border border-white/10 bg-zinc-950 px-2.5 py-2 text-left text-[10px] font-medium normal-case leading-relaxed tracking-normal text-zinc-400 opacity-0 shadow-xl transition peer-hover:opacity-100 peer-focus-visible:opacity-100',
+          'pointer-events-none absolute z-50 w-56 rounded-lg border border-white/10 bg-zinc-950 px-2.5 py-2 text-left text-[10px] font-medium normal-case leading-relaxed tracking-normal text-zinc-400 opacity-0 shadow-xl peer-hover:opacity-100 peer-focus-visible:opacity-100',
           sideClass,
         )}
       >

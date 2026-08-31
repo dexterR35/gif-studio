@@ -1,35 +1,27 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { GIFEncoder, applyPalette, quantize } from 'gifenc'
-import { PRESETS, TEXT_DEFAULT, transformsFromAmount, MAX_TEXT_LAYERS, clampTextInOut } from '../lib/presets'
+import { TEXT_DEFAULT, MAX_TEXT_LAYERS } from '../lib/presets'
 import { measureTextLayerPx, textLayerBoundsPct } from '../lib/text-measure'
-import { IMAGE_EDITS_DEFAULT, PARALLAX_DEFAULT } from '../lib/project-document'
-import { QUALITY_PROFILE_MAP, HEALTH_TIMEOUT_MS } from '../lib/catalogs'
-import { clamp, clampNice, fmtBytes, ease, MAX_CANVAS, MAX_UPLOAD_DIMENSION, nice, uploadImageError } from '../lib/format'
-import { parseLayerTrackId } from '../lib/timeline-ids'
-import { gifWorkspacePath, workspaceFromPath } from '../lib/routes'
+import { IMAGE_EDITS_DEFAULT } from '../lib/project-document'
+import { HEALTH_TIMEOUT_MS } from '../lib/catalogs'
+import { clamp, clampNice, fmtBytes, MAX_CANVAS, MAX_UPLOAD_DIMENSION, nice, uploadImageError } from '../lib/format'
+import { workspacePath, workspaceFromPath } from '../lib/routes'
 import { useCanvasZoom } from '../hooks/use-canvas-zoom'
 import { useStudioStore } from '../store/studio-store'
-import { sampleKeyframes } from '../lib/keyframes'
-import { playTimeline, stopTimeline } from '../engine/gsap-playback'
-import {
-  POSE_RIG_DEFAULT, POSE_KEY_JOINTS, drawPoseSkeleton, samplePoseSway, applyJointKeys,
-  emptyJointKey,
-} from '../lib/pose'
-import { warpElementByJoints, poseHasWarp } from '../lib/pose-warp'
-import { evaluatePreviewPlan } from '../render/preview-evaluator-bridge'
 import {
   runStudioTask,
   trackImportCommitted,
   trackCutoutApplied,
   trackExportSucceeded,
 } from '../tasks/studio-task-bridge'
-import { GIF_CUTOUT_LABEL, resolveGifCutoutPolicy } from '../tools/gif-cutout-policy'
+import { cropRectByPixelBounds, sourceFromStageMatrix } from '../lib/image-space.js'
+import { alphaMaskRgba, visibleMaskRgba } from '../lib/mask-pixels.js'
+import { apiClient } from '../api/js-client.js'
 
 const StudioContext = createContext(null)
 
 /** Focus workspaces use the right panel, not the mobile inspector sheet. */
-const FOCUS_WORKSPACES = new Set(['timeline', 'scale', 'output'])
+const FOCUS_WORKSPACES = new Set(['scale', 'output'])
 
 const revokeBlobUrl = (url) => {
   if (typeof url === 'string' && url.startsWith('blob:')) URL.revokeObjectURL(url)
@@ -92,6 +84,35 @@ function insertInStack(list, item, mode, relativeId = null) {
   return mode === 'front' ? [...list, item] : [item, ...list]
 }
 
+function convertedMaskCanvas(imageLike, width, height, convert) {
+  if (!imageLike || !width || !height) return null
+  const pixelsCanvas = document.createElement('canvas')
+  pixelsCanvas.width = width
+  pixelsCanvas.height = height
+  const pixelsContext = pixelsCanvas.getContext('2d', { willReadFrequently: true })
+  pixelsContext.drawImage(imageLike, 0, 0, width, height)
+  const pixels = pixelsContext.getImageData(0, 0, width, height)
+
+  const mask = document.createElement('canvas')
+  mask.width = width
+  mask.height = height
+  const maskContext = mask.getContext('2d')
+  const maskData = maskContext.createImageData(width, height)
+  maskData.data.set(convert(pixels.data))
+  maskContext.putImageData(maskData, 0, 0)
+  return mask
+}
+
+/** Convert bitmap transparency into an editable white alpha mask. */
+function alphaMaskCanvas(imageLike, width = imageLike?.width, height = imageLike?.height) {
+  return convertedMaskCanvas(imageLike, width, height, alphaMaskRgba)
+}
+
+/** Normalize an opaque grayscale (or alpha-only) model mask for compositing. */
+function visibleMaskCanvas(imageLike, width = imageLike?.width, height = imageLike?.height) {
+  return convertedMaskCanvas(imageLike, width, height, visibleMaskRgba)
+}
+
 /**
  * Facade over StudioProvider: refs, derived metrics, and imperative actions (draw, export, AI).
  * Prefer `useStudioStore` selectors for project / selection / tools / ui / session state.
@@ -118,25 +139,17 @@ export function StudioProvider({ children }) {
   const fileRef = useRef(null)
   const fontFileRef = useRef(null)
   const overlayFileRef = useRef(null)
-  const compressGifRef = useRef(null)
-  const progressRef = useRef(0)
-  const progressUiAt = useRef(0)
-  const playingRef = useRef(false)
-  /** Shared finish lock — only one of export / PNG download / upscale at a time. */
+  /** Shared finish lock — only one PNG download or upscale at a time. */
   const ioLockRef = useRef(false)
-  /** Nestable AI busy depth (segment / detect / matte / pose). */
+  /** Nestable AI busy depth (segment / detect / matte). */
   const busyDepthRef = useRef(0)
   const enhanceGenRef = useRef(0)
   const selectionStart = useRef(null)
   const anchorDrag = useRef(null)
-  const jointDrag = useRef(null)
-  const poseWarpCacheRef = useRef(new Map())
   const maskPainting = useRef(false)
-  const pixiCanvasRef = useRef(null)
-  const gifFramesRef = useRef(null)
   const loadGenerationRef = useRef(0)
   const sourceUrlRef = useRef(null)
-  const drawRef = useRef(null)
+  const sourceLoadPolicyRef = useRef({ url: null, preserveCanvasSize: false })
 
   // ── Zustand: durable doc is V2 (`s.project`); editor view for Konva / arrays ──
   const settings = useStudioStore((s) => s.editor.settings)
@@ -146,7 +159,6 @@ export function StudioProvider({ children }) {
   const textLayers = useStudioStore((s) => s.editor.textLayers)
   const enhancedLayer = useStudioStore((s) => s.editor.enhancedLayer)
   const imageEdits = useStudioStore((s) => s.editor.imageEdits)
-  const parallax = useStudioStore((s) => s.editor.parallax)
   const fontOptions = useStudioStore((s) => s.editor.fontOptions)
 
   const setSettings = useStudioStore((s) => s.setSettings)
@@ -156,13 +168,11 @@ export function StudioProvider({ children }) {
   const setTextLayers = useStudioStore((s) => s.setTextLayers)
   const setEnhancedLayer = useStudioStore((s) => s.setEnhancedLayer)
   const setImageEdits = useStudioStore((s) => s.setImageEdits)
-  const setParallax = useStudioStore((s) => s.setParallax)
   const setFontOptions = useStudioStore((s) => s.setFontOptions)
 
   const selectedElements = useStudioStore((s) => s.selection.selectedElements)
   const selectedText = useStudioStore((s) => s.selection.selectedText)
   const selectedOverlay = useStudioStore((s) => s.selection.selectedOverlay)
-  const selectedMotionEffect = useStudioStore((s) => s.selection.selectedMotionEffect)
   const baseImageSelected = useStudioStore((s) => s.selection.baseImageSelected)
   const enhancedSelected = useStudioStore((s) => s.selection.enhancedSelected)
   const artboardSelected = useStudioStore((s) => s.selection.artboardSelected)
@@ -175,7 +185,6 @@ export function StudioProvider({ children }) {
   const setSelectedElement = useStudioStore((s) => s.setSelectedElement)
   const setSelectedText = useStudioStore((s) => s.setSelectedText)
   const setSelectedOverlay = useStudioStore((s) => s.setSelectedOverlay)
-  const setSelectedMotionEffect = useStudioStore((s) => s.setSelectedMotionEffect)
   const setBaseImageSelected = useStudioStore((s) => s.setBaseImageSelected)
   const setEnhancedSelected = useStudioStore((s) => s.setEnhancedSelected)
   const setArtboardSelected = useStudioStore((s) => s.setArtboardSelected)
@@ -191,6 +200,8 @@ export function StudioProvider({ children }) {
   const extractTolerance = useStudioStore((s) => s.tools.extractTolerance)
   const maskEditing = useStudioStore((s) => s.tools.maskEditing)
   const maskBrush = useStudioStore((s) => s.tools.maskBrush)
+  const selectionPurpose = useStudioStore((s) => s.tools.selectionPurpose || 'cutout')
+  const pendingSelection = useStudioStore((s) => s.tools.pendingSelection)
 
   const setSelectMode = useStudioStore((s) => s.setSelectMode)
   const setSelectionTool = useStudioStore((s) => s.setSelectionTool)
@@ -199,12 +210,13 @@ export function StudioProvider({ children }) {
   const setExtractTolerance = useStudioStore((s) => s.setExtractTolerance)
   const setMaskEditing = useStudioStore((s) => s.setMaskEditing)
   const setMaskBrush = useStudioStore((s) => s.setMaskBrush)
+  const setSelectionPurpose = useStudioStore((s) => s.setSelectionPurpose)
+  const setPendingSelection = useStudioStore((s) => s.setPendingSelection)
 
   const mobilePanel = useStudioStore((s) => s.ui.mobilePanel)
   const toast = useStudioStore((s) => s.ui.toast)
   const dropActive = useStudioStore((s) => s.ui.dropActive)
   const lockAspect = useStudioStore((s) => s.ui.lockAspect)
-  const gpuPreview = useStudioStore((s) => s.ui.gpuPreview)
 
   const setMobilePanel = useStudioStore((s) => s.setMobilePanel)
   const setToast = useStudioStore((s) => s.setToast)
@@ -215,11 +227,6 @@ export function StudioProvider({ children }) {
   const clearToast = useStudioStore((s) => s.clearToast)
   const setDropActive = useStudioStore((s) => s.setDropActive)
   const setLockAspect = useStudioStore((s) => s.setLockAspect)
-  const setGpuPreview = useStudioStore((s) => s.setGpuPreview)
-
-  const playing = useStudioStore((s) => s.session.playing)
-  const progress = useStudioStore((s) => s.session.progress)
-  const exporting = useStudioStore((s) => s.session.exporting)
   const downloadBusy = useStudioStore((s) => s.session.downloadBusy)
   const scaleBusy = useStudioStore((s) => s.session.scaleBusy)
   const lastExport = useStudioStore((s) => s.session.lastExport)
@@ -228,8 +235,6 @@ export function StudioProvider({ children }) {
   const segmenting = useStudioStore((s) => s.session.segmenting)
   const busyLabel = useStudioStore((s) => s.session.busyLabel)
 
-  const setPlaying = useStudioStore((s) => s.setPlaying)
-  const setExporting = useStudioStore((s) => s.setExporting)
   const setDownloadBusy = useStudioStore((s) => s.setDownloadBusy)
   const setScaleBusy = useStudioStore((s) => s.setScaleBusy)
   const setLastExport = useStudioStore((s) => s.setLastExport)
@@ -238,10 +243,10 @@ export function StudioProvider({ children }) {
   const setSegmenting = useStudioStore((s) => s.setSegmenting)
   const setBusyLabel = useStudioStore((s) => s.setBusyLabel)
 
-  const studioLocked = Boolean(segmenting || scaleBusy || downloadBusy || exporting)
+  const studioLocked = Boolean(segmenting || scaleBusy || downloadBusy)
 
   const assertStudioIdle = (message = 'Wait for the current job to finish') => {
-    if (busyDepthRef.current > 0 || ioLockRef.current || exporting || downloadBusy || scaleBusy || segmenting) {
+    if (busyDepthRef.current > 0 || ioLockRef.current || downloadBusy || scaleBusy || segmenting) {
       setToast(message)
       return false
     }
@@ -251,7 +256,6 @@ export function StudioProvider({ children }) {
   /** Nestable lock for AI jobs — keeps studio overlay up through nested extract calls. */
   const beginBusy = (label) => {
     busyDepthRef.current += 1
-    setPlaying(false)
     setSegmenting(true)
     if (label) setBusyLabel(label)
   }
@@ -264,25 +268,8 @@ export function StudioProvider({ children }) {
     }
   }
 
-  /** Keep a sync ref so paused rAF / idle redraw never reads a stale closure. */
-  const setProgress = (value, { force = false } = {}) => {
-    const next = typeof value === 'function' ? value(progressRef.current) : value
-    progressRef.current = next
-    // During play, throttle store updates — full tree re-render every GSAP tick freezes the UI.
-    const now = performance.now()
-    if (force || !playingRef.current || now - progressUiAt.current > 80) {
-      progressUiAt.current = now
-      useStudioStore.getState().setProgress(next)
-    }
-  }
-  playingRef.current = playing
-
-  /** Runtime-only: decoded HTMLImageElement (not serializable). */
+  /** Runtime-only HTMLImageElement (not serializable). */
   const [image, setImage] = useState(null)
-  /** Runtime pose preview — high-frequency joint drag syncs via poseRigRef. */
-  const [poseRig, setPoseRig] = useState({ ...POSE_RIG_DEFAULT })
-  const poseRigRef = useRef(poseRig)
-  poseRigRef.current = poseRig
 
   /** Primary = last selected (edits target). Secondary = other multi-selected layers. */
   const selectedElement = selectedElements.length ? selectedElements[selectedElements.length - 1] : null
@@ -294,17 +281,18 @@ export function StudioProvider({ children }) {
   const location = useLocation()
   const activeTab = workspaceFromPath(location.pathname)
   const goToWorkspace = (id) => {
-    navigate(gifWorkspacePath(id))
+    navigate(workspacePath(id))
     if (!FOCUS_WORKSPACES.has(id)) setMobilePanel(true)
   }
   const canvasZoom = useCanvasZoom({ minZoom: 10, maxZoom: 800, defaultZoom: 100, padding: 40 })
   const { zoom, setZoom } = canvasZoom
 
   /** Replace source; revoke previous owned blob URL (never revoke in image-load effect). */
-  const replaceSource = (next) => {
+  const replaceSource = (next, { preserveCanvasSize = false } = {}) => {
     const prevUrl = sourceUrlRef.current
     const nextUrl = next?.url ?? null
     sourceUrlRef.current = nextUrl
+    sourceLoadPolicyRef.current = { url: nextUrl, preserveCanvasSize }
     setSource(next)
     if (prevUrl && prevUrl !== nextUrl) revokeBlobUrl(prevUrl)
   }
@@ -312,47 +300,7 @@ export function StudioProvider({ children }) {
   const update = (key, value) => {
     const nextValue = typeof value === 'number' ? nice(value, Number.isInteger(value) ? 0 : 1) : value
     setSettings((s) => ({ ...s, [key]: nextValue }))
-    if (key === 'duration') {
-      setTextLayers((current) => current.map((layer) => clampTextInOut(layer, nextValue)))
-    }
   }
-
-  const clearTimelineLayerSelection = (kind, id) => {
-    setSelectedMotionEffect((current) => {
-      const parsed = parseLayerTrackId(current)
-      if (parsed && parsed.kind === kind && parsed.id === id) return null
-      return current
-    })
-  }
-
-  /** Amount drives loop strength and timeline zoom/pan intensity for the active preset. */
-  const setAmplitude = (amount) => setSettings((s) => ({
-    ...s,
-    amplitude: amount,
-    ...transformsFromAmount(s.preset, amount),
-  }))
-
-  /** Speed drives loop phase rate; for one-shot presets it finishes earlier then holds. */
-  const setSpeed = (speed) => setSettings((s) => ({
-    ...s,
-    speed,
-    cycles: speed,
-  }))
-  const applyQuality = (quality) => setSettings((current) => ({
-    ...current,
-    quality,
-    ...(QUALITY_PROFILE_MAP[quality] || {}),
-  }))
-  const frames = Math.max(2, Math.round(settings.duration * settings.fps))
-  const timingFps = settings.fps
-  const frameDelays = useMemo(() => Array.from({ length: frames }, (_, index) => {
-    const start = Math.round(index * 1000 / timingFps / 10) * 10
-    const end = Math.round((index + 1) * 1000 / timingFps / 10) * 10
-    return Math.max(10, end - start)
-  }), [frames, timingFps])
-  const actualDuration = frameDelays.reduce((total, delay) => total + delay, 0) / 1000
-  const actualFps = frames / actualDuration
-  const memory = settings.width * settings.height * 4 * frames
 
   useEffect(() => {
     if (!source?.url) {
@@ -371,8 +319,11 @@ export function StudioProvider({ children }) {
         width: img.naturalWidth,
         height: img.naturalHeight,
       } : current))
-      // New source → canvas starts at original image size (safety-capped).
-      setSettings((current) => ({ ...current, width, height }))
+      const policy = sourceLoadPolicyRef.current
+      if (policy.url !== source.url || !policy.preserveCanvasSize) {
+        // Imported source → canvas starts at original image size (safety-capped).
+        setSettings((current) => ({ ...current, width, height }))
+      }
     }
     img.onerror = () => {
       if (cancelled) return
@@ -413,91 +364,33 @@ export function StudioProvider({ children }) {
     return () => { cancelled = true }
   }, [])
 
-  /** API-derived capability flags only — never wipe client-discovered ffmpeg/pixi/mediapipe. */
+  /** API-derived capability flags. */
   useEffect(() => {
     useStudioStore.getState().setCapabilities({
       api: apiAvailable,
-      sam2: Boolean(apiInfo?.sam2),
-      sam3: Boolean(apiInfo?.sam3),
-      groundingDino: Boolean(apiInfo?.grounding_dino),
+      promptSelection: Boolean(apiInfo?.prompt_selection),
       matte: Boolean(apiInfo?.matte),
+      lama: Boolean(apiInfo?.lama),
       gfpgan: Boolean(apiInfo?.gfpgan),
       realesrgan: Boolean(apiInfo?.realesrgan),
       rembg: Boolean(apiInfo?.rembg || apiInfo?.ai),
       device: apiInfo?.device || null,
       models: apiInfo?.models || null,
-      allowHuggingFace: Boolean(apiInfo?.allow_huggingface),
     })
   }, [apiAvailable, apiInfo])
 
-  const draw = useCallback((rawT, target = canvasRef.current, exportScale = 1) => {
+  const draw = useCallback((target = canvasRef.current, exportScale = 1) => {
     if (!target || !image) return
-    // Strangler: build V2 RenderPlan alongside legacy draw (parity prep).
-    if (target === canvasRef.current) evaluatePreviewPlan(rawT)
     const ctx = target.getContext('2d', { willReadFrequently: true })
     const W = target.width, H = target.height
-    // Prefer live ref so joint drags warp immediately (setState is async).
-    const poseRig = poseRigRef.current
-    // Skeleton / joint dots are preview chrome only — never bake into export / PNG / GIF frames.
-    const previewCanvas = target === canvasRef.current
     if (settings.transparent) ctx.clearRect(0, 0, W, H)
     else { ctx.fillStyle = settings.background; ctx.fillRect(0, 0, W, H) }
-    const motion = settings.motion || 'None'
-    const motionSpeed = Math.max(0.1, settings.speed ?? settings.cycles ?? 1)
-    const isLoop = motion !== 'None'
-    let timeline = rawT
-    if (settings.pingPong) {
-      const phase = (rawT * (isLoop ? 1 : motionSpeed)) % 2
-      timeline = phase <= 1 ? phase : 2 - phase
-    } else if (!isLoop) {
-      // One-shot (zoom / fade): higher speed finishes earlier, then holds end pose.
-      timeline = Math.min(1, rawT * motionSpeed)
-    }
-    const t = ease(timeline, settings.easing)
-    const timeSec = rawT * (settings.duration || 1)
-    let scale = (settings.scaleStart + (settings.scaleEnd - settings.scaleStart) * t) / 100
-    let x = settings.xStart + (settings.xEnd - settings.xStart) * t
-    let y = settings.yStart + (settings.yEnd - settings.yStart) * t
-    let rotation = settings.rotateStart + (settings.rotateEnd - settings.rotateStart) * t
-    // Loop animation for the base image (Float, Orbit, Pulse, …).
-    const amp = settings.amplitude ?? 0
-    if (isLoop && (amp !== 0 || motion === 'Spin')) {
-      const phase = rawT * Math.PI * 2 * motionSpeed
-      if (motion === 'Float') y += -Math.sin(phase) * amp
-      if (motion === 'Drift') x += Math.sin(phase) * amp
-      if (motion === 'Bounce') y += -Math.abs(Math.sin(phase)) * amp
-      if (motion === 'Pulse') scale *= 1 + Math.sin(phase) * amp / 100
-      if (motion === 'Spin') rotation += (phase * 180) / Math.PI
-      if (motion === 'Wobble') rotation += Math.sin(phase) * amp
-      if (motion === 'Orbit') { x += Math.cos(phase) * amp; y += Math.sin(phase) * amp }
-    }
-    let opacity = (settings.opacityStart + (settings.opacityEnd - settings.opacityStart) * t) / 100
-    // Custom keyframe timeline (Zustand) overrides base motion channels.
-    const keyframes = useStudioStore.getState().project.keyframes || []
-    if (keyframes.length) {
-      const kfScale = sampleKeyframes(keyframes, timeSec, 'scale')
-      const kfX = sampleKeyframes(keyframes, timeSec, 'x')
-      const kfY = sampleKeyframes(keyframes, timeSec, 'y')
-      const kfOpacity = sampleKeyframes(keyframes, timeSec, 'opacity')
-      if (kfScale != null) scale *= Number(kfScale) / 100
-      if (kfX != null) x = Number(kfX)
-      if (kfY != null) y = Number(kfY)
-      if (kfOpacity != null) opacity = Number(kfOpacity) / 100
-    }
-    // Multi-frame GIF (gifuct): sample source frame by timeline progress.
-    let drawSource = image
-    const gifPack = gifFramesRef.current
-    if (gifPack?.frames?.length > 1) {
-      const totalDelay = gifPack.frames.reduce((sum, f) => sum + (f.delay || 100), 0) || 1
-      let elapsed = (rawT % 1) * totalDelay
-      let frameIdx = 0
-      for (let i = 0; i < gifPack.frames.length; i += 1) {
-        elapsed -= gifPack.frames[i].delay || 100
-        if (elapsed <= 0) { frameIdx = i; break }
-        frameIdx = i
-      }
-      drawSource = gifPack.frames[frameIdx].canvas || image
-    }
+    const scale = (settings.scale ?? 100) / 100
+    const x = settings.x ?? 0
+    const y = settings.y ?? 0
+    const rotation = settings.rotation ?? 0
+    const opacity = (settings.opacity ?? 100) / 100
+    const drawSource = image
     const iw = drawSource.naturalWidth || drawSource.width
     const ih = drawSource.naturalHeight || drawSource.height
     const contain = Math.min(W / iw, H / ih), cover = Math.max(W / iw, H / ih)
@@ -586,163 +479,41 @@ export function StudioProvider({ children }) {
     })
 
     if (elements.length) {
-      // Replace each extracted area with its sampled surrounding color before
-      // drawing the moving cutout. This works especially well for clean and flat backgrounds.
       elements.filter((el) => el.visible && el.cleanup).forEach((el) => {
         ctx.drawImage(el.cleanup, el.x * W, el.y * H, el.w * W, el.h * H)
       })
-      elements.filter((el) => el.visible).forEach((el) => {
-        const phase = rawT * Math.PI * 2 * el.speed
-        const amplitudeX = el.amplitude / 100 * W
-        const amplitudeY = el.amplitude / 100 * H
-        let tx = 0, ty = 0, elementRotation = 0, elementScale = 1
-        let anchorXPct = el.anchorX ?? 50
-        let anchorYPct = el.anchorY ?? 50
-        if (el.motion === 'Float') ty = -Math.sin(phase) * amplitudeY
-        if (el.motion === 'Drift') tx = Math.sin(phase) * amplitudeX
-        if (el.motion === 'Bounce') ty = -Math.abs(Math.sin(phase)) * amplitudeY
-        if (el.motion === 'Pulse') elementScale = 1 + Math.sin(phase) * el.amplitude / 100
-        if (el.motion === 'Spin') elementRotation = phase
-        if (el.motion === 'Wobble') elementRotation = Math.sin(phase) * el.amplitude * Math.PI / 180
-        if (el.motion === 'Orbit') {
-          tx = Math.cos(phase) * amplitudeX
-          ty = Math.sin(phase) * amplitudeY
-        }
-        if (el.motion === 'Pose sway' && (el.poseJoints?.length || poseRig.restJoints?.length || poseRig.joints?.length)) {
-          const baseJoints = el.poseJoints?.length
-            ? el.poseJoints
-            : (poseRig.restJoints?.length ? poseRig.restJoints : poseRig.joints)
-          const joints = applyJointKeys(baseJoints, poseRig.jointKeys, rawT)
-          // Soft whole-body sway; limb mesh warp handles arm/hand separately.
-          const hasWarp = poseHasWarp(baseJoints, joints)
-          const swayAmp = hasWarp ? Math.min(el.amplitude, 3) : el.amplitude
-          const sway = samplePoseSway(joints, {
-            phase,
-            amplitude: swayAmp,
-            boxX: el.x * W,
-            boxY: el.y * H,
-            boxW: el.w * W,
-            boxH: el.h * H,
-            canvasW: W,
-            canvasH: H,
-          })
-          tx += sway.tx
-          ty += sway.ty
-          elementRotation += sway.rotationRad
-          elementScale *= sway.scale
-          if (poseRig.driveMotion !== false) {
-            anchorXPct = sway.anchorX
-            anchorYPct = sway.anchorY
-          }
-        }
-        if (parallax.enabled) {
-          const parallaxPhase = rawT * Math.PI * 2 * parallax.speed
-          const depth = (el.depth ?? 50) / 100
-          const distanceX = parallax.strength / 100 * W * depth
-          const distanceY = parallax.strength / 100 * H * depth
-          if (parallax.direction === 'Horizontal') tx += Math.sin(parallaxPhase) * distanceX
-          if (parallax.direction === 'Vertical') ty += Math.sin(parallaxPhase) * distanceY
-          if (parallax.direction === 'Diagonal') { tx += Math.sin(parallaxPhase) * distanceX; ty += Math.sin(parallaxPhase) * distanceY }
-          if (parallax.direction === 'Orbit') { tx += Math.cos(parallaxPhase) * distanceX; ty += Math.sin(parallaxPhase) * distanceY }
-        }
-        const x = el.x * W, y = el.y * H, w = el.w * W, h = el.h * H
-        const originX = (anchorXPct / 100) * w
-        const originY = (anchorYPct / 100) * h
-        const sx = elementScale * el.scaleX / 100 * (el.flipX ? -1 : 1)
-        const sy = elementScale * el.scaleY / 100 * (el.flipY ? -1 : 1)
+      elements.filter((el) => el.visible && el.bitmap).forEach((el) => {
+        const x = el.x * W
+        const y = el.y * H
+        const w = el.w * W
+        const h = el.h * H
+        const originX = ((el.anchorX ?? 50) / 100) * w
+        const originY = ((el.anchorY ?? 50) / 100) * h
+        const sx = (el.scaleX ?? 100) / 100 * (el.flipX ? -1 : 1)
+        const sy = (el.scaleY ?? 100) / 100 * (el.flipY ? -1 : 1)
         ctx.save()
-        ctx.globalAlpha = el.opacity / 100
-        ctx.translate(x + originX + tx, y + originY + ty)
-        ctx.rotate(elementRotation + el.rotation * Math.PI / 180)
+        ctx.globalAlpha = (el.opacity ?? 100) / 100
+        ctx.translate(x + originX, y + originY)
+        ctx.rotate((el.rotation || 0) * Math.PI / 180)
         ctx.scale(sx, sy)
         ctx.translate(-originX, -originY)
-        let elementBitmap = el.bitmap
-        // Skeleton mesh warp — only on Body / pose cutouts (not every layer).
-        const isPoseBody = Boolean(
-          el.poseJoints?.length
-          || el.name === 'Body'
-          || /pose|mediapipe|sam2|human|rembg/i.test(el.engine || ''),
-        )
-        const restForWarp = isPoseBody
-          ? (el.poseJoints?.length
-            ? el.poseJoints
-            : (poseRig.restJoints?.length ? poseRig.restJoints : poseRig.joints))
-          : null
-        if (restForWarp?.length && poseRig.jointKeys && Object.keys(poseRig.jointKeys).length) {
-          const posedForWarp = applyJointKeys(restForWarp, poseRig.jointKeys, rawT)
-          if (poseHasWarp(restForWarp, posedForWarp)) {
-            const bucket = Math.round(rawT * 48)
-            const cacheKey = `${el.id}:${poseRig.keysVersion || 0}:${bucket}:${elementBitmap.width}x${elementBitmap.height}`
-            const cache = poseWarpCacheRef.current
-            let warped = cache.get(cacheKey)
-            if (!warped) {
-              warped = warpElementByJoints(elementBitmap, {
-                restJoints: restForWarp,
-                posedJoints: posedForWarp,
-                canvasW: W,
-                canvasH: H,
-                boxX: x,
-                boxY: y,
-                boxW: w,
-                boxH: h,
-              })
-              if (cache.size > 64) cache.clear()
-              cache.set(cacheKey, warped)
-            }
-            elementBitmap = warped
-          }
-        }
-        ctx.drawImage(elementBitmap, 0, 0, elementBitmap.width, elementBitmap.height, 0, 0, w, h)
+        ctx.drawImage(el.bitmap, 0, 0, el.bitmap.width, el.bitmap.height, 0, 0, w, h)
         ctx.restore()
       })
     }
 
     textLayers.filter((layer) => layer.visible).forEach((layer) => {
-      const clipIn = Number.isFinite(Number(layer.in)) ? Number(layer.in) : 0
-      const clipOut = Number.isFinite(Number(layer.out)) ? Number(layer.out) : Math.max(0.1, settings.duration || 1)
-      if (timeSec < clipIn || timeSec > clipOut) return
-      const clipSpan = Math.max(0.05, clipOut - clipIn)
-      const localT = Math.min(1, Math.max(0, (timeSec - clipIn) / clipSpan))
-      // Loop phase follows global time (like elements); in/out only gates visibility + entrance/exit.
-      const phase = rawT * Math.PI * 2 * layer.speed
-      const amountX = layer.amplitude / 100 * W, amountY = layer.amplitude / 100 * H
-      let tx = 0, ty = 0, motionRotation = 0, motionScale = 1, motionOpacity = 1
-      if (layer.motion === 'Float') ty = -Math.sin(phase) * amountY
-      if (layer.motion === 'Drift') tx = Math.sin(phase) * amountX
-      if (layer.motion === 'Bounce') ty = -Math.abs(Math.sin(phase)) * amountY
-      if (layer.motion === 'Pulse') motionScale = 1 + Math.sin(phase) * layer.amplitude / 100
-      if (layer.motion === 'Spin') motionRotation = phase
-      if (layer.motion === 'Wobble') motionRotation = Math.sin(phase) * layer.amplitude * Math.PI / 180
-      if (layer.motion === 'Fade') motionOpacity = .2 + .8 * (1 - Math.cos(phase)) / 2
-      const enterLength = Math.max(.01, layer.entranceDuration / 100)
-      const enterProgress = Math.min(1, localT / enterLength), enterEase = enterProgress * enterProgress * (3 - 2 * enterProgress)
-      if (layer.entrance === 'Fade in') motionOpacity *= enterEase
-      if (layer.entrance === 'Slide in left') tx -= (1 - enterEase) * W * .35
-      if (layer.entrance === 'Slide in right') tx += (1 - enterEase) * W * .35
-      if (layer.entrance === 'Slide in up') ty += (1 - enterEase) * H * .35
-      if (layer.entrance === 'Slide in down') ty -= (1 - enterEase) * H * .35
-      if (layer.entrance === 'Zoom in') { motionScale *= .25 + .75 * enterEase; motionOpacity *= enterEase }
-      if (layer.entrance === 'Spin in') { motionRotation -= (1 - enterEase) * Math.PI; motionOpacity *= enterEase }
-      const exitLength = Math.max(.01, layer.exitDuration / 100)
-      const exitProgress = Math.max(0, (localT - (1 - exitLength)) / exitLength), exitEase = exitProgress * exitProgress * (3 - 2 * exitProgress)
-      if (layer.exit === 'Fade out') motionOpacity *= 1 - exitEase
-      if (layer.exit === 'Slide out left') tx -= exitEase * W * .35
-      if (layer.exit === 'Slide out right') tx += exitEase * W * .35
-      if (layer.exit === 'Slide out up') ty -= exitEase * H * .35
-      if (layer.exit === 'Slide out down') ty += exitEase * H * .35
-      if (layer.exit === 'Zoom out') { motionScale *= 1 - .75 * exitEase; motionOpacity *= 1 - exitEase }
-      if (layer.exit === 'Spin out') { motionRotation += exitEase * Math.PI; motionOpacity *= 1 - exitEase }
-      let content = layer.motion === 'Typewriter' ? layer.text.slice(0, Math.ceil(layer.text.length * Math.min(1, localT * layer.speed))) : layer.text
+      let content = layer.text
       if (layer.casing === 'UPPERCASE') content = content.toUpperCase()
       if (layer.casing === 'lowercase') content = content.toLowerCase()
       const fontScale = W / settings.width
       const size = layer.size * fontScale
       const lineHeight = size * layer.lineHeight
       ctx.save()
-      ctx.translate(layer.x / 100 * W + tx, layer.y / 100 * H + ty)
-      ctx.rotate(layer.rotation * Math.PI / 180 + motionRotation)
-      ctx.scale((layer.flipX ? -1 : 1) * layer.scaleX / 100 * motionScale, (layer.flipY ? -1 : 1) * layer.scaleY / 100 * motionScale)
-      ctx.globalAlpha = layer.opacity / 100 * motionOpacity
+      ctx.translate(layer.x / 100 * W, layer.y / 100 * H)
+      ctx.rotate((layer.rotation || 0) * Math.PI / 180)
+      ctx.scale((layer.flipX ? -1 : 1) * (layer.scaleX ?? 100) / 100, (layer.flipY ? -1 : 1) * (layer.scaleY ?? 100) / 100)
+      ctx.globalAlpha = (layer.opacity ?? 100) / 100
       ctx.globalCompositeOperation = layer.blendMode
       ctx.font = `${layer.italic ? 'italic ' : ''}${layer.weight} ${size}px "${layer.font}", sans-serif`
       ctx.textAlign = layer.align; ctx.textBaseline = 'middle'
@@ -766,101 +537,17 @@ export function StudioProvider({ children }) {
       ctx.restore()
     })
 
-    // Body joints overlay — preview only (toggle). Excluded from export / save PNG.
-    const restSkeleton = poseRig.restJoints?.length ? poseRig.restJoints : poseRig.joints
-    if (previewCanvas && poseRig.visible && restSkeleton?.length) {
-      const animJoints = applyJointKeys(restSkeleton, poseRig.jointKeys, rawT)
-      drawPoseSkeleton(ctx, animJoints, {
-        width: W,
-        height: H,
-        color: '#d8ff3e',
-        lineWidth: Math.max(1.5, Math.min(W, H) * 0.004),
-        jointRadius: Math.max(2.5, Math.min(W, H) * 0.008),
-        highlight: poseRig.selectedJoint,
-      })
-    }
+  }, [image, settings, elements, textLayers, imageEdits, overlays, enhancedLayer, imageVisible])
 
-  }, [image, settings, elements, textLayers, parallax, imageEdits, overlays, poseRig, enhancedLayer, imageVisible])
-
-  drawRef.current = draw
-
-  // Idle preview — redraw when settings/layers change (not while playing).
-  // Canvas stays at full artboard resolution (source of truth for cutout / matte).
   useEffect(() => {
-    if (!image || playing) return undefined
+    if (!image) return undefined
     const canvas = canvasRef.current
     if (!canvas) return undefined
     canvas.width = Math.max(1, Math.round(settings.width))
     canvas.height = Math.max(1, Math.round(settings.height))
-    const frameIndex = Math.min(frames - 1, Math.floor(progressRef.current * frames))
-    draw(frameIndex / frames)
+    draw()
     return undefined
-  }, [draw, image, playing, settings.width, settings.height, frames])
-
-  // Playback loop — do NOT depend on `draw`, or every motion slider restart freezes the app.
-  useEffect(() => {
-    if (!image || !playing) return undefined
-    const canvas = canvasRef.current
-    if (!canvas) return undefined
-    canvas.width = Math.max(1, Math.round(settings.width))
-    canvas.height = Math.max(1, Math.round(settings.height))
-
-    const frameFromProgress = (p) => {
-      const frameIndex = Math.min(frames - 1, Math.floor(p * frames))
-      return frameIndex / frames
-    }
-
-    let cancelled = false
-    let pixiReady = false
-    let blit = null
-    let blitFails = 0
-    const bootPixi = async () => {
-      if (!gpuPreview || !pixiCanvasRef.current) return null
-      try {
-        const { createPixiRenderer, resizePixiRenderer, blitCanvasToPixi } = await import('../engine/pixi-renderer')
-        if (cancelled) return null
-        await createPixiRenderer({
-          width: canvas.width,
-          height: canvas.height,
-          canvas: pixiCanvasRef.current,
-        })
-        if (cancelled) return null
-        resizePixiRenderer(canvas.width, canvas.height)
-        pixiReady = true
-        useStudioStore.getState().setCapabilities({ pixi: true })
-        return blitCanvasToPixi
-      } catch {
-        return null
-      }
-    }
-    if (gpuPreview) bootPixi().then((fn) => { if (!cancelled) blit = fn })
-    playTimeline({
-      duration: actualDuration,
-      from: progressRef.current,
-      onUpdate: (t) => {
-        const frameT = frameFromProgress(t)
-        setProgress(frameT)
-        drawRef.current?.(frameT)
-        if (pixiReady && blit) {
-          const ok = blit(canvas)
-          if (!ok) {
-            blitFails += 1
-            if (blitFails >= 3) {
-              pixiReady = false
-              blit = null
-            }
-          } else blitFails = 0
-        }
-      },
-    })
-    return () => {
-      cancelled = true
-      stopTimeline()
-      if (gpuPreview) {
-        import('../engine/pixi-renderer').then(({ destroyPixiRenderer }) => destroyPixiRenderer())
-      }
-    }
-  }, [image, playing, settings.width, settings.height, actualDuration, frames, gpuPreview])
+  }, [draw, image, settings.width, settings.height])
 
   const loadFile = async (file) => {
     if (!file) return
@@ -890,119 +577,10 @@ export function StudioProvider({ children }) {
         return []
       })
       setSelectedOverlay(null)
-      setSelectedMotionEffect(null)
       setSettings((current) => ({ ...current }))
       setImageEdits({ ...IMAGE_EDITS_DEFAULT })
-      setParallax({ ...PARALLAX_DEFAULT })
-      setPoseRig({ ...POSE_RIG_DEFAULT })
-      setProgress(0)
-      setPlaying(false)
-      useStudioStore.getState().setKeyframes([])
     }
 
-    const isGif = /image\/gif|\.gif$/i.test(file.type || file.name || '')
-    if (isGif) {
-      try {
-        const { decodeGifFile } = await import('../engine/gif-decode')
-        const decoded = await decodeGifFile(file)
-        if (isStale()) return
-        const url = await decoded.firstFrameUrl()
-        if (isStale()) { revokeBlobUrl(url); return }
-        resetLayers()
-        gifFramesRef.current = decoded
-        const totalMs = decoded.frames.reduce((sum, f) => sum + (f.delay || 100), 0)
-        const avgDelay = totalMs / Math.max(1, decoded.frameCount)
-        setSettings((current) => ({
-          ...current,
-          duration: Math.max(0.1, +(totalMs / 1000).toFixed(2)),
-          fps: Math.max(1, Math.min(60, Math.round(1000 / avgDelay))),
-          width: Math.min(MAX_CANVAS, decoded.width),
-          height: Math.min(MAX_CANVAS, decoded.height),
-        }))
-        replaceSource({
-          name: file.name,
-          width: decoded.width,
-          height: decoded.height,
-          url,
-          frameCount: decoded.frameCount,
-          kind: 'gif',
-        })
-        trackImportCommitted({ kind: 'gif', frameCount: decoded.frameCount, width: decoded.width, height: decoded.height })
-        const cutPolicy = resolveGifCutoutPolicy({ kind: 'animated-image', frameCount: decoded.frameCount })
-        setToast(`GIF imported · ${decoded.frameCount} frames · ${decoded.width} × ${decoded.height} px · cutouts: ${cutPolicy.label}`)
-      } catch (err) {
-        if (!isStale()) setToast(err?.message || 'Could not decode GIF.')
-      }
-      return
-    }
-
-    const isVideo = /^video\//i.test(file.type || '') || /\.(mp4|webm|mov)$/i.test(file.name || '')
-    if (isVideo) {
-      try {
-        setToast('Extracting video frames with ffmpeg.wasm…')
-        const { extractFramesWithFFmpeg, loadFFmpeg } = await import('../engine/ffmpeg-export')
-        await loadFFmpeg()
-        if (isStale()) return
-        useStudioStore.getState().setCapabilities({ ffmpeg: true })
-        const blobs = await extractFramesWithFFmpeg(file, { fps: 12, maxFrames: 120 })
-        if (isStale()) return
-        if (!blobs.length) throw new Error('No frames extracted')
-        const firstUrl = URL.createObjectURL(blobs[0])
-        const probe = await new Promise((resolve, reject) => {
-          const img = new Image()
-          img.onload = () => resolve(img)
-          img.onerror = reject
-          img.src = firstUrl
-        })
-        if (isStale()) { revokeBlobUrl(firstUrl); return }
-        const frameCanvases = []
-        for (const blob of blobs) {
-          const url = URL.createObjectURL(blob)
-          const img = await new Promise((resolve, reject) => {
-            const el = new Image()
-            el.onload = () => resolve(el)
-            el.onerror = reject
-            el.src = url
-          })
-          const c = document.createElement('canvas')
-          c.width = img.naturalWidth
-          c.height = img.naturalHeight
-          c.getContext('2d').drawImage(img, 0, 0)
-          URL.revokeObjectURL(url)
-          frameCanvases.push({ canvas: c, delay: Math.round(1000 / 12) })
-        }
-        if (isStale()) { revokeBlobUrl(firstUrl); return }
-        resetLayers()
-        gifFramesRef.current = {
-          frames: frameCanvases,
-          frameCount: frameCanvases.length,
-          width: probe.naturalWidth,
-          height: probe.naturalHeight,
-        }
-        setSettings((current) => ({
-          ...current,
-          duration: Math.max(0.1, +(frameCanvases.length / 12).toFixed(2)),
-          fps: 12,
-          width: Math.min(MAX_CANVAS, probe.naturalWidth),
-          height: Math.min(MAX_CANVAS, probe.naturalHeight),
-        }))
-        replaceSource({
-          name: file.name,
-          width: probe.naturalWidth,
-          height: probe.naturalHeight,
-          url: firstUrl,
-          frameCount: frameCanvases.length,
-          kind: 'video',
-        })
-        trackImportCommitted({ kind: 'video', frameCount: frameCanvases.length })
-        setToast(`Video imported · ${frameCanvases.length} frames via ffmpeg.wasm`)
-      } catch (err) {
-        if (!isStale()) setToast(err?.message || 'Video import failed')
-      }
-      return
-    }
-
-    gifFramesRef.current = null
     const url = URL.createObjectURL(file)
     const probe = new Image()
     probe.onload = () => {
@@ -1072,26 +650,16 @@ export function StudioProvider({ children }) {
     setSelectedOverlay(null)
     setEnhancedSelected(false)
     setSelectedText(null)
-    setPlaying(false)
     setSelectMode(false)
     setMaskEditing(false)
   }
 
-  const applyPreset = (name) => setSettings((s) => ({
-    ...s,
-    preset: name,
-    ...PRESETS[name],
-    ...transformsFromAmount(name, PRESETS[name]?.amplitude ?? s.amplitude),
-  }))
   const reset = () => {
     const current = useStudioStore.getState().project
     if (current.enhancedLayer?.url) revokeBlobUrl(current.enhancedLayer.url)
     ;(current.overlays || []).forEach((overlay) => revokeBlobUrl(overlay.url))
     replaceSource(null)
     setImage(null)
-    gifFramesRef.current = null
-    setPoseRig({ ...POSE_RIG_DEFAULT })
-    progressRef.current = 0
     busyDepthRef.current = 0
     ioLockRef.current = false
     useStudioStore.getState().resetStudio()
@@ -1109,7 +677,231 @@ export function StudioProvider({ children }) {
     return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y }
   }
 
-  const cancelSelection = () => { selectionStart.current = null; setSelection(null); setSelectionPoints([]); setSelectMode(false) }
+  const cancelSelection = () => {
+    selectionStart.current = null
+    setSelection(null)
+    setSelectionPoints([])
+    setSelectMode(false)
+    setSelectionPurpose('cutout')
+    setPendingSelection(null)
+  }
+
+  const createStageSelectionMask = (rect, pathPoints = null) => {
+    const width = Math.max(1, Math.round(settings.width))
+    const height = Math.max(1, Math.round(settings.height))
+    const mask = document.createElement('canvas')
+    mask.width = width
+    mask.height = height
+    const context = mask.getContext('2d')
+    context.fillStyle = '#000'
+    context.fillRect(0, 0, width, height)
+    context.fillStyle = '#fff'
+    if (pathPoints?.length >= 3) {
+      context.beginPath()
+      pathPoints.forEach((point, index) => {
+        const x = point.x * width
+        const y = point.y * height
+        if (index === 0) context.moveTo(x, y)
+        else context.lineTo(x, y)
+      })
+      context.closePath()
+      context.fill()
+    } else {
+      context.fillRect(rect.x * width, rect.y * height, rect.w * width, rect.h * height)
+    }
+    return mask
+  }
+
+  /** Project an artboard-space mask back into the untransformed source bitmap. */
+  const projectStageMaskToSource = (stageMask, sourceWidth, sourceHeight) => {
+    const output = document.createElement('canvas')
+    output.width = sourceWidth
+    output.height = sourceHeight
+    const context = output.getContext('2d')
+    context.fillStyle = '#000'
+    context.fillRect(0, 0, sourceWidth, sourceHeight)
+
+    let matrix = null
+    const imageNode = konvaStageApiRef.current?.getImageNode?.()
+    if (imageNode?.getTransform && imageNode.width() > 0 && imageNode.height() > 0) {
+      try {
+        const inverse = imageNode.getTransform().copy().invert().getMatrix()
+        const scaleX = sourceWidth / imageNode.width()
+        const scaleY = sourceHeight / imageNode.height()
+        matrix = [
+          inverse[0] * scaleX,
+          inverse[1] * scaleY,
+          inverse[2] * scaleX,
+          inverse[3] * scaleY,
+          inverse[4] * scaleX,
+          inverse[5] * scaleY,
+        ]
+      } catch {
+        matrix = null
+      }
+    }
+
+    if (!matrix) {
+      matrix = sourceFromStageMatrix({
+        box: imageTransformBox,
+        stageWidth: stageMask.width,
+        stageHeight: stageMask.height,
+        sourceWidth,
+        sourceHeight,
+        anchorX: settings.anchorX ?? 50,
+        anchorY: settings.anchorY ?? 50,
+        flipX: imageEdits.flipX,
+        flipY: imageEdits.flipY,
+      })
+    }
+
+    context.save()
+    context.setTransform(...matrix)
+    context.drawImage(stageMask, 0, 0)
+    context.restore()
+    return output
+  }
+
+  /** Shared source-preserving inpaint path for free selections and cutout masks. */
+  const inpaintBaseWithStageMask = async (stageMask, {
+    busyLabel,
+    startMessage,
+    successLabel,
+    errorMessage,
+  }) => {
+    if (!image) {
+      setToast('Open an image first')
+      return null
+    }
+    if (!apiAvailable) {
+      setToast('Remove from image needs the local API (npm run api)')
+      return null
+    }
+    if (!useStudioStore.getState().capabilities?.lama) {
+      setToast('Remove from image needs LaMa (python scripts/setup_ai_models.py)')
+      return null
+    }
+    if (!assertStudioIdle()) return null
+
+    const width = image.naturalWidth || image.width
+    const height = image.naturalHeight || image.height
+    const plate = document.createElement('canvas')
+    plate.width = width
+    plate.height = height
+    plate.getContext('2d').drawImage(image, 0, 0, width, height)
+    const sourceMask = projectStageMaskToSource(stageMask, width, height)
+
+    beginBusy(busyLabel)
+    setToast(startMessage)
+    try {
+      const { inpaintRegion } = await import('../ai/inpaint.js')
+      const result = await inpaintRegion({
+        imageCanvas: plate,
+        maskCanvas: sourceMask,
+        model: 'big-lama',
+      })
+      const encoded = result?.image_png_base64
+      if (!encoded) throw new Error('Inpaint returned no image')
+      replaceSource({
+        ...(source || {}),
+        width,
+        height,
+        url: `data:image/png;base64,${encoded}`,
+        kind: 'image',
+      }, { preserveCanvasSize: true })
+      setToast(`${successLabel} · ${result.fill || result.engine || 'inpaint'}`)
+      return result
+    } catch (error) {
+      console.warn(error)
+      setToast(error?.message || errorMessage)
+      return null
+    } finally {
+      endBusy()
+    }
+  }
+
+  /** Erase a selected region from the base image without creating a cutout. */
+  const removeSelectionFromImage = async (rect, pathPoints = null) => {
+    if (!rect || rect.w < 0.01 || rect.h < 0.01) {
+      setToast('Draw a larger selection to remove')
+      return
+    }
+    const result = await inpaintBaseWithStageMask(
+      createStageSelectionMask(rect, pathPoints),
+      {
+        busyLabel: 'Removing selection…',
+        startMessage: 'Removing selection from image…',
+        successLabel: 'Cut',
+        errorMessage: 'Cut failed',
+      },
+    )
+    if (!result) return
+    setPendingSelection(null)
+    setSelection(null)
+    setSelectionPoints([])
+    setSelectMode(false)
+    setSelectionPurpose('cutout')
+  }
+
+  /** Confirm pending erase selection — LaMa only. */
+  const confirmCutSelection = async () => {
+    const pending = useStudioStore.getState().tools.pendingSelection
+    const rect = pending?.rect || selection
+    const points = pending?.points || (selectionPoints?.length >= 3 ? selectionPoints : null)
+    if (!rect) {
+      setToast('Draw a selection first, then press Cut')
+      return
+    }
+    await removeSelectionFromImage(rect, points)
+  }
+
+  /** Start marquee/lasso in erase mode: draw → Cut button → background inpaint. */
+  const beginRemoveFromImage = (toolId = 'Rectangle') => {
+    if (!image) {
+      setToast('Open an image first')
+      return
+    }
+    if (!apiAvailable) {
+      setToast('Remove from image needs the local API (npm run api)')
+      return
+    }
+    if (!useStudioStore.getState().capabilities?.lama) {
+      setToast('Remove from image needs LaMa (python scripts/setup_ai_models.py)')
+      return
+    }
+    cancelSelection()
+    setSelectionPurpose('erase')
+    setPendingSelection(null)
+    setSelectionTool(toolId)
+    setSelectMode(true)
+    setMaskEditing(false)
+    setMobilePanel(false)
+    setBaseImageSelected(false)
+    setToast('Draw a selection, then press Cut · LaMa')
+  }
+
+  /**
+   * Park erase selection for Cut confirm; cutout purpose still extracts immediately.
+   */
+  const finishSelectionAsCutoutOrErase = (rect, points = null) => {
+    const purpose = useStudioStore.getState().tools.selectionPurpose || 'cutout'
+    if (purpose === 'erase') {
+      setPendingSelection({
+        rect,
+        points: points?.length >= 3 ? points : null,
+      })
+      setSelection(rect)
+      setSelectionPoints(points?.length >= 3 ? points : [])
+      setSelectMode(false)
+      setToast('Selection ready — press Cut to remove')
+      return
+    }
+    if (points?.length >= 3) {
+      extractElementLocal(rect, points, true)
+      return
+    }
+    extractElementLocal(rect)
+  }
 
   const applyKonvaSelection = (payload) => {
     if (!payload?.rect) return
@@ -1119,10 +911,10 @@ export function StudioProvider({ children }) {
     setSelectionPoints([])
     selectionStart.current = null
     if (type === 'path' && points?.length >= 3) {
-      extractElementLocal(rect, points, true)
+      finishSelectionAsCutoutOrErase(rect, points)
       return
     }
-    extractElementLocal(rect)
+    finishSelectionAsCutoutOrErase(rect)
   }
 
 
@@ -1131,18 +923,18 @@ export function StudioProvider({ children }) {
     const points = [...selectionPoints], rect = selectionBounds(points)
     selectionStart.current = null; setSelection(null); setSelectionPoints([]); setSelectMode(false)
     if (rect.w < .015 || rect.h < .015) { setToast('Draw a larger selection'); return }
-    extractElementLocal(rect, points, true)
+    finishSelectionAsCutoutOrErase(rect, points)
   }
 
   useEffect(() => {
-    if (!selectMode) return undefined
+    if (!selectMode && !pendingSelection?.rect) return undefined
     const handleSelectionKeys = (event) => {
       if (event.key === 'Escape') cancelSelection()
       // Enter / Backspace handled by Konva selection draft on the stage.
     }
     window.addEventListener('keydown', handleSelectionKeys)
     return () => window.removeEventListener('keydown', handleSelectionKeys)
-  }, [selectMode])
+  }, [selectMode, pendingSelection])
 
   const startSelection = (event) => {
     if (maskEditing) { event.currentTarget.setPointerCapture(event.pointerId); maskPainting.current = true; paintElementMask(event); return }
@@ -1174,7 +966,7 @@ export function StudioProvider({ children }) {
       const point = pointerPosition(event), points = [...selectionPoints, point], rect = selectionBounds(points)
       selectionStart.current = null; setSelection(null); setSelectionPoints([]); setSelectMode(false)
       if (points.length < 3 || rect.w < .015 || rect.h < .015) { setToast('Draw a larger lasso selection'); return }
-      extractElementLocal(rect, points, true); return
+      finishSelectionAsCutoutOrErase(rect, points); return
     }
     if (selectMode && (selectionTool === 'Polygonal Lasso' || selectionTool === 'Pen Path')) return
     if (!selectMode || !selectionStart.current) return
@@ -1182,8 +974,7 @@ export function StudioProvider({ children }) {
     const rect = { x: Math.min(start.x, point.x), y: Math.min(start.y, point.y), w: Math.abs(point.x - start.x), h: Math.abs(point.y - start.y) }
     selectionStart.current = null; setSelection(null); setSelectMode(false)
     if (rect.w < .025 || rect.h < .025) { setToast('Draw a larger box around the element'); return }
-    // Rectangle matches lasso/pen: always local canvas cut (not API rembg/GrabCut).
-    extractElementLocal(rect)
+    finishSelectionAsCutoutOrErase(rect)
   }
 
   function extractElementLocal(rect, pathPoints = null, exactMask = false) {
@@ -1240,13 +1031,11 @@ export function StudioProvider({ children }) {
     }
     cleanup.getContext('2d').putImageData(filled, 0, 0)
     const id = newStudioId()
-    const element = { id, name: `Element ${elements.length + 1}`, ...rect, bitmap, sourceBitmap, maskCanvas, cleanup, rotation: 0, scaleX: 100, scaleY: 100, flipX: false, flipY: false, opacity: 100, motion: 'None', amplitude: 5, speed: 1, depth: Math.min(100, 30 + elements.length * 20), visible: true, locked: false, anchorX: 50, anchorY: 50, cutoutMode: source?.kind === 'gif' ? GIF_CUTOUT_LABEL : 'Still image' }
+    const element = { id, name: `Element ${elements.length + 1}`, ...rect, sourceRect: { ...rect }, bitmap, sourceBitmap, maskCanvas, cleanup, rotation: 0, scaleX: 100, scaleY: 100, flipX: false, flipY: false, opacity: 100, visible: true, locked: false, anchorX: 50, anchorY: 50, cutoutMode: 'Cutout' }
     setElements((current) => insertInStack(current, element, layerInsertAt, selectedElement))
     setSelectedElements([id])
     trackCutoutApplied({ method: 'local', kind: 'edge' })
-    if (activeTab !== 'ai') goToWorkspace('motion')
-    setSettings((current) => ({ ...current, preset: 'Still', ...PRESETS.Still }))
-    setToast(layerInsertAt === 'front' ? 'Element extracted in front — choose its motion' : 'Element extracted in back — choose its motion')
+    setToast(layerInsertAt === 'front' ? 'Element extracted in front' : 'Element extracted in back')
     return id
   }
 
@@ -1254,6 +1043,9 @@ export function StudioProvider({ children }) {
   const toSegmentModel = (modelId) => {
     const map = {
       birefnet: 'birefnet-general',
+      'birefnet-general': 'birefnet-general',
+      'birefnet-massive': 'birefnet-massive',
+      massive: 'birefnet-massive',
       'rmbg-2.0': 'bria-rmbg',
       rmbg: 'bria-rmbg',
       'bria-rmbg': 'bria-rmbg',
@@ -1281,8 +1073,8 @@ export function StudioProvider({ children }) {
 
   /**
    * Smart segment: rembg (method=ai) or OpenCV GrabCut (method=grabcut) from cutout dropdown.
-   * Creates a floating cutout layer. Does **not** rewrite the base image with OpenCV
-   * Telea smear unless ``updateBackground: true`` (optional clean-hole path).
+   * Creates a floating cutout layer. Base replacement is explicit so selecting a subject
+   * never destructively rewrites the plate or bakes other visible layers into it.
    * @param {{ x:number, y:number, w:number, h:number }} rect normalized
    * @param {{ model?: string, method?: string, name?: string, replaceElementId?: string|null, updateBackground?: boolean }} [opts]
    */
@@ -1312,6 +1104,7 @@ export function StudioProvider({ children }) {
       form.append('iterations', '5')
       form.append('method', method)
       form.append('model', segmentModel)
+      form.append('update_background', updateBackground ? 'true' : 'false')
       const response = await fetch('/api/segment', { method: 'POST', body: form })
       if (!response.ok) {
         const detail = await response.json().catch(() => ({}))
@@ -1339,20 +1132,7 @@ export function StudioProvider({ children }) {
         const rh = Math.round(result.rect.height)
         sctx.drawImage(sourceCanvas, rx, ry, rw, rh, 0, 0, bitmap.width, bitmap.height)
       }
-      const maskCanvas = document.createElement('canvas'); maskCanvas.width = bitmap.width; maskCanvas.height = bitmap.height
-      {
-        const maskCtx = maskCanvas.getContext('2d')
-        const alpha = bitmap.getContext('2d').getImageData(0, 0, bitmap.width, bitmap.height)
-        const maskData = maskCtx.createImageData(bitmap.width, bitmap.height)
-        for (let i = 0; i < alpha.data.length; i += 4) {
-          const a = alpha.data[i + 3]
-          maskData.data[i] = a
-          maskData.data[i + 1] = a
-          maskData.data[i + 2] = a
-          maskData.data[i + 3] = 255
-        }
-        maskCtx.putImageData(maskData, 0, 0)
-      }
+      const maskCanvas = alphaMaskCanvas(bitmap)
       const smartRect = { x: result.rect.x / sourceCanvas.width, y: result.rect.y / sourceCanvas.height, w: result.rect.width / sourceCanvas.width, h: result.rect.height / sourceCanvas.height }
       const engine = result.engine || segmentModel
 
@@ -1364,6 +1144,7 @@ export function StudioProvider({ children }) {
             : {
               ...item,
               ...smartRect,
+              sourceRect: item.sourceRect || { ...smartRect },
               bitmap,
               sourceBitmap,
               maskCanvas,
@@ -1380,6 +1161,7 @@ export function StudioProvider({ children }) {
           id,
           name: name || `Element ${elements.length + 1}`,
           ...smartRect,
+          sourceRect: { ...smartRect },
           bitmap,
           sourceBitmap,
           maskCanvas,
@@ -1390,24 +1172,19 @@ export function StudioProvider({ children }) {
           flipX: false,
           flipY: false,
           opacity: 100,
-          motion: 'None',
-          amplitude: 5,
-          speed: 1,
-          depth: Math.min(100, 30 + elements.length * 20),
           visible: true,
           smart: true,
           locked: false,
           anchorX: 50,
           anchorY: 50,
           engine,
-          cutoutMode: source?.kind === 'gif' ? GIF_CUTOUT_LABEL : 'Still image',
+          cutoutMode: 'Cutout',
         }
         setElements((current) => insertInStack(current, element, layerInsertAt, selectedElement))
         setSelectedElements([id])
       }
 
-      if (activeTab !== 'ai') goToWorkspace('motion')
-      setSettings((current) => ({ ...current, preset: 'Still', fit: 'Contain', ...PRESETS.Still }))
+      setSettings((current) => ({ ...current, fit: 'Contain' }))
       // Only rewrite the base when explicitly requested. Default leave pixels intact so
       // moving the cutout never reveals OpenCV Telea/NS “deformed color” smear.
       if (updateBackground && result.background && !replaceElementId) {
@@ -1416,15 +1193,20 @@ export function StudioProvider({ children }) {
           width: sourceCanvas.width,
           height: sourceCanvas.height,
           url: result.background,
-        })
+        }, { preserveCanvasSize: true })
       }
       const kind = String(engine).startsWith('rembg') || String(engine).includes('birefnet') || String(engine).includes('rmbg')
         ? 'AI'
         : 'GrabCut'
       trackCutoutApplied({ engine: String(engine), method: String(method), kind })
+      const fillNote = result.fill === 'lama'
+        ? 'big-lama cleaned base'
+        : result.fill
+          ? `${result.fill} fill`
+          : 'base unchanged'
       setToast(
         updateBackground
-          ? `${kind} object ready · hole filled on base`
+          ? `${kind} cutout ready · ${fillNote}`
           : `${kind} cutout layer ready · base image unchanged`,
       )
       return id
@@ -1490,6 +1272,7 @@ export function StudioProvider({ children }) {
         form.append('iterations', '5')
         form.append('method', 'grabcut')
         form.append('model', segmentModel)
+        form.append('update_background', 'false')
         const response = await fetch('/api/segment', { method: 'POST', body: form })
         if (!response.ok) {
           const detail = await response.json().catch(() => ({}))
@@ -1504,16 +1287,7 @@ export function StudioProvider({ children }) {
           cutout.src = result.cutout
         })
         bitmap.getContext('2d').drawImage(cutout, 0, 0, w, h)
-        const alpha = bitmap.getContext('2d').getImageData(0, 0, w, h)
-        const maskData = maskCanvas.getContext('2d').createImageData(w, h)
-        for (let i = 0; i < alpha.data.length; i += 4) {
-          const a = alpha.data[i + 3]
-          maskData.data[i] = a
-          maskData.data[i + 1] = a
-          maskData.data[i + 2] = a
-          maskData.data[i + 3] = 255
-        }
-        maskCanvas.getContext('2d').putImageData(maskData, 0, 0)
+        maskCanvas = alphaMaskCanvas(bitmap)
       } else {
         const { matteWithModel } = await import('../ai/matte')
         const result = await matteWithModel({
@@ -1536,7 +1310,7 @@ export function StudioProvider({ children }) {
             maskImg.onerror = reject
             maskImg.src = `data:image/png;base64,${result.mask_png_base64}`
           })
-          maskCanvas.getContext('2d').drawImage(maskImg, 0, 0, w, h)
+          maskCanvas = visibleMaskCanvas(maskImg, w, h)
           const bctx = bitmap.getContext('2d')
           bctx.drawImage(src, 0, 0)
           bctx.globalCompositeOperation = 'destination-in'
@@ -1547,16 +1321,7 @@ export function StudioProvider({ children }) {
         }
         // Derive mask from alpha when we only got RGBA.
         if (result.rgba_png_base64) {
-          const alpha = bitmap.getContext('2d').getImageData(0, 0, w, h)
-          const maskData = maskCanvas.getContext('2d').createImageData(w, h)
-          for (let i = 0; i < alpha.data.length; i += 4) {
-            const a = alpha.data[i + 3]
-            maskData.data[i] = a
-            maskData.data[i + 1] = a
-            maskData.data[i + 2] = a
-            maskData.data[i + 3] = 255
-          }
-          maskCanvas.getContext('2d').putImageData(maskData, 0, 0)
+          maskCanvas = alphaMaskCanvas(bitmap)
         }
       }
 
@@ -1589,10 +1354,7 @@ export function StudioProvider({ children }) {
     }
   }
 
-  /**
-   * Layer from detect pipeline cutout (DINO → Real-ESRGAN → SAM2 → RGBA).
-   * ``result.rect`` is in original canvas pixels; bitmap may be higher density.
-   */
+  /** Layer from the backend selection cutout; rect is in canvas pixels. */
   const addElementFromDetectCutout = async (result, { name = 'AI layer', engine = 'ai' } = {}) => {
     const sourceCanvas = canvasRef.current
     if (!sourceCanvas || !result?.cutout_png_base64 || !result?.rect) return null
@@ -1620,22 +1382,7 @@ export function StudioProvider({ children }) {
       sourceCanvas, rx, ry, rw, rh, 0, 0, bitmap.width, bitmap.height,
     )
 
-    const maskCanvas = document.createElement('canvas')
-    maskCanvas.width = bitmap.width
-    maskCanvas.height = bitmap.height
-    {
-      const maskCtx = maskCanvas.getContext('2d')
-      const alpha = bitmap.getContext('2d').getImageData(0, 0, bitmap.width, bitmap.height)
-      const maskData = maskCtx.createImageData(bitmap.width, bitmap.height)
-      for (let i = 0; i < alpha.data.length; i += 4) {
-        const a = alpha.data[i + 3]
-        maskData.data[i] = a
-        maskData.data[i + 1] = a
-        maskData.data[i + 2] = a
-        maskData.data[i + 3] = 255
-      }
-      maskCtx.putImageData(maskData, 0, 0)
-    }
+    const maskCanvas = alphaMaskCanvas(bitmap)
 
     const smartRect = {
       x: rx / W,
@@ -1648,6 +1395,7 @@ export function StudioProvider({ children }) {
       id,
       name,
       ...smartRect,
+      sourceRect: { ...smartRect },
       bitmap,
       sourceBitmap,
       maskCanvas,
@@ -1658,27 +1406,21 @@ export function StudioProvider({ children }) {
       flipX: false,
       flipY: false,
       opacity: 100,
-      motion: 'None',
-      amplitude: 5,
-      speed: 1,
-      depth: Math.min(100, 30 + elements.length * 20),
       visible: true,
       smart: true,
       locked: false,
       anchorX: 50,
       anchorY: 50,
       engine,
-      cutoutMode: source?.kind === 'gif' ? GIF_CUTOUT_LABEL : 'Still image',
+      cutoutMode: 'Cutout',
     }
     setElements((current) => insertInStack(current, element, layerInsertAt, selectedElement))
     setSelectedElements([id])
-    if (activeTab !== 'ai') goToWorkspace('motion')
-    setSettings((current) => ({ ...current, preset: 'Still', ...PRESETS.Still }))
     setToast(`${name} ready · ${engine}`)
     return id
   }
 
-  /** Build a movable layer from a full-canvas mask (SAM2 / MediaPipe / etc.). */
+  /** Build a layer from a full-canvas mask. */
   const addElementFromMask = (maskCanvas, { name = 'AI layer', engine = 'ai' } = {}) => {
     const sourceCanvas = canvasRef.current
     if (!sourceCanvas || !maskCanvas) return null
@@ -1686,12 +1428,13 @@ export function StudioProvider({ children }) {
     const H = sourceCanvas.height
     const mw = maskCanvas.width
     const mh = maskCanvas.height
-    const maskCtx = maskCanvas.getContext('2d', { willReadFrequently: true })
+    const normalizedMask = visibleMaskCanvas(maskCanvas, mw, mh)
+    const maskCtx = normalizedMask.getContext('2d', { willReadFrequently: true })
     const maskData = maskCtx.getImageData(0, 0, mw, mh).data
     let minX = mw, minY = mh, maxX = 0, maxY = 0, found = false
     for (let y = 0; y < mh; y += 1) {
       for (let x = 0; x < mw; x += 1) {
-        const a = maskData[(y * mw + x) * 4]
+        const a = maskData[(y * mw + x) * 4 + 3]
         if (a > 24) {
           found = true
           if (x < minX) minX = x
@@ -1727,7 +1470,7 @@ export function StudioProvider({ children }) {
     const localMask = document.createElement('canvas')
     localMask.width = cw
     localMask.height = ch
-    localMask.getContext('2d').drawImage(maskCanvas, minX, minY, sw, sh, 0, 0, cw, ch)
+    localMask.getContext('2d').drawImage(normalizedMask, minX, minY, sw, sh, 0, 0, cw, ch)
     bctx.globalCompositeOperation = 'destination-in'
     bctx.drawImage(localMask, 0, 0)
     bctx.globalCompositeOperation = 'source-over'
@@ -1743,6 +1486,7 @@ export function StudioProvider({ children }) {
       id,
       name,
       ...rect,
+      sourceRect: { ...rect },
       bitmap,
       sourceBitmap,
       maskCanvas: localMask,
@@ -1753,10 +1497,6 @@ export function StudioProvider({ children }) {
       flipX: false,
       flipY: false,
       opacity: 100,
-      motion: 'None',
-      amplitude: 5,
-      speed: 1,
-      depth: Math.min(100, 30 + elements.length * 20),
       visible: true,
       smart: true,
       locked: false,
@@ -1766,8 +1506,6 @@ export function StudioProvider({ children }) {
     }
     setElements((current) => insertInStack(current, element, layerInsertAt, selectedElement))
     setSelectedElements([id])
-    if (activeTab !== 'ai') goToWorkspace('motion')
-    setSettings((current) => ({ ...current, preset: 'Still', ...PRESETS.Still }))
     setToast(`${name} ready · ${engine}`)
     return id
   }
@@ -1775,12 +1513,13 @@ export function StudioProvider({ children }) {
   /**
    * Select Subject / Remove BG.
    * Remove BG remattes the selected cutout only — never rewrites the base image.
+   * Select Subject leaves the base untouched; Clean background is the explicit inpaint action.
    * @param {{ model?: string, method?: string, target?: 'canvas'|'selection' }} opts
    */
   const runMatteCutout = async ({
     model,
     method,
-    /** 'canvas' = Select Subject (near-full frame); 'selection' = Remove BG on selected cutout */
+    /** 'canvas' = Select Subject (nearly the full image); 'selection' = Remove BG on selected cutout */
     target = 'canvas',
   } = {}) => {
     const canvas = canvasRef.current
@@ -1793,85 +1532,51 @@ export function StudioProvider({ children }) {
       return rematteSelectedLayer(req)
     }
 
-    // Select Subject — near-full frame (GrabCut still wants a thin BG rim around the subject).
+    // Select Subject — nearly the full image (GrabCut still wants a thin background rim).
     const pad = 0.02
     return extractElement(
       { x: pad, y: pad, w: 1 - pad * 2, h: 1 - pad * 2 },
       {
         ...req,
         name: 'Subject',
+        updateBackground: false,
       },
     )
   }
 
   /**
-   * Body joints via MediaPipe Pose (no human cutout).
-   * @param {{ joints?: boolean, openPanel?: boolean, driveMotion?: boolean }} opts
+   * Clean base background under the selected cutout using its bitmask (maskCanvas),
+   * including edits from Erase / Reveal paint. LaMa required on the server.
    */
-  const runPoseDetect = async ({
-    joints = true,
-    openPanel = false,
-    driveMotion = true,
-  } = {}) => {
-    const canvas = canvasRef.current
-    if (!canvas || !image) { setToast('Open an image first'); return }
-    if (!assertStudioIdle()) return
-    beginBusy('Detecting body…')
-    try {
-      const { detectBodyAndJoints } = await import('../ai/mediapipe')
-      const result = await detectBodyAndJoints(canvas)
-      useStudioStore.getState().setCapabilities({ mediapipe: true })
-
-      const marked = result.joints.filter((j) => (j.score ?? 1) >= 0.25)
-      const firstKey = marked.find((j) => POSE_KEY_JOINTS.includes(j.name))?.name
-        || marked[0]?.name
-        || null
-
-      if (joints && result.joints?.length) {
-        poseWarpCacheRef.current.clear()
-        setPoseRig((current) => ({
-          ...current,
-          joints: result.joints,
-          restJoints: result.joints,
-          visible: true,
-          driveMotion,
-          score: result.score,
-          engine: result.engine,
-          panelOpen: openPanel,
-          selectedJoint: openPanel ? (current.selectedJoint || firstKey) : current.selectedJoint,
-          jointKeys: {},
-          keysVersion: (current.keysVersion || 0) + 1,
-        }))
-        setBaseImageSelected(false)
-        setArtboardSelected(false)
-        setSelectedElements([])
-        setSelectedOverlay(null)
-        setSelectedText(null)
-        if (openPanel) setGpuPreview(true)
-      }
-
-      if (result.joints?.length) {
-        // Bind joints to an existing cutout layer when present (e.g. from DINO+SAM2).
-        setElements((current) => {
-          const body = current.find((el) => (
-            el.name === 'Body'
-            || /pose|mediapipe|sam2|dino|detect/i.test(el.engine || '')
-          ))
-          if (!body) return current
-          return current.map((el) => (
-            el.id === body.id
-              ? { ...el, poseJoints: result.joints, motion: el.motion === 'None' ? 'Pose sway' : el.motion }
-              : el
-          ))
-        })
-      }
-
-      setToast(marked.length ? `Pose · ${marked.length} joints` : 'No body / joints found')
-    } catch (err) {
-      setToast(err?.message || 'Body / pose detect failed')
-    } finally {
-      endBusy()
+  const cleanBackgroundFromSelected = async () => {
+    const el = elements.find((e) => e.id === selectedElement && (e.maskCanvas || e.bitmap))
+    if (!el) {
+      setToast('Select a cutout layer first')
+      return
     }
+    const width = Math.max(1, Math.round(settings.width))
+    const height = Math.max(1, Math.round(settings.height))
+    const stageMask = document.createElement('canvas')
+    stageMask.width = width
+    stageMask.height = height
+    const context = stageMask.getContext('2d')
+    context.fillStyle = '#000'
+    context.fillRect(0, 0, width, height)
+    const mask = el.maskCanvas || alphaMaskCanvas(el.bitmap)
+    const sourceRect = el.sourceRect || { x: el.x, y: el.y, w: el.w, h: el.h }
+    context.drawImage(
+      mask,
+      sourceRect.x * width,
+      sourceRect.y * height,
+      sourceRect.w * width,
+      sourceRect.h * height,
+    )
+    await inpaintBaseWithStageMask(stageMask, {
+      busyLabel: 'Cleaning background…',
+      startMessage: 'Cleaning background…',
+      successLabel: 'Background cleaned',
+      errorMessage: 'Clean background failed',
+    })
   }
 
   /** After detect/segment: keep mask contour visible and select the Konva transform cube. */
@@ -1885,104 +1590,38 @@ export function StudioProvider({ children }) {
     setSelectedText(null)
     setSelectMode(false)
     setMaskEditing(false)
-    setPlaying(false)
     return true
   }
 
-  const pickBestDetectBox = (boxes, promptText) => {
-    const tokens = String(promptText || '')
-      .toLowerCase()
-      .split(/[\s.,;|]+/)
-      .filter((t) => t.length > 1)
-    const negatives = {
-      dice: ['chip', 'poker', 'token', 'coin', 'roulette'],
-      die: ['chip', 'poker', 'token', 'coin', 'roulette'],
-    }
-    const scored = (boxes || []).map((box) => {
-      const label = String(box.label || '').toLowerCase()
-      let match = 0
-      for (const tok of tokens) {
-        if (label.includes(tok) || tok.includes(label)) match = 2
-        else if (tok.length >= 3 && (label.startsWith(tok.slice(0, 3)) || tok.startsWith(label.slice(0, 3)))) {
-          match = Math.max(match, 1)
-        }
-      }
-      let penalty = 0
-      for (const tok of tokens) {
-        for (const bad of negatives[tok] || []) {
-          if (label.includes(bad) && !label.includes(tok)) penalty = 1
-        }
-      }
-      const area = (box.w || 0) * (box.h || 0)
-      return { box, match, penalty, score: box.score || 0, area }
-    })
-    const preferSmall = tokens.some((t) => ['dice', 'die', 'coin', 'ring', 'button'].includes(t))
-    scored.sort((a, b) => (
-      (b.match - a.match)
-      || (a.penalty - b.penalty)
-      || (preferSmall ? (a.area - b.area) : 0)
-      || (b.score - a.score)
-      || (a.area - b.area)
-    ))
-    return scored[0]?.box || null
-  }
-
-  const runTextDetect = async (prompt, {
-    dinoModel, sam2Model, sam3Model, engine = 'grounding_dino',
-  } = {}) => {
+  const runTextDetect = async (prompt) => {
     const canvas = canvasRef.current
     if (!canvas || !image) { setToast('Open an image first'); return }
-    const detectEngine = engine || 'grounding_dino'
     if (!prompt?.trim()) { setToast('Enter a text prompt'); return }
     if (!assertStudioIdle()) return
     beginBusy('Detecting objects…')
     try {
-      // Roles: SAM3 text→mask | DINO→Real-ESRGAN→SAM2→RGBA. Never SAM3 on top of DINO.
-      const { detectWithGroundingDino } = await import('../ai/grounding-dino')
-      const result = await detectWithGroundingDino({
+      // The backend owns the fixed detect → contour pipeline and its models.
+      const { selectByPrompt } = await import('../ai/prompt-selection')
+      const result = await selectByPrompt({
         imageCanvas: canvas,
         prompt: (prompt || '').trim(),
-        refineSam2: detectEngine !== 'sam3',
-        engine: detectEngine,
-        dinoModel,
-        sam2Model,
-        sam3Model,
       })
       const boxes = result.boxes || []
       if (!boxes.length && !result.mask_png_base64) {
-        setToast(`Detect · ${result.engine || 'ok'} · no boxes`)
+        setToast(`No objects matched “${prompt.trim()}”`)
         return
       }
       const eng = String(result.detect_engine || result.engine || '')
-      if (/sam3/i.test(eng)) {
-        useStudioStore.getState().setCapabilities({ sam3: true })
-      } else {
-        useStudioStore.getState().setCapabilities({ groundingDino: true })
-      }
+      useStudioStore.getState().setCapabilities({ promptSelection: true })
 
       const label = result.selected_label || prompt.trim()
-      // DINO→Real-ESRGAN→SAM2 returns an RGBA cutout (may be denser than canvas).
       if (result.cutout_png_base64 && result.rect) {
-        if (/sam3/i.test(eng)) {
-          useStudioStore.getState().setCapabilities({ sam3: true })
-        } else {
-          const caps = { sam2: true }
-          const up = String(result.upscale_engine || '')
-          if (up && !up.startsWith('identity') && !up.startsWith('lanczos')) {
-            caps.realesrgan = true
-          }
-          useStudioStore.getState().setCapabilities(caps)
-        }
         const layerId = await addElementFromDetectCutout(result, {
           name: String(label).slice(0, 28) || 'Detected',
           engine: result.engine || eng || 'detect',
         })
         if (layerId) selectDetectedCutout(layerId)
-        const sx = result.upscale_scale_x || 1
-        const how = sx > 1.01
-          ? 'DINO → Real-ESRGAN → SAM2'
-          : 'Grounding DINO + SAM2'
-        setToast(`${how} · “${label}” contour · cube selected`)
+        setToast(`Selection · “${label}” contour ready`)
         return
       }
 
@@ -1997,37 +1636,15 @@ export function StudioProvider({ children }) {
         maskCanvas.width = img.naturalWidth
         maskCanvas.height = img.naturalHeight
         maskCanvas.getContext('2d').drawImage(img, 0, 0)
-        if (/sam3/i.test(eng)) {
-          useStudioStore.getState().setCapabilities({ sam3: true })
-        } else {
-          useStudioStore.getState().setCapabilities({ sam2: true })
-        }
         const layerId = addElementFromMask(maskCanvas, {
           name: String(label).slice(0, 28) || 'Detected',
           engine: result.engine || eng || 'detect',
         })
         if (layerId) selectDetectedCutout(layerId)
-        const how = /sam3/i.test(eng)
-          ? 'SAM 3 text→mask'
-          : 'Grounding DINO + SAM2'
-        setToast(`${how} · “${label}” contour · cube selected`)
+        setToast(`Selection · “${label}” contour ready`)
         return
       }
-
-      // Fallback: box only — rectangular crop (no object contour). Surface why.
-      const top = result.selected_box || pickBestDetectBox(boxes, prompt.trim())
-        || [...boxes].sort((a, b) => (b.score || 0) - (a.score || 0))[0]
-      const rect = {
-        x: top.x / canvas.width,
-        y: top.y / canvas.height,
-        w: top.w / canvas.width,
-        h: top.h / canvas.height,
-      }
-      const layerId = await extractElement(rect)
-      if (layerId) selectDetectedCutout(layerId)
-      const why = result.refine_error
-        || 'SAM2 mask missing — square box only, not object contour'
-      setToast(`Detect · ${top.label || 'box'} · ${why}`)
+      throw new Error('Selection service returned no contour')
     } catch (err) {
       setToast(err?.message || 'Text detect failed')
     } finally {
@@ -2052,7 +1669,6 @@ export function StudioProvider({ children }) {
     if (target?.locked) { setToast('Unlock the element before removing it'); return }
     setElements((current) => current.filter((el) => el.id !== id))
     setSelectedElements((current) => current.filter((item) => item !== id))
-    clearTimelineLayerSelection('element', id)
     setToast('Element removed')
   }
   const clearLayerSelection = () => {
@@ -2070,7 +1686,6 @@ export function StudioProvider({ children }) {
     setSelectedOverlay(null)
     setEnhancedSelected(false)
     setSelectedText(null)
-    setPlaying(false)
     setSelectMode(false)
     const additive = Boolean(event?.metaKey || event?.ctrlKey)
     const range = Boolean(event?.shiftKey)
@@ -2173,7 +1788,6 @@ export function StudioProvider({ children }) {
     setSelectedOverlay(null)
     setEnhancedSelected(false)
     setSelectedText(null)
-    setPlaying(false)
   }
   const selectEnhancedLayer = () => {
     if (!enhancedLayer) return
@@ -2183,7 +1797,6 @@ export function StudioProvider({ children }) {
     setSelectedElements([])
     setSelectedOverlay(null)
     setSelectedText(null)
-    setPlaying(false)
   }
   const selectOverlay = (id) => {
     const overlay = overlays.find((item) => item.id === id)
@@ -2194,7 +1807,6 @@ export function StudioProvider({ children }) {
     setArtboardSelected(false)
     setEnhancedSelected(false)
     setSelectedText(null)
-    setPlaying(false)
     setSelectMode(false)
     setMaskEditing(false)
   }
@@ -2210,7 +1822,6 @@ export function StudioProvider({ children }) {
       return current.filter((overlay) => overlay.id !== id)
     })
     setSelectedOverlay((current) => (current === id ? null : current))
-    clearTimelineLayerSelection('overlay', id)
     setToast('Overlay removed')
   }
   /** Stage hit-box for an overlay (fractions of canvas), matching draw layout. */
@@ -2249,36 +1860,10 @@ export function StudioProvider({ children }) {
     }
     const iw = source.width
     const ih = source.height
-    const motion = settings.motion || 'None'
-    const motionSpeed = Math.max(0.1, settings.speed ?? settings.cycles ?? 1)
-    const isLoop = motion !== 'None'
-    let timeline = progress
-    if (settings.pingPong) {
-      const phase = (progress * (isLoop ? 1 : motionSpeed)) % 2
-      timeline = phase <= 1 ? phase : 2 - phase
-    } else if (!isLoop) {
-      timeline = Math.min(1, progress * motionSpeed)
-    }
-    const t = ease(timeline, settings.easing)
-    const timeSec = progress * (settings.duration || 1)
-    let scale = (settings.scaleStart + (settings.scaleEnd - settings.scaleStart) * t) / 100
-    let ox = (settings.xStart + (settings.xEnd - settings.xStart) * t) / 100
-    let oy = (settings.yStart + (settings.yEnd - settings.yStart) * t) / 100
-    let rotation = settings.rotateStart + (settings.rotateEnd - settings.rotateStart) * t + imageEdits.rotation
-    const amp = settings.amplitude ?? 0
-    if (isLoop && (amp !== 0 || motion === 'Spin')) {
-      const phase = progress * Math.PI * 2 * motionSpeed
-      if (motion === 'Float') oy += -Math.sin(phase) * amp / 100
-      if (motion === 'Drift') ox += Math.sin(phase) * amp / 100
-      if (motion === 'Bounce') oy += -Math.abs(Math.sin(phase)) * amp / 100
-      if (motion === 'Pulse') scale *= 1 + Math.sin(phase) * amp / 100
-      if (motion === 'Spin') rotation += (phase * 180) / Math.PI
-      if (motion === 'Wobble') rotation += Math.sin(phase) * amp
-      if (motion === 'Orbit') {
-        ox += Math.cos(phase) * amp / 100
-        oy += Math.sin(phase) * amp / 100
-      }
-    }
+    const scale = (settings.scale ?? 100) / 100
+    const ox = (settings.x ?? 0) / 100
+    const oy = (settings.y ?? 0) / 100
+    const rotation = (settings.rotation || 0) + imageEdits.rotation
     const ax = (settings.anchorX ?? 50) / 100
     const ay = (settings.anchorY ?? 50) / 100
     const fit = settings.fit
@@ -2311,7 +1896,7 @@ export function StudioProvider({ children }) {
       h: Math.max(0.02, dh),
       rotation,
     }
-  }, [source?.width, source?.height, settings, imageEdits.rotation, progress])
+  }, [source?.width, source?.height, settings, imageEdits.rotation])
 
   const enhancedTransformBox = useMemo(() => {
     if (!enhancedLayer?.width || !enhancedLayer?.height || !settings.width || !settings.height) {
@@ -2335,9 +1920,9 @@ export function StudioProvider({ children }) {
       udw = (iw * base) / settings.width
       udh = (ih * base) / settings.height
     }
-    const scale = (settings.scaleStart ?? 100) / 100
-    const ox = (settings.xStart ?? 0) / 100
-    const oy = (settings.yStart ?? 0) / 100
+    const scale = (settings.scale ?? 100) / 100
+    const ox = (settings.x ?? 0) / 100
+    const oy = (settings.y ?? 0) / 100
     const cx = 0.5 + ox
     const cy = 0.5 + oy
     const left = cx - udw / 2
@@ -2349,7 +1934,7 @@ export function StudioProvider({ children }) {
       y: ay + (top - ay) * scale,
       w: Math.max(0.02, udw * scale),
       h: Math.max(0.02, udh * scale),
-      rotation: (settings.rotateStart || 0) + (imageEdits.rotation || 0),
+      rotation: (settings.rotation || 0) + (imageEdits.rotation || 0),
     }
   }, [enhancedLayer, settings, imageEdits.rotation])
 
@@ -2454,12 +2039,12 @@ export function StudioProvider({ children }) {
   const applyTightBounds = (el, bounds) => {
     if (!bounds) return el
     const { minX, minY, nw, nh, w, h } = bounds
+    const displayRect = cropRectByPixelBounds(el, bounds)
+    const originalRect = el.sourceRect || { x: el.x, y: el.y, w: el.w, h: el.h }
     return {
       ...el,
-      x: el.x + (minX / w) * el.w,
-      y: el.y + (minY / h) * el.h,
-      w: (nw / w) * el.w,
-      h: (nh / h) * el.h,
+      ...displayRect,
+      sourceRect: cropRectByPixelBounds(originalRect, bounds),
       bitmap: cropCanvas(el.bitmap, minX, minY, nw, nh),
       sourceBitmap: cropCanvas(el.sourceBitmap, minX, minY, nw, nh) || cropCanvas(el.bitmap, minX, minY, nw, nh),
       maskCanvas: cropCanvas(el.maskCanvas, minX, minY, nw, nh),
@@ -2505,14 +2090,10 @@ export function StudioProvider({ children }) {
 
   const addTextLayer = (opts = {}) => {
     let addedId = null
-    const duration = Math.max(0.1, settings.duration || 1)
     setTextLayers((current) => {
       if (current.length >= MAX_TEXT_LAYERS) return current
       const id = newStudioId()
-      const layer = clampTextInOut(
-        { id, name: `Text ${current.length + 1}`, ...TEXT_DEFAULT, in: 0, out: duration },
-        duration,
-      )
+      const layer = { id, name: `Text ${current.length + 1}`, ...TEXT_DEFAULT }
       addedId = id
       return [...current, layer]
     })
@@ -2521,7 +2102,6 @@ export function StudioProvider({ children }) {
       return null
     }
     setSelectedText(addedId)
-    setPlaying(false)
     if (!opts.stay) goToWorkspace('text')
     setToast('Text layer added')
     return addedId
@@ -2534,8 +2114,7 @@ export function StudioProvider({ children }) {
   const updateTextById = (id, patch) => {
     setTextLayers((current) => current.map((layer) => {
       if (layer.id !== id) return layer
-      const next = { ...layer, ...patch }
-      return clampTextInOut(next, settings.duration)
+      return { ...layer, ...patch }
     }))
   }
   const removeText = (id) => {
@@ -2543,7 +2122,6 @@ export function StudioProvider({ children }) {
     if (layer?.locked) { setToast('Unlock the text layer before removing it'); return }
     setTextLayers((current) => current.filter((item) => item.id !== id))
     setSelectedText((current) => (current === id ? null : current))
-    clearTimelineLayerSelection('text', id)
     setToast('Text layer removed')
   }
   const toggleTextLock = (id) => {
@@ -2735,8 +2313,6 @@ export function StudioProvider({ children }) {
       setArtboardSelected(false)
       setEnhancedSelected(false)
       setSelectedText(null)
-      setPlaying(false)
-      if (activeTab !== 'ai') goToWorkspace('motion')
       notifySuccess(layerInsertAt === 'front' ? 'Image overlay added in front' : 'Image overlay added in back')
     } catch (err) {
       notifyError(err?.message || 'Could not add overlay image.')
@@ -2755,29 +2331,48 @@ export function StudioProvider({ children }) {
     })
     return next
   }))
-  const saveCurrentPng = async (reducePalette = false) => {
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.max(1, Math.round(settings.width))
-    canvas.height = Math.max(1, Math.round(settings.height))
-    draw(progress, canvas, 1)
-    let blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
-    if (apiAvailable) {
-      try { const form = new FormData(); form.append('image', blob, 'frame.png'); form.append('palette', String(reducePalette)); const response = await fetch('/api/optimize-png', { method: 'POST', body: form }); if (response.ok) blob = await response.blob() } catch { /* Keep browser PNG. */ }
-    }
-    const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `${(source?.name || 'frame').replace(/\.[^.]+$/, '')}-frame.png`; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); setToast(`PNG saved · ${fmtBytes(blob.size)}`)
-  }
-  const compressExistingGif = async (file) => {
-    if (!file) return
-    if (!apiAvailable) { setToast('Start the Python API to compress an existing GIF'); return }
-    setExporting(true); setToast('Compressing GIF with gifsicle…')
+  const saveCurrentPng = async (reducePalette = settings.reducePalette) => {
+    if (!image || !assertStudioIdle()) return
+    ioLockRef.current = true
+    setDownloadBusy(true)
+    setBusyLabel('Preparing PNG…')
+    let objectUrl = null
     try {
-      const form = new FormData(); form.append('image', file, file.name); form.append('compression_method', settings.compressionMethod); form.append('lossy', String(settings.lossy)); form.append('colors', String(settings.palette))
-      const response = await fetch('/api/compress-gif', { method: 'POST', body: form })
-      if (!response.ok) { const detail = await response.json().catch(() => ({})); throw new Error(apiErrorMessage(detail.detail, 'Compression failed')) }
-      const blob = await response.blob(), originalBytes = Number(response.headers.get('X-GIF-Original-Bytes')) || file.size
-      const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `${file.name.replace(/\.gif$/i, '')}-compressed.gif`; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000)
-      setLastExport({ bytes: blob.size, originalBytes, optimized: true, encoder: 'gifsicle compressor' }); setToast(`Compressed ${Math.max(0, Math.round((1 - blob.size / originalBytes) * 100))}% · ${fmtBytes(blob.size)}`)
-    } catch (error) { setToast(error.message) } finally { setExporting(false) }
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(settings.width))
+      canvas.height = Math.max(1, Math.round(settings.height))
+      draw(canvas, 1)
+      let blob = await new Promise((resolve, reject) => {
+        canvas.toBlob((result) => (result ? resolve(result) : reject(new Error('Could not encode PNG'))), 'image/png')
+      })
+      let optimized = false
+      if (apiAvailable) {
+        try {
+          const form = new FormData()
+          form.append('image', blob, 'image.png')
+          form.append('palette', String(Boolean(reducePalette)))
+          const { data: response } = await apiClient.postOptimizePng(form)
+          blob = await response.blob()
+          optimized = true
+        } catch { /* Keep the browser-encoded PNG. */ }
+      }
+      objectUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      const baseName = (source?.name || 'image').replace(/\.[^.]+$/, '').trim().replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'image'
+      link.href = objectUrl
+      link.download = `${baseName}.png`
+      link.click()
+      setLastExport({ bytes: blob.size, optimized, encoder: optimized ? 'Pillow' : 'browser PNG' })
+      trackExportSucceeded({ format: 'png', bytes: blob.size, backend: optimized ? 'server' : 'browser' })
+      setToast(`PNG saved · ${fmtBytes(blob.size)}`)
+    } catch (error) {
+      setToast(error?.message || 'PNG export failed')
+    } finally {
+      if (objectUrl) setTimeout(() => revokeBlobUrl(objectUrl), 1500)
+      ioLockRef.current = false
+      setDownloadBusy(false)
+      setBusyLabel('')
+    }
   }
 
   const beginAnchorDrag = (event) => {
@@ -2835,66 +2430,7 @@ export function StudioProvider({ children }) {
     anchorDrag.current = null
   }
 
-  /** Drag a pose joint in the preview — writes start/end keys from the playhead. */
-  const beginJointDrag = (event, jointName) => {
-    if (!stageRef.current || !jointName) return
-    event.stopPropagation()
-    event.preventDefault()
-    event.currentTarget.setPointerCapture?.(event.pointerId)
-    const rest = (poseRig.restJoints?.length ? poseRig.restJoints : poseRig.joints)
-      .find((j) => j.name === jointName)
-    if (!rest) return
-    setPlaying(false)
-    setPoseRig((current) => ({
-      ...current,
-      panelOpen: true,
-      selectedJoint: jointName,
-      visible: true,
-    }))
-    jointDrag.current = {
-      name: jointName,
-      restX: rest.x,
-      restY: rest.y,
-      atStart: progress < 0.5,
-    }
-  }
-
-  const moveJointDrag = (event) => {
-    const drag = jointDrag.current
-    if (!drag || !stageRef.current) return
-    event.stopPropagation()
-    const bounds = stageRef.current.getBoundingClientRect()
-    const nx = clamp((event.clientX - bounds.left) / bounds.width, 0, 1)
-    const ny = clamp((event.clientY - bounds.top) / bounds.height, 0, 1)
-    const dx = clampNice(nx - drag.restX, -0.35, 0.35, 4)
-    const dy = clampNice(ny - drag.restY, -0.35, 0.35, 4)
-    poseWarpCacheRef.current.clear()
-    const nextRig = (() => {
-      const current = poseRigRef.current
-      const prev = current.jointKeys?.[drag.name] || emptyJointKey()
-      const nextKey = drag.atStart
-        ? { ...prev, startDx: dx, startDy: dy }
-        : { ...prev, endDx: dx, endDy: dy }
-      return {
-        ...current,
-        jointKeys: { ...current.jointKeys, [drag.name]: nextKey },
-        keysVersion: (current.keysVersion || 0) + 1,
-        selectedJoint: drag.name,
-      }
-    })()
-    poseRigRef.current = nextRig
-    setPoseRig(nextRig)
-    drawRef.current?.(progress)
-  }
-
-  const endJointDrag = (event) => {
-    if (!jointDrag.current) return
-    event?.stopPropagation?.()
-    jointDrag.current = null
-    draw(progress)
-  }
-
-  const resetMotionAnchor = () => {
+  const resetTransformAnchor = () => {
     if (baseImageSelected) {
       setSettings((current) => ({ ...current, anchorX: 50, anchorY: 50 }))
       return
@@ -2913,144 +2449,6 @@ export function StudioProvider({ children }) {
     }
   }
 
-  const exportGif = async () => {
-    if (!image || !assertStudioIdle()) return
-    if (frames > 240) { setToast('Reduce duration or FPS below 240 frames for browser export'); return }
-    ioLockRef.current = true
-    setExporting(true); setToast(''); setPlaying(false)
-    await new Promise((r) => setTimeout(r, 30))
-    try {
-      const limit = settings.quality === 'High quality' ? 1440 : settings.quality === 'Balanced' ? 1080 : 720
-      let ratio = apiAvailable ? 1 : Math.min(1, limit / Math.max(settings.width, settings.height))
-      let width = Math.round(settings.width * ratio), height = Math.round(settings.height * ratio)
-      const work = document.createElement('canvas'); work.width = width; work.height = height
-
-      const renderExportFrame = (tNorm) => {
-        const api = konvaStageApiRef.current
-        if (api?.seekTo && api?.captureFrameCanvas) {
-          api.seekTo(tNorm)
-          const captured = api.captureFrameCanvas()
-          if (captured) {
-            const ctx = work.getContext('2d')
-            ctx.clearRect(0, 0, width, height)
-            ctx.drawImage(captured, 0, 0, width, height)
-            return
-          }
-        }
-        draw(tNorm, work, ratio)
-      }
-
-      if (apiAvailable) {
-        try {
-          const form = new FormData()
-          for (let i = 0; i < frames; i++) {
-            renderExportFrame(i / frames)
-            const frameBlob = await new Promise((resolve) => work.toBlob(resolve, 'image/png'))
-            form.append('frames', frameBlob, `frame-${String(i).padStart(4, '0')}.png`)
-            if (i % 2 === 0) { setProgress((i + 1) / frames * .72); await new Promise((r) => setTimeout(r, 0)) }
-          }
-          form.append('fps', String(Math.max(1, Math.round(timingFps)))); form.append('loop', String(settings.loop))
-          form.append('palette', String(settings.palette)); form.append('optimize', 'true')
-          form.append('dither', 'false'); form.append('lossy', String(settings.lossy))
-          form.append('compression_method', settings.compressionMethod)
-          form.append('disposal', String(settings.disposal))
-          form.append('durations', JSON.stringify(frameDelays))
-          setProgress(.8)
-          const response = await fetch('/api/export', { method: 'POST', body: form })
-          if (!response.ok) { const detail = await response.json().catch(() => ({})); throw new Error(apiErrorMessage(detail.detail, 'Python export failed')) }
-          const blob = await response.blob(); setProgress(1)
-          const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
-          a.download = `${(source?.name || 'animation').replace(/\.[^.]+$/, '').trim().replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'animation'}.gif`; a.click()
-          setTimeout(() => URL.revokeObjectURL(a.href), 1000)
-          const optimized = response.headers.get('X-GIF-Optimized') === 'true'
-          const originalBytes = Number(response.headers.get('X-GIF-Original-Bytes')) || blob.size
-          setLastExport({ bytes: blob.size, originalBytes, optimized, encoder: 'ImageIO' })
-          trackExportSucceeded({ encoder: 'ImageIO', bytes: blob.size, frames, backend: 'server' })
-          setToast(`GIF exported with ImageIO${optimized ? ' + gifsicle' : ''} · ${fmtBytes(blob.size)}`)
-          return
-        } catch (error) {
-          console.warn('Python export unavailable; using browser encoder.', error)
-          setToast('Python export unavailable — using browser encoder')
-          ratio = Math.min(1, limit / Math.max(settings.width, settings.height))
-          width = Math.round(settings.width * ratio); height = Math.round(settings.height * ratio)
-          work.width = width; work.height = height
-        }
-      }
-
-      const encoder = GIFEncoder()
-      const colorFormat = settings.transparent ? 'rgba4444' : 'rgb565'
-      const maxColors = Math.min(256, settings.palette)
-      const sampleWidth = Math.min(240, width), sampleHeight = Math.max(1, Math.round(height * sampleWidth / width))
-      const sampleCanvas = document.createElement('canvas'); sampleCanvas.width = sampleWidth; sampleCanvas.height = sampleHeight
-      const sampleCount = Math.min(12, frames), samplePixels = new Uint8Array(sampleWidth * sampleHeight * 4 * sampleCount)
-      for (let sample = 0; sample < sampleCount; sample++) {
-        draw(sample / sampleCount, sampleCanvas, sampleWidth / settings.width)
-        samplePixels.set(sampleCanvas.getContext('2d').getImageData(0, 0, sampleWidth, sampleHeight).data, sample * sampleWidth * sampleHeight * 4)
-      }
-      const globalPalette = quantize(samplePixels, maxColors, { format: colorFormat, oneBitAlpha: settings.transparent })
-      for (let i = 0; i < frames; i++) {
-        renderExportFrame(i / frames)
-        const rgba = work.getContext('2d').getImageData(0, 0, width, height).data
-        const indexed = applyPalette(rgba, globalPalette, colorFormat)
-        encoder.writeFrame(indexed, width, height, { palette: globalPalette, delay: frameDelays[i], repeat: settings.loop, transparent: settings.transparent, dispose: settings.disposal })
-        if (i % 3 === 0) { setProgress((i + 1) / frames); await new Promise((r) => setTimeout(r, 0)) }
-      }
-      encoder.finish()
-      const blob = new Blob([encoder.bytesView()], { type: 'image/gif' })
-      const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
-      a.download = `${(source?.name || 'animation').replace(/\.[^.]+$/, '').trim().replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'animation'}.gif`; a.click()
-      setTimeout(() => URL.revokeObjectURL(a.href), 1000)
-      setLastExport({ bytes: blob.size, originalBytes: blob.size, optimized: false, encoder: 'gifenc' })
-      trackExportSucceeded({ encoder: 'gifenc', bytes: blob.size, frames, backend: 'browser' })
-      setToast(`GIF exported with gifenc · ${fmtBytes(blob.size)}`)
-    } catch (error) {
-      console.error(error)
-      try {
-        setToast('Browser encoder failed — trying ffmpeg.wasm…')
-        const pngFrames = []
-        const workFf = document.createElement('canvas')
-        const limitFf = settings.quality === 'High quality' ? 1440 : settings.quality === 'Balanced' ? 1080 : 720
-        const ratioFf = Math.min(1, limitFf / Math.max(settings.width, settings.height))
-        workFf.width = Math.round(settings.width * ratioFf)
-        workFf.height = Math.round(settings.height * ratioFf)
-        for (let i = 0; i < frames; i += 1) {
-          draw(i / frames, workFf, ratioFf)
-          const frameBlob = await new Promise((resolve) => workFf.toBlob(resolve, 'image/png'))
-          pngFrames.push(frameBlob)
-          if (i % 3 === 0) {
-            setProgress((i + 1) / frames * 0.9)
-            await new Promise((r) => setTimeout(r, 0))
-          }
-        }
-        const { encodeGifWithFFmpeg, loadFFmpeg } = await import('../engine/ffmpeg-export')
-        await loadFFmpeg()
-        useStudioStore.getState().setCapabilities({ ffmpeg: true })
-        const blob = await encodeGifWithFFmpeg(pngFrames, {
-          fps: Math.max(1, Math.round(timingFps)),
-          onProgress: (p) => setProgress(0.9 + p * 0.1),
-        })
-        const a = document.createElement('a')
-        a.href = URL.createObjectURL(blob)
-        a.download = `${(source?.name || 'animation').replace(/\.[^.]+$/, '').trim().replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'animation'}.gif`
-        a.click()
-        setTimeout(() => URL.revokeObjectURL(a.href), 1000)
-        setLastExport({ bytes: blob.size, originalBytes: blob.size, optimized: false, encoder: 'ffmpeg.wasm' })
-        trackExportSucceeded({ encoder: 'ffmpeg.wasm', bytes: blob.size, frames, backend: 'browser' })
-        setToast(`GIF exported with ffmpeg.wasm · ${fmtBytes(blob.size)}`)
-      } catch (ffErr) {
-        console.error(ffErr)
-        setToast('Export failed — try a smaller canvas')
-      }
-    }
-    finally {
-      ioLockRef.current = false
-      setExporting(false)
-      setPlaying(false)
-      const frameIndex = Math.min(frames - 1, Math.floor(progressRef.current * frames))
-      draw(frameIndex / frames)
-    }
-  }
-
   useEffect(() => {
     if (!toast?.message) return undefined
     const ms = toast.type === 'error' ? 5200 : toast.type === 'warning' ? 4200 : 3000
@@ -3063,9 +2461,9 @@ export function StudioProvider({ children }) {
 
   const value = {
     // refs
-    canvasRef, pixiCanvasRef, stageRef, fileRef, fontFileRef, overlayFileRef, compressGifRef,
+    canvasRef, stageRef, fileRef, fontFileRef, overlayFileRef,
     // state
-    settings, setSettings, image, source, playing, setPlaying, progress, setProgress, exporting,
+    settings, setSettings, image, source,
     downloadBusy, scaleBusy, busyLabel, studioLocked,
     dropActive, setDropActive, mobilePanel, setMobilePanel, toast, setToast,
     notifySuccess, notifyError, notifyInfo, notifyWarning, clearToast,
@@ -3084,30 +2482,28 @@ export function StudioProvider({ children }) {
     canvasLocked, setCanvasLocked, toggleCanvasLock,
     imageLocked, setImageLocked, imageTransformBox,
     selectMode, setSelectMode, selectionTool, setSelectionTool,
+    selectionPurpose, setSelectionPurpose, beginRemoveFromImage, removeSelectionFromImage,
+    pendingSelection, confirmCutSelection,
     selection, setSelection, selectionPoints, setSelectionPoints, extractTolerance, setExtractTolerance,
     apiAvailable, apiInfo, segmenting, textLayers, setTextLayers, selectedText, setSelectedText, fontOptions,
-    parallax, setParallax, lastExport, maskEditing, setMaskEditing, maskBrush, setMaskBrush,
+    lastExport, maskEditing, setMaskEditing, maskBrush, setMaskBrush,
     imageEdits, setImageEdits,
     overlays, setOverlays, selectedOverlay, setSelectedOverlay,
-    selectedMotionEffect, setSelectedMotionEffect,
-    gpuPreview, setGpuPreview,
-    poseRig, setPoseRig,
     // derived
-    frames, frameDelays, actualDuration, actualFps, memory, timingFps, stageStyle,
+    stageStyle,
     // actions
-    update, setAmplitude, setSpeed, applyQuality, applyPreset, reset, loadFile, draw, cancelSelection, completePathSelection,
+    update, reset, loadFile, draw, cancelSelection, completePathSelection,
     startSelection, moveSelection, finishSelection, applyKonvaSelection, updateElement, removeElement,
     toggleElementLock, toggleElementVisible, toggleImageLock, toggleFlip, rotateSelection, selectionFlip, toggleTextLock, selectBaseImage, selectStageElement,
     resetElementMask, invertElementMask, featherElementMask, paintElementMask,
     trimElementTransparentBounds, beginMaskErase,
     addTextLayer, updateText, updateTextById, removeText, moveText,
     uploadFont,
-    addOverlay, updateOverlay, updateOverlayById, selectOverlay, selectStageOverlay, overlayBounds, toggleOverlayVisible, removeOverlay, saveCurrentPng, compressExistingGif,
-    beginAnchorDrag, moveAnchorDrag, endAnchorDrag, resetMotionAnchor,
-    beginJointDrag, moveJointDrag, endJointDrag,
-    addElementFromMask, runPoseDetect, runTextDetect,
-    runMatteCutout,
-    exportGif, textBounds, setKonvaStageApi, konvaStageApiRef,
+    addOverlay, updateOverlay, updateOverlayById, selectOverlay, selectStageOverlay, overlayBounds, toggleOverlayVisible, removeOverlay, saveCurrentPng,
+    beginAnchorDrag, moveAnchorDrag, endAnchorDrag, resetTransformAnchor,
+    addElementFromMask, runTextDetect,
+    runMatteCutout, cleanBackgroundFromSelected,
+    textBounds, setKonvaStageApi, konvaStageApiRef,
   }
 
   return <StudioContext.Provider value={value}>{children}</StudioContext.Provider>

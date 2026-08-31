@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 /**
- * Full project setup after clone: npm deps, Python venv, pip stacks, AI, models.
+ * Full project setup after clone: npm deps, Python API, AI, and models.
  * Skips steps that are already present unless --force is passed.
  *
  * Usage:
  *   npm run setup                 # everything (default after clone)
  *   npm install                   # also runs this via postinstall
- *   node scripts/install.mjs --minimal   # web + desktop only (no AI/models)
+ *   node scripts/install.mjs --minimal   # web + image API only (no heavy AI/models)
  *   node scripts/install.mjs --force     # reinstall even when already set up
- *   node scripts/install.mjs --full      # download full model set (not --tiny-only)
  */
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, writeFileSync } from 'node:fs'
@@ -23,8 +22,6 @@ const pyExe = isWin ? 'python.exe' : 'python'
 const force = process.argv.includes('--force')
 const minimal = process.argv.includes('--minimal') || process.argv.includes('--no-ai')
 const skipModels = process.argv.includes('--skip-models')
-const fullModels = process.argv.includes('--full')
-const fromNpm = process.argv.includes('--from-npm')
 const setupMarker = path.join(root, 'models', '.setup-complete')
 
 function log(step) {
@@ -33,10 +30,6 @@ function log(step) {
 
 function skip(step) {
   console.log(`\n✓ ${step} — already present, skipping`)
-}
-
-function warn(message) {
-  console.log(`\n! ${message}`)
 }
 
 function fail(step, code) {
@@ -140,27 +133,27 @@ function modelsReady() {
     return false
   }
   const markers = [
+    path.join(root, 'models', 'sam2', 'sam2.1_hiera_large.pt'),
+    path.join(root, 'models', 'groundingdino', 'groundingdino_swinb_cogcoor.pth'),
+    path.join(root, 'models', 'groundingdino', 'GroundingDINO_SwinB_cfg.py'),
+    path.join(root, 'models', 'groundingdino', 'bert-base-uncased', 'config.json'),
+    path.join(root, 'models', 'groundingdino', 'bert-base-uncased', 'model.safetensors'),
+    path.join(root, 'models', 'groundingdino', 'bert-base-uncased', 'vocab.txt'),
     path.join(root, 'models', 'realesrgan', 'RealESRGAN_x4plus.pth'),
-    path.join(root, 'models', 'sam2', 'sam2.1_hiera_tiny.pt'),
+    path.join(root, 'models', 'realesrgan', 'RealESRGAN_x2plus.pth'),
+    path.join(root, 'models', 'realesrgan', 'ESRGAN_SRx4_DF2KOST_official-ff704c30.pth'),
+    path.join(root, 'models', 'realesrgan', 'RealESRGAN_x4plus_anime_6B.pth'),
+    path.join(root, 'models', 'lama', 'big-lama.pt'),
   ]
-  return markers.some((file) => existsSync(file))
+  return markers.every((file) => existsSync(file))
 }
 
 function sam2Ready(vpy) {
   return pythonImportOk(vpy, 'import sam2')
 }
 
-function checkSystemTools() {
-  if (isWin) {
-    return
-  }
-  const gifsicle = capture(isWin ? 'where' : 'which', ['gifsicle'])
-  if (gifsicle.status !== 0) {
-    warn(
-      'System gifsicle is not installed (GIF optimization will be limited).\n' +
-        '  Ubuntu/Debian: sudo apt install gifsicle',
-    )
-  }
+function groundingDinoReady(vpy) {
+  return pythonImportOk(vpy, 'import groundingdino')
 }
 
 if (skipForFrontendBuild) {
@@ -168,13 +161,11 @@ if (skipForFrontendBuild) {
   process.exit(0)
 }
 
-console.log('GIF Studio setup')
+console.log('Image Studio setup')
 if (minimal) {
-  console.log('  mode: minimal (web + desktop only)')
-} else if (fullModels) {
-  console.log('  mode: full (all Python deps + full model downloads)')
+  console.log('  mode: minimal (web + image API only)')
 } else {
-  console.log('  mode: default (web + desktop + AI deps + essential models)')
+  console.log('  mode: default (web + AI deps + fixed local model stack)')
 }
 
 const systemPython = findSystemPython()
@@ -211,17 +202,9 @@ runIfNeeded(
 )
 
 runIfNeeded(
-  'Installing desktop dependencies (PySide6, …)',
-  'Desktop dependencies (requirements.txt)',
-  () => pipRequirementsSatisfied(vpy, 'requirements.txt'),
-  vpy,
-  ['-m', 'pip', 'install', '-r', 'requirements.txt'],
-)
-
-runIfNeeded(
-  'Installing gif-studio package (editable)',
-  'Editable gif-studio package',
-  () => pipPackageInstalled(vpy, 'gif-studio-local'),
+  'Installing image-studio package (editable)',
+  'Editable image-studio package',
+  () => pipPackageInstalled(vpy, 'image-studio-local'),
   vpy,
   ['-m', 'pip', 'install', '-e', '.'],
 )
@@ -250,22 +233,17 @@ if (!minimal) {
 
   if (!skipModels) {
     const modelArgs = ['scripts/setup_ai_models.py']
-    if (!fullModels) {
-      modelArgs.push('--tiny-only')
-    }
-    if (!force && modelsReady()) {
+    if (!force && modelsReady() && groundingDinoReady(vpy)) {
       skip('AI model weights (models/)')
     } else {
       run(
-        fullModels
-          ? 'Downloading AI model weights (full set — may take a while)'
-          : 'Downloading essential AI model weights (--tiny-only)',
+        'Downloading fixed AI model weights (may take a while)',
         vpy,
         modelArgs,
       )
       writeFileSync(
         setupMarker,
-        `setup=${fullModels ? 'full' : 'tiny-only'}\n`,
+        'setup=fixed-selection-large\n',
         'utf8',
       )
     }
@@ -278,18 +256,14 @@ if (!minimal) {
   skip('AI model downloads (--minimal)')
 }
 
-if (!fromNpm) {
-  const npm = isWin ? 'npm.cmd' : 'npm'
-  runIfNeeded(
-    'Installing Node dependencies (npm install)',
-    'Node dependencies (node_modules)',
-    nodeDepsInstalled,
-    npm,
-    ['install'],
-  )
-} else {
-  skip('Node dependencies (already installed by npm)')
-}
+const npm = isWin ? 'npm.cmd' : 'npm'
+runIfNeeded(
+  'Installing Node dependencies (npm install)',
+  'Node dependencies (node_modules)',
+  nodeDepsInstalled,
+  npm,
+  ['install'],
+)
 
 const envPath = path.join(root, '.env')
 const envExample = path.join(root, '.env.example')
@@ -300,16 +274,11 @@ if (!existsSync(envPath) && existsSync(envExample)) {
   console.log('\n✓ .env already exists — skipping')
 }
 
-checkSystemTools()
-
 console.log('\n✓ Setup complete.\n')
 console.log('Start the studio:')
 console.log('  npm run start          # API + web at http://127.0.0.1:5173')
-console.log('  python run.py          # desktop app (PySide6)')
 if (minimal) {
   console.log('\nFull AI stack later:  npm run setup')
-} else if (!fullModels) {
-  console.log('\nFull model set later: npm run setup -- --full')
 }
 if (!force) {
   console.log('Force reinstall:      npm run setup -- --force')

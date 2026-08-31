@@ -7,7 +7,7 @@ import { Download, LoaderCircle, Maximize2, Trash2 } from 'lucide-react'
 import { Button, Field, FormGrid, Hint, Section, SelectField, Switch } from '../components/ui'
 import { useStudio } from '../context/studio-provider'
 import { useStudioStore } from '../store/studio-store'
-import { UPSCALE_MODELS } from '../ai/realesrgan'
+import { UPSCALE_MODELS } from '../ai/model-catalogs.js'
 import { FIT_MODES } from '../lib/catalogs'
 import { fmtBytes, MAX_CANVAS } from '../lib/format'
 
@@ -41,7 +41,8 @@ export default function ScalePage() {
   const [upscaleScale, setUpscaleScale] = useState(2)
 
   const upscaleOptions = useMemo(
-    () => (caps.models?.upscale?.length ? caps.models.upscale : UPSCALE_MODELS),
+    () => (caps.models?.upscale?.length ? caps.models.upscale : UPSCALE_MODELS)
+      .filter((model) => model.id !== 'gfpgan'),
     [caps.models],
   )
 
@@ -55,6 +56,10 @@ export default function ScalePage() {
   const ioLocked = Boolean(studioLocked)
   const device = deviceLabel(caps.device)
   const hasEnhanced = Boolean(enhancedLayer?.image)
+  const browserOnnxReady = Boolean(import.meta.env.VITE_REALESRGAN_ONNX)
+  const selectedUpscaleReady = caps.realesrgan && upscaleOptions.some((model) => (
+    model.id === upscaleModel && model.ready !== false
+  )) || (upscaleModel === 'realesrgan' && browserOnnxReady)
   const largerThanCanvas = hasEnhanced
     && (enhancedLayer.width > settings.width || enhancedLayer.height > settings.height)
 
@@ -98,11 +103,11 @@ export default function ScalePage() {
             variant="accent"
             size="sm"
             full
-            disabled={ioLocked || !image}
+            disabled={ioLocked || !image || !selectedUpscaleReady}
             onClick={runUpscale}
           >
             {scaleBusy
-              ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+              ? <LoaderCircle className="h-3.5 w-3.5" />
               : <Maximize2 className="h-3.5 w-3.5" />}
             {scaleBusy ? 'Upscaling…' : `Upscale ${upscaleScale}× → layer`}
           </Button>
@@ -214,7 +219,7 @@ export default function ScalePage() {
             onClick={() => downloadEnhancedPng()}
           >
             {downloadBusy
-              ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+              ? <LoaderCircle className="h-3.5 w-3.5" />
               : <Download className="h-3.5 w-3.5" />}
             {downloadBusy ? 'Preparing PNG…' : 'Download enhanced PNG'}
           </Button>

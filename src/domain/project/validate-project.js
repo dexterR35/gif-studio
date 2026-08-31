@@ -24,7 +24,6 @@ function getAjvValidate() {
 export const ProjectV2Zod = z.object({
   schemaVersion: z.literal(2),
   id: z.string().min(1),
-  projectSeed: z.string().min(1),
   metadata: z.object({
     name: z.string(),
     createdAt: z.string(),
@@ -42,7 +41,7 @@ export const ProjectV2Zod = z.object({
   }),
   assets: z.record(z.string(), z.object({
     id: z.string(),
-    kind: z.enum(['image', 'animated-image', 'mask', 'depth', 'font', 'video']),
+    kind: z.enum(['image', 'mask', 'depth', 'font']),
     mimeType: z.string(),
     checksumSha256: z.string(),
     byteLength: z.number().int().nonnegative(),
@@ -53,20 +52,11 @@ export const ProjectV2Zod = z.object({
     id: z.string(),
     type: z.string(),
   }).passthrough()),
-  timeline: z.object({
-    durationUs: z.number().int().nonnegative(),
-    loopMode: z.enum(['once', 'loop', 'ping-pong']),
-    tracks: z.record(z.string(), z.any()),
-    trackOrder: z.array(z.string()),
-  }),
   exportSettings: z.object({
-    format: z.enum(['gif', 'png', 'webp']),
-    fps: z.number().positive(),
-    quality: z.string(),
-    loop: z.number().int().nonnegative(),
-    paletteSize: z.number().int().min(2).max(256),
-    dither: z.union([z.boolean(), z.string()]),
-  }).passthrough(),
+    format: z.literal('png'),
+    reducePalette: z.boolean(),
+    transparent: z.boolean(),
+  }),
   extensions: z.record(z.string(), z.unknown()).optional(),
 })
 

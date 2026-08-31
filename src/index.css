@@ -54,8 +54,6 @@ input[type='number']::-webkit-inner-spin-button { opacity: .35; }
 .scrollbar::-webkit-scrollbar-thumb { @apply rounded-[10px] bg-[#36363a]; }
 .card-shadow { @apply shadow-card; }
 .focus-ring:focus-visible { @apply outline outline-2 outline-offset-2 outline-acid; }
-@keyframes toast-in { from { opacity: 0; transform: translateY(10px); } }
-.toast { animation: toast-in .2s ease-out; }
 
 /* ── Shared form controls (use everywhere) ─────────────────────────────── */
 @layer components {
@@ -87,13 +85,13 @@ input[type='number']::-webkit-inner-spin-button { opacity: .35; }
     @apply shrink-0 font-mono text-[10px] normal-case tracking-normal text-zinc-600;
   }
   .gs-section-chevron {
-    @apply h-3.5 w-3.5 shrink-0 text-acid/70 transition-transform duration-150;
+    @apply h-3.5 w-3.5 shrink-0 text-acid/70;
   }
   .gs-section-chevron.is-open { @apply rotate-180; }
   .gs-section-body { @apply mt-2.5; }
 
   .gs-input-shell {
-    @apply flex h-[var(--control-h)] items-center rounded-[var(--control-radius)] bg-control px-[var(--control-pad-x)] transition-[background,box-shadow] duration-150;
+    @apply flex h-[var(--control-h)] items-center rounded-[var(--control-radius)] bg-control px-[var(--control-pad-x)];
   }
   .gs-input-shell:focus-within {
     @apply bg-[var(--color-control-hover)];
@@ -104,7 +102,7 @@ input[type='number']::-webkit-inner-spin-button { opacity: .35; }
   }
 
   .gs-input {
-    @apply h-[var(--control-h)] w-full rounded-[var(--control-radius)] border-0 bg-control px-[var(--control-pad-x)] text-[length:var(--control-font)] font-medium text-zinc-200 outline-none transition-[background,box-shadow] duration-150;
+    @apply h-[var(--control-h)] w-full rounded-[var(--control-radius)] border-0 bg-control px-[var(--control-pad-x)] text-[length:var(--control-font)] font-medium text-zinc-200 outline-none;
   }
   .gs-input:hover { @apply bg-[var(--color-control-hover)]; }
   .gs-input:focus {
@@ -122,7 +120,7 @@ input[type='number']::-webkit-inner-spin-button { opacity: .35; }
 
   .gs-select-wrap { @apply relative block; }
   .gs-select {
-    @apply h-[var(--control-h)] w-full appearance-none rounded-[var(--control-radius)] border-0 bg-control py-0 pl-[var(--control-pad-x)] pr-7 text-[length:var(--control-font)] font-medium text-zinc-300 outline-none transition-[background,box-shadow] duration-150 cursor-pointer;
+    @apply h-[var(--control-h)] w-full appearance-none rounded-[var(--control-radius)] border-0 bg-control py-0 pl-[var(--control-pad-x)] pr-7 text-[length:var(--control-font)] font-medium text-zinc-300 outline-none cursor-pointer;
   }
   .gs-select:hover { @apply bg-[var(--color-control-hover)]; }
   .gs-select:focus {
@@ -138,7 +136,7 @@ input[type='number']::-webkit-inner-spin-button { opacity: .35; }
   .gs-select-chevron { @apply right-2; }
 
   .gs-textarea {
-    @apply w-full min-h-[4.5rem] resize-none rounded-[0.625rem] border-0 bg-control p-2.5 text-[0.8125rem] text-zinc-200 outline-none transition-[background,box-shadow] duration-150;
+    @apply w-full min-h-[4.5rem] resize-none rounded-[0.625rem] border-0 bg-control p-2.5 text-[0.8125rem] text-zinc-200 outline-none;
   }
   .gs-textarea::placeholder { @apply text-zinc-600; }
   .gs-textarea:hover { @apply bg-[var(--color-control-hover)]; }
@@ -171,10 +169,10 @@ input[type='number']::-webkit-inner-spin-button { opacity: .35; }
   .gs-switch-control { @apply relative inline-flex shrink-0; }
   .gs-switch-control input { @apply sr-only; }
   .gs-switch-track {
-    @apply block h-[1.125rem] w-8 rounded-full border border-white/10 bg-zinc-700 transition-[background,border-color] duration-150;
+    @apply block h-[1.125rem] w-8 rounded-full border border-white/10 bg-zinc-700;
   }
   .gs-switch-thumb {
-    @apply pointer-events-none absolute left-0.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-white shadow transition-[left] duration-150;
+    @apply pointer-events-none absolute left-0.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-white shadow;
   }
   .gs-switch-control input:checked + .gs-switch-track {
     @apply bg-acid;
@@ -186,7 +184,7 @@ input[type='number']::-webkit-inner-spin-button { opacity: .35; }
   }
 
   .gs-chip {
-    @apply inline-flex h-[var(--control-h)] cursor-pointer items-center justify-center gap-1.5 rounded-[var(--control-radius)] border-0 bg-control px-2.5 text-[0.6875rem] font-medium text-zinc-400 transition-[background,color] duration-150;
+    @apply inline-flex h-[var(--control-h)] cursor-pointer items-center justify-center gap-1.5 rounded-[var(--control-radius)] border-0 bg-control px-2.5 text-[0.6875rem] font-medium text-zinc-400;
   }
   .gs-chip:hover { @apply bg-[var(--color-control-hover)] text-zinc-200; }
   .gs-chip.is-active {
@@ -197,7 +195,7 @@ input[type='number']::-webkit-inner-spin-button { opacity: .35; }
   .gs-chip-row.stretch > .gs-chip { @apply flex-1; }
 
   .gs-btn {
-    @apply inline-flex h-[var(--control-h)] cursor-pointer items-center justify-center gap-1.5 rounded-[0.625rem] border-0 bg-control px-3 text-xs font-semibold text-zinc-400 transition-[background,color,opacity] duration-150;
+    @apply inline-flex h-[var(--control-h)] cursor-pointer items-center justify-center gap-1.5 rounded-[0.625rem] border-0 bg-control px-3 text-xs font-semibold text-zinc-400;
   }
   .gs-btn:hover { @apply bg-[var(--color-control-hover)] text-white; }
   .gs-btn:disabled { @apply cursor-not-allowed opacity-40; }
@@ -218,282 +216,30 @@ input[type='number']::-webkit-inner-spin-button { opacity: .35; }
   .gs-btn-xl { @apply h-9 px-4 text-[0.8125rem]; }
   .gs-btn-full { @apply w-full; }
 
-  /* Motion pivot — small, low-chrome crosshair (hit area larger than glyph) */
-  .gs-motion-anchor {
+  /* Transform pivot — small crosshair with a larger pointer target. */
+  .gs-transform-anchor {
     @apply absolute z-40 h-5 w-5 -translate-x-1/2 -translate-y-1/2 cursor-grab touch-none border-0 bg-transparent p-0;
   }
-  .gs-motion-anchor:active { @apply cursor-grabbing; }
-  .gs-motion-anchor__ring {
+  .gs-transform-anchor:active { @apply cursor-grabbing; }
+  .gs-transform-anchor__ring {
     @apply pointer-events-none absolute left-1/2 top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full;
     box-shadow: 0 0 0 1px rgb(0 0 0 / 55%), inset 0 0 0 1px rgb(var(--primary_accent-rgb) / 50%);
     background: rgb(0 0 0 / 30%);
   }
-  .gs-motion-anchor__x,
-  .gs-motion-anchor__y {
+  .gs-transform-anchor__x,
+  .gs-transform-anchor__y {
     @apply pointer-events-none absolute left-1/2 top-1/2 bg-acid/85;
     box-shadow: 0 0 0 0.5px rgb(0 0 0 / 45%);
   }
-  .gs-motion-anchor__x {
+  .gs-transform-anchor__x {
     @apply h-px w-3 -translate-x-1/2 -translate-y-1/2;
   }
-  .gs-motion-anchor__y {
+  .gs-transform-anchor__y {
     @apply h-3 w-px -translate-x-1/2 -translate-y-1/2;
   }
-  .gs-motion-anchor__dot {
+  .gs-transform-anchor__dot {
     @apply pointer-events-none absolute left-1/2 top-1/2 h-[2px] w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-acid;
     box-shadow: 0 0 0 1px rgb(0 0 0 / 50%);
   }
 
-  /* Motion effect timeline — Premiere-style lanes */
-  .gs-timeline-lanes {
-    @apply flex gap-2;
-  }
-  .gs-timeline-labels {
-    @apply flex w-7 shrink-0 flex-col gap-1;
-  }
-  .gs-timeline-lane-label {
-    @apply flex h-7 items-center justify-center font-mono text-[9px] font-bold text-zinc-600;
-  }
-  .gs-timeline-rails {
-    @apply relative min-w-0 flex-1 space-y-1;
-  }
-  .gs-timeline-lane-rail {
-    @apply relative h-7 w-full overflow-hidden rounded-md border border-white/[.08] bg-black/40;
-  }
-  .gs-timeline-clip {
-    @apply absolute top-0.5 bottom-0.5 z-[1] flex cursor-grab touch-none items-center overflow-hidden rounded border-0 px-2 text-left opacity-85;
-    color: rgb(0 0 0 / 75%);
-  }
-  .gs-timeline-clip:active { @apply cursor-grabbing; }
-  .gs-timeline-clip span {
-    @apply pointer-events-none min-w-0 flex-1 truncate text-[9px] font-bold uppercase tracking-wide;
-  }
-  .gs-timeline-clip em {
-    @apply pointer-events-none;
-  }
-  .gs-timeline-clip:hover { @apply opacity-100; }
-  .gs-timeline-clip.is-active {
-    @apply opacity-100 ring-1 ring-white/50;
-  }
-  .gs-timeline-clip-readonly {
-    @apply cursor-pointer;
-  }
-  .gs-timeline-clip-readonly:active { @apply cursor-pointer; }
-  /* Base motion (lane M) + content layers — locked; edited via Motion */
-  .gs-timeline-clip-base {
-    @apply cursor-default opacity-70;
-    background: repeating-linear-gradient(
-      -45deg,
-      #3f3f46,
-      #3f3f46 4px,
-      #52525b 4px,
-      #52525b 8px
-    ) !important;
-    color: rgb(244 244 245 / 90%);
-  }
-  .gs-timeline-clip-base:active { @apply cursor-default; }
-  .gs-timeline-clip-base.is-active {
-    @apply opacity-95 ring-1 ring-acid/50;
-  }
-  .gs-timeline-clip-layer {
-    @apply opacity-60;
-  }
-  .gs-timeline-clip-layer.is-hidden {
-    @apply opacity-30;
-  }
-  .gs-timeline-lock {
-    @apply pointer-events-none shrink-0 pr-0.5 text-[8px] font-semibold uppercase not-italic tracking-wider text-zinc-400;
-  }
-  .gs-timeline-handle {
-    @apply absolute top-0 bottom-0 z-[2] w-1.5 cursor-ew-resize border-0 bg-black/25 p-0 opacity-0 transition-opacity;
-  }
-  .gs-timeline-clip:hover .gs-timeline-handle,
-  .gs-timeline-clip.is-active .gs-timeline-handle { @apply opacity-100; }
-  .gs-timeline-handle-in { @apply left-0 rounded-l; }
-  .gs-timeline-handle-out { @apply right-0 rounded-r; }
-  .gs-timeline-playhead {
-    @apply pointer-events-none absolute inset-y-0 z-[3] w-px bg-acid;
-    box-shadow: 0 0 0 1px rgb(0 0 0 / 40%);
-  }
-
-  /* ── Studio timeline ─────────────────────────────────────── */
-  .gs-tl-timeline {
-    @apply flex h-full flex-col rounded-xl border border-white/[.08] bg-[#1a1a1e] overflow-hidden;
-  }
-
-  .gs-tl-timeline-body {
-    @apply flex min-h-0 flex-1;
-  }
-
-  /* Layer panel (left) */
-  .gs-tl-layer-panel {
-    @apply flex shrink-0 flex-col border-r border-white/[.08] bg-[#1e1e22];
-  }
-  .gs-tl-layer-header {
-    @apply flex h-6 shrink-0 items-center gap-1.5 border-b border-white/[.06] px-2 text-[9px] font-semibold uppercase tracking-[.12em] text-zinc-500;
-  }
-  .gs-tl-layer-count {
-    @apply ml-auto rounded bg-white/[.06] px-1 py-px text-[8px] font-bold text-zinc-500;
-  }
-  .gs-tl-layer-list {
-    @apply flex-1 overflow-y-auto overflow-x-hidden;
-  }
-
-  .gs-tl-layer-group {}
-
-  .gs-tl-layer-row {
-    @apply flex h-7 cursor-pointer items-center gap-1 border-b border-white/[.04] pr-1 text-[10px] text-zinc-300 transition-colors duration-75;
-  }
-  .gs-tl-layer-row:hover {
-    @apply bg-white/[.04];
-  }
-  .gs-tl-layer-row.is-selected {
-    @apply bg-[#1a3d3a] text-zinc-100;
-    box-shadow: inset 2px 0 0 #2dd4bf;
-  }
-
-  .gs-tl-layer-chevron {
-    @apply grid h-4 w-4 shrink-0 cursor-pointer place-items-center border-0 bg-transparent p-0 text-zinc-500 hover:text-zinc-200;
-  }
-  .gs-tl-layer-chevron-spacer {
-    @apply block h-4 w-4 shrink-0;
-  }
-
-  .gs-tl-layer-name {
-    @apply min-w-0 flex-1 truncate text-[10px] font-medium;
-  }
-
-  .gs-tl-layer-btn {
-    @apply grid h-5 w-5 shrink-0 place-items-center rounded border-0 bg-transparent p-0 text-zinc-500 transition-colors hover:text-zinc-200;
-  }
-  .gs-tl-layer-btn.is-off {
-    @apply text-zinc-700;
-  }
-  .gs-tl-layer-btn.is-locked {
-    @apply text-amber-400/80;
-  }
-
-  /* Property sub-rows — live values   */
-  .gs-tl-prop-row {
-    @apply h-6 text-[9px] text-zinc-500;
-  }
-  .gs-tl-prop-dot {
-    @apply h-1.5 w-1.5 shrink-0 rounded-full;
-  }
-  .gs-tl-prop-label {
-    @apply w-14 shrink-0 text-[9px] font-medium text-zinc-500;
-  }
-  .gs-tl-prop-value {
-    @apply min-w-0 flex-1 truncate font-mono text-[9px] text-zinc-400;
-  }
-  .gs-tl-prop-name {
-    @apply text-[9px] text-zinc-500;
-  }
-
-  /* Track panel (right) */
-  .gs-tl-track-panel {
-    @apply relative flex min-w-0 flex-1 flex-col;
-  }
-
-  .gs-tl-ruler-wrap {
-    @apply relative h-6 shrink-0 cursor-pointer border-b border-white/[.06] bg-[#1e1e22];
-  }
-  .gs-tl-ruler {
-    @apply block;
-  }
-
-  .gs-tl-playhead-handle {
-    @apply absolute top-0 z-10 -translate-x-1/2 cursor-ew-resize;
-  }
-  .gs-tl-playhead-tri {
-    filter: drop-shadow(0 1px 2px rgba(0,0,0,.5));
-  }
-
-  .gs-tl-tracks {
-    @apply relative flex-1 overflow-y-auto overflow-x-hidden;
-  }
-
-  .gs-tl-track-row {
-    @apply relative h-7 border-b border-white/[.04] bg-[#1a1a1e];
-  }
-  .gs-tl-track-row.is-selected {
-    @apply bg-[#143532];
-  }
-  .gs-tl-track-prop {
-    @apply h-6 bg-[#191920];
-  }
-  .gs-tl-prop-track-line {
-    @apply absolute inset-x-0 top-1/2 h-px -translate-y-1/2;
-  }
-
-  /* Clip / duration bars — teal when selected */
-  .gs-tl-clip {
-    @apply absolute top-[4px] bottom-[4px] z-[1] flex cursor-pointer touch-none items-center overflow-hidden rounded-[3px] border-0;
-    background: var(--clip-color, #555);
-    opacity: 0.55;
-  }
-  .gs-tl-clip:hover {
-    opacity: 0.8;
-  }
-  .gs-tl-clip:active {
-    @apply cursor-grabbing;
-  }
-  .gs-tl-clip.is-selected {
-    opacity: 0.95;
-    background: #2dd4bf !important;
-    box-shadow: 0 0 0 1px rgba(45, 212, 191, 0.5);
-  }
-  .gs-tl-clip.is-hidden {
-    opacity: 0.22;
-  }
-  .gs-tl-clip.is-dim {
-    opacity: 0.4;
-  }
-
-  .gs-tl-clip-label {
-    @apply pointer-events-none min-w-0 flex-1 truncate px-1.5 text-[8px] font-semibold tracking-wide;
-    color: rgba(0,0,0,.75);
-  }
-
-  .gs-tl-clip-handle {
-    @apply absolute top-0 bottom-0 z-[2] w-[5px] cursor-ew-resize border-0 bg-white/20 p-0 opacity-0 transition-opacity;
-  }
-  .gs-tl-clip:hover .gs-tl-clip-handle,
-  .gs-tl-clip.is-selected .gs-tl-clip-handle {
-    opacity: 1;
-  }
-  .gs-tl-clip-handle-in { @apply left-0 rounded-l-[4px]; }
-  .gs-tl-clip-handle-out { @apply right-0 rounded-r-[4px]; }
-
-  /* Keyframe diamonds */
-  .gs-tl-keyframe {
-    @apply absolute top-1/2 z-[3] h-[9px] w-[9px] -translate-x-1/2 -translate-y-1/2 rotate-45 cursor-pointer border border-black/50 p-0 transition-shadow;
-  }
-  .gs-tl-keyframe:hover {
-    box-shadow: 0 0 0 2px rgba(255,255,255,.25);
-  }
-  .gs-tl-keyframe.is-selected {
-    box-shadow: 0 0 0 2px var(--color-acid);
-  }
-
-  /* Playhead — orange   */
-  .gs-tl-playhead-line {
-    @apply pointer-events-none absolute inset-y-0 z-[5] w-px;
-    background: #f97316;
-    box-shadow: 0 0 0 1px rgba(0,0,0,.5);
-  }
-
-  /* Footer controls */
-  .gs-tl-timeline-footer {
-    @apply flex h-7 shrink-0 items-center gap-3 border-t border-white/[.06] bg-[#1e1e22] px-3;
-  }
-  .gs-tl-footer-btn {
-    @apply cursor-pointer rounded border-0 bg-white/[.06] px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-zinc-400 transition hover:bg-white/10 hover:text-zinc-200;
-  }
-  .gs-tl-footer-time {
-    @apply font-mono text-[10px] text-zinc-500;
-  }
-  .gs-tl-footer-fps {
-    @apply ml-auto font-mono text-[10px] text-zinc-600;
-  }
 }

@@ -10,7 +10,6 @@ dist/
 node_modules/
 .tmp/
 *.egg-info/
-*.gif.json
 .DS_Store
 Thumbs.db
 

@@ -61,7 +61,7 @@ export function ZoomControls({
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
         className={cn(
-          'focus-ring flex h-8 min-w-[3.25rem] items-center justify-center rounded-lg px-1.5 text-[10px] font-semibold tabular-nums text-zinc-400 transition hover:bg-white/5 hover:text-white',
+          'focus-ring flex h-8 min-w-[3.25rem] items-center justify-center rounded-lg px-1.5 text-[10px] font-semibold tabular-nums text-zinc-400 hover:bg-white/5 hover:text-white',
           open && 'bg-white/5 text-white',
         )}
       >
@@ -116,7 +116,7 @@ export function ZoomControls({
             <button
               key={preset.label}
               type="button"
-              className="flex w-full items-center px-3 py-1.5 text-left text-[11px] text-zinc-400 transition hover:bg-white/[.04] hover:text-zinc-100"
+              className="flex w-full items-center px-3 py-1.5 text-left text-[11px] text-zinc-400 hover:bg-white/[.04] hover:text-zinc-100"
               onClick={() => {
                 if (preset.value === 'fit') onFit?.()
                 else onZoomChange?.(preset.value)

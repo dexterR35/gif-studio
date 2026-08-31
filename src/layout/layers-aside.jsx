@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Frame, ImageIcon, Layers3, Maximize2, Type, Shield } from 'lucide-react'
+import { Square, ImageIcon, Layers3, Maximize2, Type, Shield } from 'lucide-react'
 import { EmptyState, LayerRow } from '../components/ui'
 import { cn } from '../lib/cn'
 import { useStudio } from '../context/studio-provider'
@@ -30,7 +30,6 @@ export function LayersAside({ floating = false }) {
   const setSelectedOverlay = useStudioStore((s) => s.setSelectedOverlay)
   const setSelectMode = useStudioStore((s) => s.setSelectMode)
   const setMaskEditing = useStudioStore((s) => s.setMaskEditing)
-  const setPlaying = useStudioStore((s) => s.setPlaying)
 
   const selectedElement = selectedElements.length ? selectedElements[selectedElements.length - 1] : null
   const activeDoc = useMemo(
@@ -72,7 +71,6 @@ export function LayersAside({ floating = false }) {
     dragRef.current = { kind, id, overId: id }
     setDragState({ kind, id, overId: id })
     setSelectMode(false)
-    setPlaying(false)
   }
 
   const moveLayerDrag = (event) => {
@@ -179,7 +177,6 @@ export function LayersAside({ floating = false }) {
             clearLayerSelection()
             setSelectedOverlay(null)
             setSelectedText(layer.id)
-            setPlaying(false)
             setSelectMode(false)
             setMaskEditing(false)
             goToWorkspace('text')
@@ -227,7 +224,7 @@ export function LayersAside({ floating = false }) {
             </span>
           )}
           title={el.name}
-          subtitle={el.cutoutMode || el.motion || 'None'}
+          subtitle={el.cutoutMode || 'Cutout'}
           visible={el.visible}
           locked={el.locked}
           onToggleVisible={() => toggleElementVisible(el.id)}
@@ -334,7 +331,7 @@ export function LayersAside({ floating = false }) {
                 setSelectMode(false)
                 setMaskEditing(false)
               }}
-              icon={Frame}
+              icon={Square}
               title="Artboard"
               subtitle={canvasLocked ? 'Locked' : 'Canvas size'}
               locked={canvasLocked}
@@ -356,7 +353,6 @@ export function LayersAside({ floating = false }) {
                     clearLayerSelection()
                     setSelectedOverlay(null)
                     setSelectedText(layer.id)
-                    setPlaying(false)
                     setSelectMode(false)
                     setMaskEditing(false)
                     goToWorkspace('text')
@@ -401,7 +397,7 @@ export function LayersAside({ floating = false }) {
                     </span>
                   )}
                   title={el.name}
-                  subtitle={el.motion}
+                  subtitle={el.cutoutMode || 'Cutout'}
                   visible={el.visible}
                   locked={el.locked}
                   onToggleVisible={() => toggleElementVisible(el.id)}
@@ -491,7 +487,7 @@ export function LayersAside({ floating = false }) {
                 setSelectMode(false)
                 setMaskEditing(false)
               }}
-              icon={Frame}
+              icon={Square}
               title="Artboard"
               subtitle={canvasLocked ? 'Locked' : 'Canvas size'}
               locked={canvasLocked}
@@ -503,7 +499,7 @@ export function LayersAside({ floating = false }) {
 
         {selectedElements.length >= 2 && (
           <p className="mt-2 px-1 text-[9px] font-semibold uppercase tracking-wider text-acid/80">
-            {selectedElements.length} selected · click to set primary · parallax in properties
+            {selectedElements.length} selected · click to set primary
           </p>
         )}
       </div>

@@ -9,10 +9,8 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { Stage, Layer, Group, Image as KonvaImage, Text as KonvaText, Transformer, Rect, Circle, Line } from 'react-konva'
 import { PRIMARY_ACCENT } from '../lib/colors'
-import { POSE_BONES, POSE_KEY_JOINTS } from '../lib/pose'
 import useHtmlImage from './use-html-image'
 import { applyKonvaFilters } from './konva-filters'
-import { captureNodeRest, seekMotion } from './konva-motion'
 import {
   zoomStageAboutPointer,
   setStageZoomPct,
@@ -114,17 +112,14 @@ function anchorNodeProps(box, width, height, anchorX = 50, anchorY = 50) {
  *   selectedId?: string|null,
  *   selectedIds?: string[],
  *   interactive?: boolean,
- *   progress?: number,
  *   onSelect?: (payload:{kind:string,id?:string|null,additive?:boolean})=>void,
- *   onTransformImage?: (patch:{xStart?:number,yStart?:number,xEnd?:number,yEnd?:number,scaleStart?:number,scaleEnd?:number,rotateStart?:number,rotateEnd?:number})=>void,
+ *   onTransformImage?: (patch:{x?:number,y?:number,scale?:number,rotation?:number})=>void,
  *   onTransformElement?: (id:string, patch:object)=>void,
  *   onTransformOverlay?: (id:string, patch:object)=>void,
  *   onTransformText?: (id:string, patch:object)=>void,
  *   overlayBounds?: (ov:object)=>{x:number,y:number,w:number,h:number,rotation:number},
  *   selection?: {x:number,y:number,w:number,h:number}|null,
  *   selectionPoints?: Array<{x:number,y:number}>,
- *   poseJoints?: Array<{index:number,name:string,x:number,y:number,score?:number}>,
- *   showPose?: boolean,
  *   className?: string,
  * }} props
  */
@@ -157,13 +152,8 @@ export function StudioKonvaStage({
   overlayBounds,
   selection = null,
   selectionPoints = [],
-  poseJoints = [],
-  showPose = false,
   className,
   imageFilters = [],
-  progress = 0,
-  motionSettings = null,
-  playing = false,
   onStageApi,
   onZoomChange,
   selectMode = false,
@@ -178,7 +168,6 @@ export function StudioKonvaStage({
   const trRef = useRef(null)
   const stageRef = useRef(null)
   const nodeRefs = useRef({})
-  const imageRestRef = useRef(null)
 
   const draftRef = useRef(null) // { kind, start, points }
   const [draft, setDraft] = useState(null)
@@ -201,35 +190,6 @@ export function StudioKonvaStage({
     const api = {
       getStage: () => stageRef.current,
       getImageNode: () => nodeRefs.current.image || null,
-      seekTo: (tNorm) => {
-        const node = nodeRefs.current.image
-        if (!node) return
-        if (!imageRestRef.current) imageRestRef.current = captureNodeRest(node)
-        seekMotion(node, imageRestRef.current, {
-          preset: motionSettings?.preset || 'Still',
-          amplitude: motionSettings?.amplitude ?? 0,
-          speed: motionSettings?.speed ?? 1,
-          duration: motionSettings?.duration ?? 1,
-        }, tNorm)
-        node.getLayer()?.batchDraw()
-      },
-      captureFrameCanvas: () => {
-        const stage = stageRef.current
-        if (!stage) return null
-        const prevScale = { x: stage.scaleX(), y: stage.scaleY() }
-        const prevPos = { x: stage.x(), y: stage.y() }
-        const prevSize = { w: stage.width(), h: stage.height() }
-        stage.scale({ x: 1, y: 1 })
-        stage.position({ x: 0, y: 0 })
-        stage.width(width)
-        stage.height(height)
-        const canvas = stage.toCanvas({ pixelRatio: 1, x: 0, y: 0, width, height })
-        stage.width(prevSize.w)
-        stage.height(prevSize.h)
-        stage.scale(prevScale)
-        stage.position(prevPos)
-        return canvas
-      },
       setZoomPct: (zoomPct) => {
         const stage = stageRef.current
         if (!stage) return
@@ -285,7 +245,7 @@ export function StudioKonvaStage({
     }
     onStageApi(api)
     return () => onStageApi(null)
-  }, [onStageApi, width, height, motionSettings, onZoomChange, getViewSize])
+  }, [onStageApi, width, height, onZoomChange, getViewSize])
 
   // Auto-fit + center when artboard or viewport size changes.
   useEffect(() => {
@@ -294,28 +254,6 @@ export function StudioKonvaStage({
     const f = applyFitToStage(stage, viewportSize.width, viewportSize.height, width, height, 40)
     if (f) onZoomChange?.(f.zoomPct, { x: f.x, y: f.y })
   }, [width, height, viewportSize?.width, viewportSize?.height])
-
-  // Refresh rest pose when base transform / image changes (idle only).
-  useEffect(() => {
-    if (playing) return
-    const node = nodeRefs.current.image
-    if (!node) return
-    imageRestRef.current = captureNodeRest(node)
-  }, [playing, imageTransformBox, sourceImage, imageEdits, width, height])
-
-  // Seek motion while scrubbing / playing.
-  useEffect(() => {
-    const node = nodeRefs.current.image
-    if (!node || !motionSettings) return
-    if (!imageRestRef.current) imageRestRef.current = captureNodeRest(node)
-    seekMotion(node, imageRestRef.current, {
-      preset: motionSettings.preset || 'Still',
-      amplitude: motionSettings.amplitude ?? 0,
-      speed: motionSettings.speed ?? 1,
-      duration: motionSettings.duration ?? 1,
-    }, progress)
-    node.getLayer()?.batchDraw()
-  }, [progress, motionSettings, playing, sourceImage])
 
   // Konva Filters on base image.
   useEffect(() => {
@@ -848,44 +786,6 @@ export function StudioKonvaStage({
           </>
         )}
 
-        {showPose && poseJoints.length > 0 && (
-          <>
-            {POSE_BONES.map(([a, b]) => {
-              const ja = poseJoints.find((j) => j.index === a)
-              const jb = poseJoints.find((j) => j.index === b)
-              if (!ja || !jb || (ja.score ?? 1) < 0.25 || (jb.score ?? 1) < 0.25) return null
-              return (
-                <Line
-                  key={`bone-${a}-${b}`}
-                  points={[ja.x * width, ja.y * height, jb.x * width, jb.y * height]}
-                  stroke={PRIMARY_ACCENT}
-                  strokeWidth={2}
-                  lineCap="round"
-                  listening={false}
-                  opacity={0.9}
-                />
-              )
-            })}
-            {poseJoints.map((j) => {
-              if ((j.score ?? 1) < 0.25) return null
-              const key = POSE_KEY_JOINTS.includes(j.name)
-              return (
-                <Circle
-                  key={`joint-${j.index}`}
-                  x={j.x * width}
-                  y={j.y * height}
-                  radius={key ? 4 : 2.5}
-                  fill={PRIMARY_ACCENT}
-                  stroke={key ? '#111' : undefined}
-                  strokeWidth={key ? 1 : 0}
-                  listening={false}
-                />
-              )
-            })}
-          </>
-        )}
-
-
         {/* Live Konva selection draft */}
         {draft?.kind === 'rect' && draft.rect && (
           <Rect
@@ -922,7 +822,7 @@ export function StudioKonvaStage({
         )}
         </Group>
 
-        {/* Artboard frame (outside clip so it stays crisp at edges) */}
+        {/* Artboard outline (outside clip so it stays crisp at edges) */}
         <Rect
           x={0}
           y={0}

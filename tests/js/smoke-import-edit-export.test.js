@@ -1,6 +1,5 @@
 /**
- * Phase 0 smoke: import → edit → export contract without browser UI.
- * Uses V2 domain + commands + preflight (strangler foundations).
+ * Static-image smoke: import → edit → render-plan contract without browser UI.
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -13,14 +12,13 @@ import {
   createSetLayerTransformCommand,
 } from '../../src/commands/index.js'
 import { evaluate } from '../../src/render/scene-evaluator.js'
-import { runExportPreflight } from '../../src/export/export-preflight.js'
 import { createLegacyImportFixture } from '../../src/lib/project-document.js'
 import { resetFeatureFlags, setFeatureFlags } from '../../src/domain/feature-flags.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const fixtures = join(__dirname, '../fixtures')
 
-describe('smoke import → edit → export', () => {
+describe('smoke import → edit → PNG plan', () => {
   beforeEach(() => {
     resetFeatureFlags()
     setFeatureFlags({
@@ -39,11 +37,9 @@ describe('smoke import → edit → export', () => {
   it('imports fixture bytes into asset metadata path', () => {
     const png = readFileSync(join(fixtures, 'static_opaque.png'))
     expect(png.byteLength).toBeGreaterThan(0)
-    const gif = readFileSync(join(fixtures, 'anim_variable_delays.gif'))
-    expect(gif.byteLength).toBeGreaterThan(0)
   })
 
-  it('migrates legacy import, edits via commands, evaluates, preflights export', () => {
+  it('migrates legacy import, edits via commands, and evaluates a PNG plan', () => {
     const legacy = createLegacyImportFixture()
     legacy.source = {
       kind: 'image',
@@ -61,7 +57,6 @@ describe('smoke import → edit → export', () => {
         width: 20,
         height: 20,
         url: null,
-        motion: 'None',
       },
     ]
 
@@ -106,16 +101,11 @@ describe('smoke import → edit → export', () => {
     bus.undo()
     expect(projectRevision(bus.getDocument())).toBe(revBefore)
 
-    const plan = evaluate(bus.getDocument(), 0, {})
+    const plan = evaluate(bus.getDocument(), {})
     expect(plan).toBeTruthy()
     expect(plan.passes || plan.evalOrder).toBeTruthy()
 
-    const pf = runExportPreflight({
-      format: 'gif',
-      width: 64,
-      height: 64,
-      frameCount: 8,
-    })
-    expect(pf.ok).toBe(true)
+    const conversion = plan.passes.find((pass) => pass.kind === 'export-convert')
+    expect(conversion.payload.format).toBe('png')
   })
 })

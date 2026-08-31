@@ -1,7 +1,4 @@
 import { partitionRedactionLast } from '../domain/layers/layer-order.js'
-import { evaluateLayerTracks } from '../domain/timeline/evaluate-tracks.js'
-import { clampTime, mapLoopTime } from '../domain/timeline/time.js'
-import { hashSeed } from '../domain/timeline/seeded-random.js'
 import { EVAL_ORDER_STEPS } from './eval-order.js'
 import { appendPass, createRenderPlan } from './render-plan.js'
 
@@ -10,22 +7,11 @@ import { appendPass, createRenderPlan } from './render-plan.js'
  * No DOM, React, Math.random, or mutable runtime canvases.
  *
  * @param {object} project ProjectDocumentV2
- * @param {number} timeUs
  * @param {Record<string, object>} [assetsMeta] optional runtime metadata by assetId
- * @param {{ frameIndex?: number }} [opts]
  * @returns {import('./render-plan.js').RenderPlan}
  */
-export function evaluate(project, timeUs, assetsMeta = {}, opts = {}) {
-  const timeline = project.timeline || { durationUs: 0, loopMode: 'once', tracks: {}, trackOrder: [] }
-  const mapped = mapLoopTime(timeUs, timeline.durationUs, timeline.loopMode || 'once')
-  const t = clampTime(mapped, timeline.durationUs)
-  const projectSeed = project.projectSeed || '0'
-  const frameIndex = opts.frameIndex ?? Math.floor(t / Math.max(1, Math.round(1_000_000 / (project.exportSettings?.fps || 24))))
-
+export function evaluate(project, assetsMeta = {}) {
   let plan = createRenderPlan({
-    timeUs: t,
-    projectSeed,
-    frameIndex,
     canvas: {
       width: project.canvas?.width ?? 1,
       height: project.canvas?.height ?? 1,
@@ -64,13 +50,6 @@ export function evaluate(project, timeUs, assetsMeta = {}, opts = {}) {
       continue
     }
 
-    const evaluated = evaluateLayerTracks(layer, timeline, t, {
-      projectSeed,
-      frameIndex,
-    })
-
-    const seed = hashSeed(projectSeed, layerId, frameIndex)
-
     if (layer.type === 'raster') {
       const meta = assetsMeta[layer.assetId] || project.assets?.[layer.assetId] || null
       plan = appendPass(plan, {
@@ -81,20 +60,17 @@ export function evaluate(project, timeUs, assetsMeta = {}, opts = {}) {
           assetId: layer.assetId,
           rollbackAssetId: layer.rollbackAssetId,
           maskAssetId: layer.maskAssetId,
-          transform: evaluated.transform,
-          opacity: evaluated.opacity,
+          transform: layer.transform,
+          opacity: layer.opacity ?? 1,
           blendMode: layer.blendMode || 'source-over',
           effects: [],
           mediaMeta: meta
             ? {
                 width: meta.width,
                 height: meta.height,
-                frameCount: meta.frameCount,
-                durationUs: meta.durationUs,
                 kind: meta.kind,
               }
             : null,
-          seed,
         },
       })
       continue
@@ -109,11 +85,10 @@ export function evaluate(project, timeUs, assetsMeta = {}, opts = {}) {
           text: layer.text,
           style: layer.style,
           fontAssetId: layer.fontAssetId,
-          transform: evaluated.transform,
-          opacity: evaluated.opacity,
+          transform: layer.transform,
+          opacity: layer.opacity ?? 1,
           blendMode: layer.blendMode || 'source-over',
           effects: [],
-          seed,
         },
       })
     }
@@ -137,8 +112,8 @@ export function evaluate(project, timeUs, assetsMeta = {}, opts = {}) {
   plan = appendPass(plan, {
     kind: 'export-convert',
     payload: {
-      format: project.exportSettings?.format || 'gif',
-      paletteSize: project.exportSettings?.paletteSize,
+      format: 'png',
+      reducePalette: Boolean(project.exportSettings?.reducePalette),
     },
   })
 

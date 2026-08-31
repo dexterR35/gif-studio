@@ -9,10 +9,6 @@ export const IMAGE_EDITS_DEFAULT = {
   rotation: 0, flipX: false, flipY: false,
 }
 
-export const PARALLAX_DEFAULT = {
-  enabled: false, direction: 'Horizontal', strength: 6, speed: 1,
-}
-
 /** Empty editor session (no image loaded). */
 export function createEmptyEditorSession() {
   return {
@@ -27,8 +23,6 @@ export function createEmptyEditorSession() {
     textLayers: [],
     enhancedLayer: null,
     imageEdits: { ...IMAGE_EDITS_DEFAULT },
-    parallax: { ...PARALLAX_DEFAULT },
-    keyframes: [],
     fontOptions: [...SYSTEM_FONTS],
   }
 }

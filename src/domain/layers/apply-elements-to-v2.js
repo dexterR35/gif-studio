@@ -3,8 +3,6 @@
  * Each apply* preserves other layer kinds already on V2.
  */
 
-import { defaultCutoutMotion } from '../timeline/procedural-motion.js'
-
 function identityTransform(overrides = {}) {
   return {
     x: 0,
@@ -25,6 +23,15 @@ function opacity01(value) {
   const n = Number(value)
   if (!Number.isFinite(n)) return 1
   return n > 1 ? n / 100 : n
+}
+
+function staticLayerBase(layer) {
+  if (!layer) return {}
+  return Object.fromEntries(
+    ['maskAssetId', 'rollbackAssetId', 'fontAssetId']
+      .filter((key) => layer[key] != null)
+      .map((key) => [key, layer[key]]),
+  )
 }
 
 function ensureAsset(assets, layer) {
@@ -155,9 +162,15 @@ export function elementToV2Layer(el, prevLayer = null) {
   const assetId = prevLayer?.assetId || `asset-${id}`
   const anchorX = el.anchorX != null ? Number(el.anchorX) / 100 : (prevLayer?.transform?.anchorX ?? 0.5)
   const anchorY = el.anchorY != null ? Number(el.anchorY) / 100 : (prevLayer?.transform?.anchorY ?? 0.5)
+  const sourceRect = el.sourceRect || prevLayer?.mediaMapping?.sourceRect || {
+    x: el.x,
+    y: el.y,
+    w: el.w,
+    h: el.h,
+  }
 
   return {
-    ...(prevLayer || {}),
+    ...staticLayerBase(prevLayer),
     id,
     name: el.name || prevLayer?.name || 'Cutout',
     visible: el.visible !== false,
@@ -176,10 +189,8 @@ export function elementToV2Layer(el, prevLayer = null) {
       flipY: Boolean(el.flipY),
     }),
     effects: prevLayer?.effects || [],
-    animationTrackIds: prevLayer?.animationTrackIds || [],
     type: 'raster',
     assetId,
-    cutoutMotion: el.motion || prevLayer?.cutoutMotion || defaultCutoutMotion(),
     mediaMapping: {
       kind: 'cutout-rect',
       legacyKind: 'element',
@@ -187,15 +198,17 @@ export function elementToV2Layer(el, prevLayer = null) {
       y: Number(el.y) || 0,
       w: Number(el.w) || 0,
       h: Number(el.h) || 0,
-      amplitude: el.amplitude != null ? Number(el.amplitude) : 5,
-      speed: el.speed != null ? Number(el.speed) : 1,
-      depth: el.depth != null ? Number(el.depth) : 50,
+      sourceRect: {
+        x: Number(sourceRect.x) || 0,
+        y: Number(sourceRect.y) || 0,
+        w: Number(sourceRect.w) || 0,
+        h: Number(sourceRect.h) || 0,
+      },
       anchorX: el.anchorX != null ? Number(el.anchorX) : 50,
       anchorY: el.anchorY != null ? Number(el.anchorY) : 50,
       cutoutMode: el.cutoutMode,
       engine: el.engine,
       smart: el.smart,
-      poseJoints: el.poseJoints || null,
     },
   }
 }
@@ -207,9 +220,10 @@ export function elementToV2Layer(el, prevLayer = null) {
 export function overlayToV2Layer(ov, prevLayer = null) {
   const id = ov.id
   const assetId = prevLayer?.assetId || `asset-${id}`
-  const scale = ov.scale != null ? Number(ov.scale) : 100
+  const scaleX = ov.scaleX != null ? Number(ov.scaleX) : (ov.scale != null ? Number(ov.scale) : 100)
+  const scaleY = ov.scaleY != null ? Number(ov.scaleY) : (ov.scale != null ? Number(ov.scale) : 100)
   return {
-    ...(prevLayer || {}),
+    ...staticLayerBase(prevLayer),
     id,
     name: ov.name || prevLayer?.name || 'Overlay',
     visible: ov.visible !== false,
@@ -219,12 +233,15 @@ export function overlayToV2Layer(ov, prevLayer = null) {
     transform: identityTransform({
       x: Number(ov.x) || 0,
       y: Number(ov.y) || 0,
-      scaleX: scale / 100,
-      scaleY: scale / 100,
+      scaleX: scaleX / 100,
+      scaleY: scaleY / 100,
       rotationDeg: Number(ov.rotation) || 0,
+      anchorX: ov.anchorX != null ? Number(ov.anchorX) / 100 : 0.5,
+      anchorY: ov.anchorY != null ? Number(ov.anchorY) / 100 : 0.5,
+      flipX: Boolean(ov.flipX),
+      flipY: Boolean(ov.flipY),
     }),
     effects: prevLayer?.effects || [],
-    animationTrackIds: prevLayer?.animationTrackIds || [],
     type: 'raster',
     assetId,
     mediaMapping: {
@@ -232,7 +249,7 @@ export function overlayToV2Layer(ov, prevLayer = null) {
       legacyKind: 'overlay',
       x: Number(ov.x) || 0,
       y: Number(ov.y) || 0,
-      scale,
+      width: ov.width != null ? Number(ov.width) : 30,
       // Durable URL only when not a blob session URL
       url: ov.url && !String(ov.url).startsWith('blob:') ? ov.url : null,
     },
@@ -246,7 +263,7 @@ export function overlayToV2Layer(ov, prevLayer = null) {
 export function textToV2Layer(tl, prevLayer = null) {
   const id = tl.id
   return {
-    ...(prevLayer || {}),
+    ...staticLayerBase(prevLayer),
     id,
     name: tl.name || prevLayer?.name || 'Text',
     visible: tl.visible !== false,
@@ -263,7 +280,6 @@ export function textToV2Layer(tl, prevLayer = null) {
       flipY: Boolean(tl.flipY),
     }),
     effects: prevLayer?.effects || [],
-    animationTrackIds: prevLayer?.animationTrackIds || [],
     type: 'text',
     text: String(tl.text ?? ''),
     style: {
@@ -278,6 +294,12 @@ export function textToV2Layer(tl, prevLayer = null) {
       letterSpacing: Number(tl.letterSpacing) || 0,
       lineHeight: Number(tl.lineHeight) || 1.1,
       boxWidth: tl.boxWidth != null ? Number(tl.boxWidth) : null,
+      shadowColor: tl.shadowColor || '#000000',
+      shadowBlur: Number(tl.shadowBlur) || 0,
+      shadowX: Number(tl.shadowX) || 0,
+      shadowY: Number(tl.shadowY) || 0,
+      decoration: tl.decoration || 'None',
+      casing: tl.casing || 'As typed',
     },
   }
 }

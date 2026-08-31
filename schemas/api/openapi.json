@@ -1,9 +1,9 @@
 {
   "openapi": "3.0.3",
   "info": {
-    "title": "GIF Studio Local API",
+    "title": "Image Studio Local API",
     "version": "1.0.0",
-    "description": "Minimal OpenAPI contract for health, versioned jobs, AI, and export."
+    "description": "OpenAPI contract for health, versioned jobs, image processing, and AI tools."
   },
   "paths": {
     "/api/health": {
@@ -158,15 +158,15 @@
         }
       }
     },
-    "/api/export": {
+    "/api/optimize-png": {
       "post": {
-        "operationId": "exportGif",
-        "summary": "Export GIF via local Python backend (multipart)",
+        "operationId": "optimizePng",
+        "summary": "Optimize a PNG with the local Python backend",
         "responses": {
           "200": {
-            "description": "GIF bytes",
+            "description": "Optimized PNG bytes",
             "content": {
-              "image/gif": { "schema": { "type": "string", "format": "binary" } }
+              "image/png": { "schema": { "type": "string", "format": "binary" } }
             }
           }
         }
@@ -186,10 +186,40 @@
         }
       }
     },
+    "/api/ai/inpaint": {
+      "post": {
+        "operationId": "aiInpaint",
+        "summary": "LaMa erase inpaint (OpenCV fallback)",
+        "responses": {
+          "200": {
+            "description": "Inpainted image as base64 PNG JSON",
+            "content": {
+              "application/json": { "schema": { "type": "object" } }
+            }
+          }
+        }
+      }
+    },
     "/api/ai/detect": {
       "post": {
         "operationId": "aiDetect",
-        "summary": "Object detection",
+        "summary": "Backend prompt selection",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["image"],
+                "properties": {
+                  "image": { "type": "string", "format": "binary" },
+                  "prompt": { "type": "string", "default": "" },
+                  "confidence": { "type": "number", "default": 0.35 }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Detection result",

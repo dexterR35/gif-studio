@@ -4,7 +4,7 @@ import { useStudio } from '../context/studio-provider'
 
 export function StudioHeader() {
   const {
-    mobilePanel, setMobilePanel, reset, exportGif, exporting, downloadBusy, scaleBusy,
+    mobilePanel, setMobilePanel, reset, saveCurrentPng, downloadBusy, scaleBusy,
     studioLocked, segmenting,
   } = useStudio()
   const ioBusy = Boolean(studioLocked)
@@ -18,18 +18,18 @@ export function StudioHeader() {
         <div className="grid h-7 w-7 place-items-center rounded-lg bg-acid text-black">
           <Zap className="h-3.5 w-3.5 fill-current" />
         </div>
-        <div className="display text-[15px] font-extrabold tracking-tight">My Studio</div>
+        <div className="display text-[15px] font-extrabold tracking-tight">Image Studio</div>
         <Badge className="hidden sm:block">LOCAL</Badge>
       </div>
       <div className="flex items-center gap-2">
         <Button onClick={reset} disabled={studioLocked} className="hidden sm:inline-flex" size="md">
           <RotateCcw className="h-3.5 w-3.5" /> Reset
         </Button>
-        <Button variant="primary" size="md" onClick={exportGif} disabled={ioBusy} className="font-bold disabled:opacity-70">
-          {exporting || scaleBusy || downloadBusy || segmenting
-            ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+        <Button variant="primary" size="md" onClick={() => saveCurrentPng()} disabled={ioBusy} className="font-bold disabled:opacity-70">
+          {scaleBusy || downloadBusy || segmenting
+            ? <LoaderCircle className="h-3.5 w-3.5" />
             : <Download className="h-3.5 w-3.5" />}
-          {exporting ? 'Exporting' : scaleBusy ? 'Upscaling…' : downloadBusy ? 'Downloading…' : segmenting ? 'Busy…' : 'Export GIF'}
+          {scaleBusy ? 'Upscaling…' : downloadBusy ? 'Downloading…' : segmenting ? 'Busy…' : 'Export PNG'}
         </Button>
       </div>
     </header>

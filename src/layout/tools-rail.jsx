@@ -11,13 +11,17 @@ import {
   PenTool,
   RotateCcw,
   RotateCw,
+  Scissors,
 } from 'lucide-react'
 import { useStudio } from '../context/studio-provider'
+import { useStudioStore } from '../store/studio-store'
+import { capabilityButtonProps } from '../a11y/capability-honesty'
 import { cn } from '../lib/cn'
 
 const MOVE_TOOL = 'Move'
 const MASK_TOOL = 'Mask'
 const ERASE_TOOL = 'Erase'
+const REMOVE_TOOL = 'RemoveFromImage'
 
 const SELECTION_TOOLS = [
   {
@@ -53,24 +57,32 @@ export function ToolsRail({ floating = false }) {
   const {
     selectMode, setSelectMode, selectionTool, setSelectionTool,
     cancelSelection, setSelection, setSelectionPoints,
-    setPlaying, setMobilePanel, maskEditing, setMaskEditing, studioLocked, segmenting,
+    setMobilePanel, maskEditing, setMaskEditing, studioLocked, segmenting,
     selectedElement, setToast, setBaseImageSelected,
     toggleFlip, rotateSelection, selectionFlip,
     baseImageSelected,
     beginMaskErase, maskBrush, setMaskBrush,
+    selectionPurpose, setSelectionPurpose, beginRemoveFromImage,
   } = useStudio()
+  const caps = useStudioStore((s) => s.capabilities)
+  const pendingSelection = useStudioStore((s) => s.tools.pendingSelection)
+  const inpaintBtn = capabilityButtonProps(caps, 'lama', 'Remove from image')
+  const inpaintEngine = 'LaMa'
 
   const erasing = maskEditing && maskBrush.mode === 'Hide'
   const revealing = maskEditing && maskBrush.mode !== 'Hide'
+  const removeMode = (selectMode && selectionPurpose === 'erase') || Boolean(pendingSelection?.rect)
   const locked = Boolean(studioLocked)
 
   const activeId = erasing
     ? ERASE_TOOL
     : revealing
       ? MASK_TOOL
-      : selectMode
-        ? selectionTool
-        : MOVE_TOOL
+      : removeMode
+        ? REMOVE_TOOL
+        : selectMode
+          ? selectionTool
+          : MOVE_TOOL
   const hasTarget = Boolean(selectedElement || baseImageSelected)
   const flipHint = selectedElement
     ? 'Flip selected layer'
@@ -80,16 +92,17 @@ export function ToolsRail({ floating = false }) {
     cancelSelection()
     setSelectMode(false)
     setMaskEditing(false)
+    setSelectionPurpose('cutout')
   }
 
   const activateSelection = (toolId) => {
     cancelSelection()
     setSelection(null)
     setSelectionPoints([])
+    setSelectionPurpose('cutout')
     setSelectionTool(toolId)
     setSelectMode(true)
     setMaskEditing(false)
-    setPlaying(false)
     setMobilePanel(false)
     setBaseImageSelected(false)
   }
@@ -103,7 +116,6 @@ export function ToolsRail({ floating = false }) {
     setSelectMode(false)
     setMaskBrush((current) => ({ ...current, mode: 'Reveal' }))
     setMaskEditing(true)
-    setPlaying(false)
     setMobilePanel(false)
     setBaseImageSelected(false)
   }
@@ -149,6 +161,17 @@ export function ToolsRail({ floating = false }) {
           onClick={() => activateSelection(tool.id)}
         />
       ))}
+
+      <ToolButton
+        label="Remove from image"
+        hint={inpaintBtn.disabled
+          ? inpaintBtn.title
+          : `Draw a box, then press Cut · ${inpaintEngine}`}
+        icon={Scissors}
+        active={activeId === REMOVE_TOOL}
+        disabled={locked || inpaintBtn.disabled}
+        onClick={() => beginRemoveFromImage('Rectangle')}
+      />
 
       <div className="my-1.5 h-px w-6 bg-white/[.08]" />
 
@@ -209,7 +232,7 @@ export function ToolsRail({ floating = false }) {
           role="status"
           aria-label="Separating object"
         >
-          <LoaderCircle className="h-4 w-4 animate-spin text-acid" aria-hidden="true" />
+          <LoaderCircle className="h-4 w-4 text-acid" aria-hidden="true" />
         </div>
       )}
     </aside>
@@ -226,7 +249,7 @@ function ToolButton({ label, hint, icon: Icon, active, disabled, onClick }) {
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'focus-ring grid h-9 w-9 place-items-center rounded-md transition',
+        'focus-ring grid h-9 w-9 place-items-center rounded-md',
         active
           ? 'bg-acid text-black'
           : 'text-zinc-400 hover:bg-white/[.06] hover:text-zinc-100',

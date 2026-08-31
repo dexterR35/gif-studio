@@ -3,27 +3,25 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  Eraser,
   ImageMinus,
   LoaderCircle,
   MoreHorizontal,
+  Scissors,
   Sparkles,
   UserRound,
 } from 'lucide-react'
 import { useStudio } from '../../context/studio-provider'
 import { useStudioStore } from '../../store/studio-store'
+import { capabilityButtonProps } from '../../a11y/capability-honesty'
 import { cn } from '../../lib/cn'
 
 const MATTE_FALLBACK = [
   { id: 'birefnet', label: 'BiRefNet (soft edges)' },
+  { id: 'birefnet-massive', label: 'BiRefNet Massive (higher quality)' },
   { id: 'rmbg-2.0', label: 'RMBG-2.0' },
   { id: 'rembg-isnet', label: 'rembg isnet' },
 ]
-
-const GRABCUT_OPTION = {
-  id: 'opencv-grabcut',
-  label: 'OpenCV GrabCut',
-  ready: true,
-}
 
 function optionLabel(m) {
   if (m.ready === false) {
@@ -58,14 +56,14 @@ function BarBtn({
       className={cn(
         'inline-flex h-8 items-center justify-center gap-1.5 rounded-[var(--control-radius)]',
         'border-0 bg-transparent text-zinc-300',
-        'transition hover:bg-acid/10 hover:text-zinc-100',
+        'hover:bg-acid/10 hover:text-zinc-100',
         'disabled:pointer-events-none disabled:opacity-35',
         labeled ? 'px-2.5 text-[11px] font-medium' : 'w-8 px-0',
         className,
       )}
     >
       {busy
-        ? <LoaderCircle className="h-4 w-4 shrink-0 animate-spin text-acid" />
+        ? <LoaderCircle className="h-4 w-4 shrink-0 text-acid" />
         : Icon
           ? <Icon className="h-4 w-4 shrink-0 text-acid" strokeWidth={1.75} />
           : null}
@@ -83,6 +81,12 @@ export function ContextualTaskBar() {
     selectedElement,
     elements,
     runMatteCutout,
+    cleanBackgroundFromSelected,
+    beginRemoveFromImage,
+    cancelSelection,
+    confirmCutSelection,
+    selectionPurpose,
+    pendingSelection,
     setToast,
   } = useStudio()
   const caps = useStudioStore((s) => s.capabilities)
@@ -93,11 +97,14 @@ export function ContextualTaskBar() {
   const [menuOpen, setMenuOpen] = useState(false)
   const rootRef = useRef(null)
 
-  const cutoutOptions = useMemo(() => {
-    const matte = caps.models?.matte?.length ? caps.models.matte : MATTE_FALLBACK
-    const withoutGrab = matte.filter((m) => m.id !== GRABCUT_OPTION.id)
-    return [...withoutGrab, GRABCUT_OPTION]
-  }, [caps.models])
+  const inpaintBtn = capabilityButtonProps(caps, 'lama', 'Remove from image')
+  const inpaintEngine = 'LaMa'
+  const eraseSelect = selectMode && selectionPurpose === 'erase'
+  const hasPendingCut = Boolean(pendingSelection?.rect)
+
+  const cutoutOptions = useMemo(() => (
+    caps.models?.matte?.length ? caps.models.matte : MATTE_FALLBACK
+  ), [caps.models])
 
   useEffect(() => {
     setCutoutModel((id) => pickReady(cutoutOptions, id || 'birefnet'))
@@ -125,9 +132,9 @@ export function ContextualTaskBar() {
   )
 
   const locked = Boolean(busy || studioLocked)
-  const hidden = !image || selectMode || maskEditing
+  // Keep bar visible while drawing erase selection or waiting for Cut.
+  const hidden = !image || (selectMode && !eraseSelect && !hasPendingCut) || (maskEditing && !hasPendingCut)
   const cutoutLabel = cutoutOptions.find((m) => m.id === cutoutModel)?.label || cutoutModel
-  const isGrabCut = cutoutModel === 'opencv-grabcut'
 
   const run = async (label, fn) => {
     setBusy(label)
@@ -143,6 +150,69 @@ export function ContextualTaskBar() {
 
   if (hidden) return null
 
+  if (hasPendingCut) {
+    return (
+      <div className="pointer-events-none absolute left-1/2 top-0 z-30 w-max max-w-[calc(100%-1rem)] -translate-x-1/2 pt-2.5">
+        <div
+          className={cn(
+            'pointer-events-auto relative flex items-center gap-1.5 rounded-[var(--control-radius)]',
+            'border border-acid/30 bg-panel px-2 py-1.5',
+          )}
+          role="toolbar"
+          aria-label="Cut selection"
+        >
+          <Scissors className="h-4 w-4 shrink-0 text-acid" strokeWidth={1.75} />
+          <span className="text-[11px] font-medium text-zinc-200">
+            Selection ready
+          </span>
+          <BarBtn
+            disabled={locked || busy === 'Cut'}
+            busy={busy === 'Cut'}
+            title={`Cut — ${inpaintEngine} removes this region from the image`}
+            className="bg-acid/15 text-acid"
+            onClick={() => run('Cut', () => confirmCutSelection())}
+          >
+            Cut
+          </BarBtn>
+          <BarBtn
+            disabled={locked || busy === 'Cut'}
+            title="Cancel selection"
+            onClick={() => cancelSelection()}
+          >
+            Cancel
+          </BarBtn>
+        </div>
+      </div>
+    )
+  }
+
+  if (eraseSelect) {
+    return (
+      <div className="pointer-events-none absolute left-1/2 top-0 z-30 w-max max-w-[calc(100%-1rem)] -translate-x-1/2 pt-2.5">
+        <div
+          className={cn(
+            'pointer-events-auto relative flex items-center gap-1.5 rounded-[var(--control-radius)]',
+            'border border-acid/30 bg-panel px-2 py-1.5',
+          )}
+          role="status"
+          aria-label="Remove from image"
+        >
+          <Scissors className="h-4 w-4 shrink-0 text-acid" strokeWidth={1.75} />
+          <span className="text-[11px] font-medium text-zinc-200">
+            Draw selection first — then Cut
+          </span>
+          <BarBtn
+            disabled={locked}
+            title="Cancel remove"
+            onClick={() => cancelSelection()}
+          >
+            Cancel
+          </BarBtn>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="pointer-events-none absolute left-1/2 top-0 z-30 w-max max-w-[calc(100%-1rem)] -translate-x-1/2 pt-2.5">
       <div
@@ -155,10 +225,22 @@ export function ContextualTaskBar() {
         aria-label="Contextual task bar"
       >
         <BarBtn
+          disabled={locked || inpaintBtn.disabled}
+          busy={busy === 'RemoveObject'}
+          icon={Scissors}
+          title={inpaintBtn.disabled
+            ? inpaintBtn.title
+            : `Draw a selection, then press Cut — ${inpaintEngine} removes it`}
+          onClick={() => run('RemoveObject', () => beginRemoveFromImage('Rectangle'))}
+        >
+          Remove from image
+        </BarBtn>
+
+        <BarBtn
           disabled={locked}
           busy={busy === 'SelectSubject'}
           icon={UserRound}
-          title={`Select subject · ${cutoutLabel}`}
+          title={`Select subject · ${cutoutLabel} · base stays untouched`}
           onClick={() => run('SelectSubject', () => runMatteCutout({
             model: cutoutModel,
             target: 'canvas',
@@ -183,10 +265,24 @@ export function ContextualTaskBar() {
         </BarBtn>
 
         <BarBtn
+          disabled={locked || !selectedCutout || inpaintBtn.disabled}
+          busy={busy === 'CleanBG'}
+          icon={Eraser}
+          title={selectedCutout
+            ? (inpaintBtn.disabled
+              ? inpaintBtn.title
+              : `Clean base under “${selectedCutout.name}” with ${inpaintEngine} (uses the cutout mask)`)
+            : 'Select a cutout layer first'}
+          onClick={() => run('CleanBG', () => cleanBackgroundFromSelected())}
+        >
+          Clean background
+        </BarBtn>
+
+        <BarBtn
           disabled={locked}
           busy={busy === 'Matte'}
           icon={Sparkles}
-          title={`${isGrabCut ? 'GrabCut' : 'Soft matte'} → layer · ${cutoutLabel}`}
+          title={`${cutoutLabel} → layer`}
           onClick={() => run('Matte', () => runMatteCutout({
             model: cutoutModel,
             target: 'canvas',
@@ -228,9 +324,7 @@ export function ContextualTaskBar() {
                 </div>
               </label>
               <p className="mt-2 text-[10px] leading-snug text-zinc-600">
-                {isGrabCut
-                  ? 'OpenCV GrabCut only — no rembg. Also used by the rectangle tool.'
-                  : 'Selected rembg matte only — GrabCut is a separate option, not a fallback.'}
+                Soft matte engine for Select subject and Remove background.
               </p>
             </div>
           )}

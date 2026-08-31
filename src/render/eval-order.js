@@ -4,17 +4,10 @@
  */
 
 export const EVAL_ORDER_STEPS = Object.freeze([
-  'map-loop',
-  'resolve-source-frame',
   'static-layer-properties',
-  'absolute-tracks',
-  'multiply-tracks',
-  'additive-tracks-procedural',
-  'parallax',
-  'pose-mesh-warp',
   'composite-by-layer-order',
   'secure-redaction-last',
-  'export-color-palette',
+  'export-png',
 ])
 
 /** Index of the secure redaction pass — must be after composite. */

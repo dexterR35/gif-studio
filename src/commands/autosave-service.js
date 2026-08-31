@@ -11,7 +11,7 @@ export class AutosaveService {
    * }} [opts]
    */
   constructor(opts = {}) {
-    this.storageKey = opts.storageKey || 'gif-studio:autosave:v2'
+    this.storageKey = opts.storageKey || 'image-studio:autosave:v2'
     this.debounceMs = opts.debounceMs ?? 500
     this.storage = opts.storage || (typeof localStorage !== 'undefined' ? localStorage : null)
     this._timer = null

@@ -80,26 +80,6 @@ export function checkProjectInvariants(project) {
     }
   }
 
-  // Timeline targets
-  const timeline = project.timeline || {}
-  for (const trackId of timeline.trackOrder || []) {
-    const track = timeline.tracks?.[trackId]
-    if (!track) {
-      errors.push(`trackOrder references missing track ${trackId}`)
-      continue
-    }
-    const lid = track.target?.layerId
-    if (lid && !layers[lid]) {
-      errors.push(`track ${trackId} targets missing layer ${lid}`)
-    }
-    if (!Number.isInteger(timeline.durationUs) && timeline.durationUs != null) {
-      // duration checked once below
-    }
-  }
-  if (timeline.durationUs != null && !Number.isInteger(timeline.durationUs)) {
-    errors.push('timeline.durationUs must be an integer (microseconds)')
-  }
-
   // Orphan warning as soft error for strict mode
   for (const id of Object.keys(layers)) {
     if (!visited.has(id) && !rootLayerIds.includes(id)) {

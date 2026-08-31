@@ -17,8 +17,11 @@ const REQUIRED_PATHS = [
   '/api/v1/jobs/{job_id}',
   '/api/v1/jobs/{job_id}/cancel',
   '/api/v1/jobs/{job_id}/result',
-  '/api/export',
+  '/api/optimize-png',
+  '/api/ai/detect',
   '/api/ai/matte',
+  '/api/ai/inpaint',
+  '/api/ai/upscale',
 ]
 
 let doc

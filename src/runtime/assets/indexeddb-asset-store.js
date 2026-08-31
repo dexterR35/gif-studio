@@ -3,7 +3,7 @@
  * Falls back to an in-memory Map when IndexedDB is unavailable (Node tests).
  */
 
-const DB_NAME = 'gif-studio-assets'
+const DB_NAME = 'image-studio-assets'
 const STORE_NAME = 'assets'
 const DB_VERSION = 1
 

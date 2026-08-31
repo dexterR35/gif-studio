@@ -2,8 +2,8 @@
  * Polite / assertive live-region announcers for DOM (Phase 13).
  */
 
-export const LIVE_REGION_POLITE_ID = 'gif-studio-live-polite'
-export const LIVE_REGION_ASSERTIVE_ID = 'gif-studio-live-assertive'
+export const LIVE_REGION_POLITE_ID = 'image-studio-live-polite'
+export const LIVE_REGION_ASSERTIVE_ID = 'image-studio-live-assertive'
 
 /**
  * Ensure polite + assertive live regions exist under `root` (or document.body).
@@ -53,11 +53,11 @@ export function announce(message, priority = 'polite') {
   // Clear then set so identical consecutive messages are announced
   el.textContent = ''
   if (!text) return
-  // Microtask / rAF-friendly: browsers often ignore same-tick updates
-  if (typeof requestAnimationFrame === 'function') {
-    requestAnimationFrame(() => {
+  // Browsers often ignore a clear-and-reset in the same task.
+  if (typeof setTimeout === 'function') {
+    setTimeout(() => {
       el.textContent = text
-    })
+    }, 0)
   } else {
     el.textContent = text
   }

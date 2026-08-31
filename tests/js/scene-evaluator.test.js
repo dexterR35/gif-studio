@@ -3,7 +3,7 @@ import { createEmptyProjectV2 } from '../../src/domain/index.js'
 import { evaluate, assertRedactionLast, firstRedactionPassIndex } from '../../src/render/index.js'
 
 function sampleProject() {
-  const doc = createEmptyProjectV2({ projectSeed: 'eval-seed', durationUs: 1_000_000 })
+  const doc = createEmptyProjectV2()
   doc.assets['img'] = {
     id: 'img',
     kind: 'image',
@@ -26,9 +26,7 @@ function sampleProject() {
       x: 0, y: 0, scaleX: 1, scaleY: 1, rotationDeg: 0, anchorX: 0.5, anchorY: 0.5,
     },
     effects: [],
-    animationTrackIds: ['track-noise'],
     assetId: 'img',
-    cutoutMotion: 'None',
   }
   doc.layers['redact1'] = {
     id: 'redact1',
@@ -42,32 +40,24 @@ function sampleProject() {
   }
   // Place redaction in the middle of root order — evaluator must still emit it last
   doc.rootLayerIds = ['redact1', 'bg']
-  doc.timeline.tracks['track-noise'] = {
-    id: 'track-noise',
-    target: { layerId: 'bg', property: 'x' },
-    mode: 'additive',
-    keyframes: [],
-    modifiers: [{ id: 'n1', type: 'Noise', amplitude: 5, speed: 1 }],
-  }
-  doc.timeline.trackOrder = ['track-noise']
   return doc
 }
 
 describe('SceneEvaluator', () => {
-  it('seeded determinism for identical inputs', () => {
+  it('returns the same static plan for identical inputs', () => {
     const project = sampleProject()
-    const a = evaluate(project, 250_000, {}, { frameIndex: 6 })
-    const b = evaluate(project, 250_000, {}, { frameIndex: 6 })
+    const a = evaluate(project, {})
+    const b = evaluate(project, {})
     expect(a).toEqual(b)
 
     const layerPass = a.passes.find((p) => p.kind === 'layer' && p.layerId === 'bg')
-    expect(layerPass.payload.seed).toBeTypeOf('number')
-    expect(layerPass.payload.transform.x).toBeTypeOf('number')
+    expect(layerPass.payload.transform.x).toBe(0)
+    expect(layerPass.payload.opacity).toBe(1)
   })
 
   it('places redaction last in plan (before export-convert)', () => {
     const project = sampleProject()
-    const plan = evaluate(project, 0, {})
+    const plan = evaluate(project, {})
     expect(assertRedactionLast(plan)).toBe(true)
     const redactionIdx = firstRedactionPassIndex(plan)
     const layerIdx = plan.passes.findIndex((p) => p.kind === 'layer')

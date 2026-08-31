@@ -18,8 +18,3 @@ export {
   capabilityButtonProps,
   requireCapabilities,
 } from './capability-honesty.js'
-
-export {
-  prefersReducedMotion,
-  onReducedMotionChange,
-} from './reduced-motion.js'

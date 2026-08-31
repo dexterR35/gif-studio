@@ -7,7 +7,7 @@ export function Card({ children, selected = false, interactive = false, classNam
   return (
     <Tag
       className={cn(
-        'rounded-[10px] border p-2 transition',
+        'rounded-[10px] border p-2',
         selected
           ? 'border-acid/40 bg-acid/[.06]'
           : 'border-white/[.06] bg-surface',
@@ -53,7 +53,7 @@ export function LayerRow({
       data-layer-kind={layerKind || undefined}
       data-layer-id={layerId || undefined}
       className={cn(
-        'flex flex-col gap-1 transition',
+        'flex flex-col gap-1',
         dragging && 'opacity-55 ring-1 ring-acid/40',
         dropTarget && !dragging && 'border-acid/50 bg-acid/[.08]',
         className,
@@ -84,7 +84,7 @@ export function LayerRow({
               onToggleVisible?.()
             }}
             className={cn(
-              'grid h-6 w-6 shrink-0 place-items-center rounded-md transition',
+              'grid h-6 w-6 shrink-0 place-items-center rounded-md',
               visible ? 'text-zinc-300 hover:text-white' : 'text-zinc-600 hover:text-zinc-400',
               !onToggleVisible && 'pointer-events-none',
             )}
@@ -111,7 +111,7 @@ export function LayerRow({
             title={locked ? 'Unlock' : 'Lock'}
             onClick={(e) => { e.stopPropagation(); onToggleLock() }}
             className={cn(
-              'grid h-6 w-6 shrink-0 place-items-center rounded-md border border-white/[.06] transition',
+              'grid h-6 w-6 shrink-0 place-items-center rounded-md border border-white/[.06]',
               locked ? 'text-amber-300' : 'text-zinc-600 hover:text-zinc-300',
             )}
           >
@@ -125,7 +125,7 @@ export function LayerRow({
             disabled={locked}
             onClick={(e) => { e.stopPropagation(); if (!locked) onRemove() }}
             className={cn(
-              'grid h-6 w-6 shrink-0 place-items-center rounded-md border border-white/[.06] transition',
+              'grid h-6 w-6 shrink-0 place-items-center rounded-md border border-white/[.06]',
               locked ? 'cursor-not-allowed text-zinc-700' : 'text-zinc-600 hover:border-red-500/30 hover:text-red-300',
             )}
           >

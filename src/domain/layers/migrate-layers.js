@@ -1,6 +1,3 @@
-import { defaultCutoutMotion } from '../timeline/procedural-motion.js'
-import { msToUs } from '../timeline/time.js'
-
 function identityTransform(overrides = {}) {
   return {
     x: 0,
@@ -26,8 +23,14 @@ function visualCommon(id, name, extras = {}) {
     blendMode: extras.blendMode || 'source-over',
     transform: extras.transform || identityTransform(),
     effects: extras.effects || [],
-    animationTrackIds: extras.animationTrackIds || [],
   }
+}
+
+function staticImageMimeType(value) {
+  const mimeType = String(value || '').toLowerCase()
+  return ['image/png', 'image/jpeg', 'image/webp'].includes(mimeType)
+    ? mimeType
+    : 'image/png'
 }
 
 /**
@@ -62,8 +65,6 @@ export function migrateLayersFromV1(v1, ctx = {}) {
         byteLength: meta.byteLength ?? 0,
         width: meta.width,
         height: meta.height,
-        frameCount: meta.frameCount,
-        durationUs: meta.durationUs,
         storageKey: meta.storageKey || `migrated:${id}`,
       }
     }
@@ -74,13 +75,11 @@ export function migrateLayersFromV1(v1, ctx = {}) {
   const source = v1?.source
   let sourceAssetId = null
   if (source && typeof source === 'object') {
-    sourceAssetId = ensureAssetFromUrl(source.url || source.storageKey, source.animated ? 'animated-image' : 'image', {
+    sourceAssetId = ensureAssetFromUrl(source.url || source.storageKey, 'image', {
       id: 'asset-source',
-      mimeType: source.mimeType || (source.animated ? 'image/gif' : 'image/png'),
+      mimeType: staticImageMimeType(source.mimeType),
       width: source.width,
       height: source.height,
-      frameCount: source.frameCount,
-      durationUs: source.durationUs ?? (source.duration != null ? msToUs(source.duration * 1000) : undefined),
       storageKey: source.storageKey || 'migrated:source',
       checksumSha256: source.checksumSha256 || 'pending',
       byteLength: source.byteLength ?? 0,
@@ -90,14 +89,12 @@ export function migrateLayersFromV1(v1, ctx = {}) {
       sourceAssetId = 'asset-source'
       assets[sourceAssetId] = {
         id: sourceAssetId,
-        kind: source.animated || source.kind === 'gif' ? 'animated-image' : 'image',
-        mimeType: source.mimeType || (source.kind === 'gif' ? 'image/gif' : 'image/png'),
+        kind: 'image',
+        mimeType: staticImageMimeType(source.mimeType),
         checksumSha256: source.checksumSha256 || 'pending',
         byteLength: source.byteLength ?? 0,
         width: source.width,
         height: source.height,
-        frameCount: source.frameCount,
-        durationUs: source.durationUs ?? (source.duration != null ? msToUs(source.duration * 1000) : undefined),
         storageKey: source.storageKey || 'session:source',
       }
     }
@@ -153,7 +150,6 @@ export function migrateLayersFromV1(v1, ctx = {}) {
       type: 'raster',
       assetId: activeAssetId,
       ...(rollbackAssetId ? { rollbackAssetId } : {}),
-      cutoutMotion: defaultCutoutMotion(),
     }
     rootLayerIds.push(bgId)
   }
@@ -195,7 +191,6 @@ export function migrateLayersFromV1(v1, ctx = {}) {
       }),
       type: 'raster',
       assetId,
-      cutoutMotion: el.motion || defaultCutoutMotion(),
       mediaMapping: {
         kind: 'cutout-rect',
         legacyKind: 'element',
@@ -203,9 +198,12 @@ export function migrateLayersFromV1(v1, ctx = {}) {
         y: Number(el.y) || 0,
         w: Number(el.w) || 0,
         h: Number(el.h) || 0,
-        amplitude: el.amplitude != null ? Number(el.amplitude) : 5,
-        speed: el.speed != null ? Number(el.speed) : 1,
-        depth: el.depth != null ? Number(el.depth) : 50,
+        sourceRect: {
+          x: Number(el.sourceRect?.x ?? el.x) || 0,
+          y: Number(el.sourceRect?.y ?? el.y) || 0,
+          w: Number(el.sourceRect?.w ?? el.w) || 0,
+          h: Number(el.sourceRect?.h ?? el.h) || 0,
+        },
         anchorX: el.anchorX != null ? Number(el.anchorX) : 50,
         anchorY: el.anchorY != null ? Number(el.anchorY) : 50,
         cutoutMode: el.cutoutMode,

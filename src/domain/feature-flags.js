@@ -7,7 +7,6 @@ const DEFAULT_FLAGS = Object.freeze({
   unifiedLayers: true,
   commandHistory: true,
   sceneEvaluatorV2: true,
-  workerDecode: false,
   taskManagerV2: true,
   serverJobsV2: false,
 })

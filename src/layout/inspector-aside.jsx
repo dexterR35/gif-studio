@@ -14,7 +14,6 @@ import {
   Field,
   FormGrid,
   Hint,
-  RangeEnds,
   Section,
   SelectField,
   Slider,
@@ -23,9 +22,8 @@ import {
   Textarea,
   ToggleGroup,
 } from '../components/ui'
-import { JointAnimPanel } from '../components/studio/joint-anim-panel'
 import { useStudio } from '../context/studio-provider'
-import { FIT_MODES, LAYER_MOTION_OPTIONS } from '../lib/catalogs'
+import { FIT_MODES } from '../lib/catalogs'
 import { cn } from '../lib/cn'
 import { KONVA_FILTER_TYPES, createFilterEntry } from '../engine/konva-filters'
 import { SecondaryAside } from './secondary-aside'
@@ -188,7 +186,7 @@ function ArtboardPanel() {
 
   return (
     <>
-      <Section title="Artboard" info="Output board size. Separate from the base-image background layer. Not on the timeline." open>
+      <Section title="Artboard" info="Output board size, separate from the base-image background layer." open>
         <div className="gs-chip-row stretch mb-3">
           <button
             type="button"
@@ -217,12 +215,8 @@ function ArtboardPanel() {
 
 function BaseTransformPanel() {
   const {
-    settings, setSettings, update, imageLocked, resetMotionAnchor,
+    settings, setSettings, update, imageLocked, resetTransformAnchor,
   } = useStudio()
-
-  const setBoth = (startKey, endKey, value) => {
-    setSettings((current) => ({ ...current, [startKey]: value, [endKey]: value }))
-  }
 
   const filters = settings.imageFilters || []
 
@@ -264,24 +258,23 @@ function BaseTransformPanel() {
       </Section>
 
       <TransformFields
-        rotation={settings.rotateStart}
-        opacity={settings.opacityStart}
-        onRotation={(v) => setBoth('rotateStart', 'rotateEnd', v)}
-        onOpacity={(v) => setBoth('opacityStart', 'opacityEnd', v)}
-        posX={settings.xStart}
-        posY={settings.yStart}
-        onPosX={(v) => setBoth('xStart', 'xEnd', v)}
-        onPosY={(v) => setBoth('yStart', 'yEnd', v)}
-        scaleX={settings.scaleStart}
-        scaleY={settings.scaleEnd}
-        onScaleX={(v) => setBoth('scaleStart', 'scaleEnd', v)}
+        rotation={settings.rotation}
+        opacity={settings.opacity}
+        onRotation={(v) => update('rotation', v)}
+        onOpacity={(v) => update('opacity', v)}
+        posX={settings.x}
+        posY={settings.y}
+        onPosX={(v) => update('x', v)}
+        onPosY={(v) => update('y', v)}
+        scaleX={settings.scale}
+        onScaleX={(v) => update('scale', v)}
         scaleLinked
         posMin={-100}
         posMax={100}
         anchorX={settings.anchorX}
         anchorY={settings.anchorY}
         onAnchor={(key, value) => update(key, value)}
-        onResetAnchor={resetMotionAnchor}
+        onResetAnchor={resetTransformAnchor}
         disabled={imageLocked}
         rotationMin={-180}
         rotationMax={180}
@@ -414,8 +407,7 @@ function SelectionOptionsPanel() {
 }
 
 function ElementTransformPanel({ el }) {
-  const { updateElement, resetMotionAnchor, activeTab } = useStudio()
-  const showMotion = activeTab === 'motion' || activeTab === 'ai'
+  const { updateElement, resetTransformAnchor } = useStudio()
 
   return (
     <>
@@ -435,77 +427,23 @@ function ElementTransformPanel({ el }) {
         anchorX={el.anchorX}
         anchorY={el.anchorY}
         onAnchor={(key, value) => updateElement(key, value)}
-        onResetAnchor={resetMotionAnchor}
+        onResetAnchor={resetTransformAnchor}
         disabled={el.locked}
       />
-
-      {showMotion && (
-        <Section title="Motion" open>
-          <div className={el.locked ? 'pointer-events-none opacity-40' : ''}>
-            <SelectField label="Animation" value={el.motion} onChange={(v) => updateElement('motion', v)}>
-              {LAYER_MOTION_OPTIONS.map((x) => (
-                <option key={x}>{x}</option>
-              ))}
-            </SelectField>
-            <Slider className="mt-3 gs-row" label="Amount" suffix="%" min={0} max={40} value={el.amplitude} onChange={(v) => updateElement('amplitude', v)} />
-            <Slider className="gs-row" label="Speed" suffix="×" min={0.1} max={8} step={0.1} value={el.speed} onChange={(v) => updateElement('speed', v)} />
-            <Slider className="gs-row" label="Parallax depth" suffix="%" min={0} max={100} value={el.depth ?? 50} onChange={(v) => updateElement('depth', v)} />
-            <RangeEnds className="mt-1" left="Far" right="Near" />
-          </div>
-        </Section>
-      )}
     </>
   )
 }
 
-function ParallaxPanel({ layers }) {
-  const { parallax, setParallax, updateElementById } = useStudio()
-
+function MultipleSelectionPanel({ count }) {
   return (
-    <>
-      <Section title="Parallax scene" info="Far layers travel less, near layers more." open>
-        <p className="mb-3 text-[11px] text-zinc-500">{layers.length} layers selected</p>
-        <Switch
-          label="Enable group parallax"
-          checked={parallax.enabled}
-          onChange={(v) => setParallax((current) => ({ ...current, enabled: v }))}
-        />
-        <div className={`mt-3 transition ${parallax.enabled ? '' : 'pointer-events-none opacity-40'}`}>
-          <SelectField
-            label="Travel path"
-            value={parallax.direction}
-            onChange={(v) => setParallax((current) => ({ ...current, direction: v }))}
-          >
-            {['Horizontal', 'Vertical', 'Diagonal', 'Orbit'].map((x) => (
-              <option key={x}>{x}</option>
-            ))}
-          </SelectField>
-          <Slider className="mt-2 gs-row" label="Strength" suffix="%" min={0} max={40} value={parallax.strength} onChange={(v) => setParallax((current) => ({ ...current, strength: v }))} />
-          <Slider className="gs-row" label="Speed" suffix="×" min={0.1} max={8} step={0.1} value={parallax.speed} onChange={(v) => setParallax((current) => ({ ...current, speed: v }))} />
-        </div>
-        <Hint className="mt-3">Set depth per layer below.</Hint>
-      </Section>
-
-      <Section title="Layer depths" open>
-        {layers.map((el) => (
-          <Slider
-            key={el.id}
-            className="gs-row"
-            label={el.name}
-            suffix="%"
-            min={0}
-            max={100}
-            value={el.depth ?? 50}
-            onChange={(v) => updateElementById(el.id, 'depth', v)}
-          />
-        ))}
-      </Section>
-    </>
+    <Section title="Multiple selection" open>
+      <Hint>{count} layers selected. Choose one primary layer to edit its transform.</Hint>
+    </Section>
   )
 }
 
 function OverlayTransformPanel({ overlay }) {
-  const { updateOverlay, resetMotionAnchor } = useStudio()
+  const { updateOverlay, resetTransformAnchor } = useStudio()
 
   return (
     <TransformFields
@@ -526,7 +464,7 @@ function OverlayTransformPanel({ overlay }) {
       anchorX={overlay.anchorX}
       anchorY={overlay.anchorY}
       onAnchor={(key, value) => updateOverlay(key, value)}
-      onResetAnchor={resetMotionAnchor}
+      onResetAnchor={resetTransformAnchor}
     />
   )
 }
@@ -627,11 +565,9 @@ function TextPropertiesPanel({ layer }) {
   )
 }
 
-/** Properties inspector (2nd bar) — settings for the active selection / workspace.
- *  Effects processing lives here; Background / Transform stay for Motion / AI / Text. */
+/** Properties inspector for the active selection or workspace. */
 export function InspectorAside({ floating = false }) {
   const {
-    activeTab,
     artboardSelected,
     setArtboardSelected,
     baseImageSelected,
@@ -650,7 +586,6 @@ export function InspectorAside({ floating = false }) {
     selectMode,
     setSelectMode,
     cancelSelection,
-    poseRig, setPoseRig,
   } = useStudio()
 
   const selectedLayers = elements.filter((el) => selectedElements.includes(el.id))
@@ -658,10 +593,9 @@ export function InspectorAside({ floating = false }) {
   const single = selectedLayers.length === 1 ? selectedLayers[0] : null
   const overlay = overlays.find((item) => item.id === selectedOverlay) || null
   const textLayer = textLayers.find((item) => item.id === selectedText) || null
-  const jointsOpen = Boolean(poseRig.panelOpen && poseRig.joints?.length)
 
   const open = Boolean(
-    maskEditing || selectMode || jointsOpen || artboardSelected
+    maskEditing || selectMode || artboardSelected
     || textLayer
     || baseImageSelected || selectedLayers.length > 0 || Boolean(overlay),
   )
@@ -669,7 +603,6 @@ export function InspectorAside({ floating = false }) {
   let title = 'Properties'
   if (maskEditing) title = maskBrush?.mode === 'Hide' ? 'Erase' : 'Mask'
   else if (selectMode) title = 'Selection'
-  else if (jointsOpen) title = 'Joint animation'
   else if (artboardSelected) title = 'Artboard'
   else if (textLayer) title = textLayer.name || 'Text'
   else if (multi) title = `${selectedLayers.length} layers`
@@ -683,7 +616,6 @@ export function InspectorAside({ floating = false }) {
     setSelectedOverlay(null)
     setSelectedText(null)
     setMaskEditing(false)
-    setPoseRig((current) => ({ ...current, panelOpen: false }))
     if (selectMode) {
       cancelSelection()
       setSelectMode(false)
@@ -693,10 +625,9 @@ export function InspectorAside({ floating = false }) {
   let body = null
   if (maskEditing) body = <MaskPaintPanel />
   else if (selectMode) body = <SelectionOptionsPanel />
-  else if (jointsOpen) body = <JointAnimPanel />
   else if (artboardSelected) body = <ArtboardPanel />
   else if (textLayer) body = <TextPropertiesPanel layer={textLayer} />
-  else if (multi) body = <ParallaxPanel layers={selectedLayers} />
+  else if (multi) body = <MultipleSelectionPanel count={selectedLayers.length} />
   else if (single) body = <ElementTransformPanel el={single} />
   else if (overlay) body = <OverlayTransformPanel overlay={overlay} />
   else if (baseImageSelected) body = <BaseTransformPanel />
@@ -706,7 +637,7 @@ export function InspectorAside({ floating = false }) {
       open={open}
       title={title}
       onClose={close}
-      width={jointsOpen ? 280 : textLayer ? 260 : 228}
+      width={textLayer ? 260 : 228}
       floating={floating}
     >
       {body}

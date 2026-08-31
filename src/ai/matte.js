@@ -6,7 +6,7 @@ export async function matteWithModel({ imageCanvas, imageBlob, model = 'rembg-is
     imageCanvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not read canvas'))), 'image/png')
   })
   const form = new FormData()
-  form.append('image', blob, 'frame.png')
+  form.append('image', blob, 'image.png')
   if (model) form.append('model', model)
   return postMatte(form, { signal })
 }

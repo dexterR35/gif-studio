@@ -3,15 +3,14 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gif-studio-local"
+name = "image-studio-local"
 version = "0.1.0"
-description = "A local desktop app and automation CLI for animating a static image into a configurable GIF."
+description = "A local still-image editor with optional AI-assisted selection, cleanup, and upscaling."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "GIF Studio contributors" }]
+authors = [{ name = "Image Studio contributors" }]
 dependencies = [
-  "PySide6>=6.6",
   "Pillow>=10.2",
   "numpy>=1.26",
 ]
@@ -20,12 +19,7 @@ dependencies = [
 dev = [
   "pytest>=8",
   "ruff>=0.5",
-  "pyinstaller>=6.3",
 ]
-
-[project.scripts]
-gif-studio = "gif_studio.app:main"
-gif-studio-cli = "gif_studio.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
