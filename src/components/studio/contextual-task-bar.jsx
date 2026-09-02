@@ -59,7 +59,11 @@ export function ContextualTaskBar() {
     maskEditing,
     selectedElement,
     elements,
+    source,
+    overlays,
+    selectedOverlay,
     runMatteCutout,
+    removeBackgroundFromSelectedImage,
     cleanBackgroundFromSelected,
     beginRemoveFromImage,
     cancelSelection,
@@ -84,6 +88,11 @@ export function ContextualTaskBar() {
     () => elements.find((el) => el.id === selectedElement && (el.sourceBitmap || el.bitmap)),
     [elements, selectedElement],
   )
+  const selectedImage = useMemo(
+    () => overlays.find((overlay) => overlay.id === selectedOverlay && overlay.image),
+    [overlays, selectedOverlay],
+  )
+  const removeBackgroundTarget = selectedCutout || selectedImage || source
 
   const locked = Boolean(busy || studioLocked)
   // Keep bar visible while drawing erase selection or waiting for Cut.
@@ -239,15 +248,11 @@ export function ContextualTaskBar() {
         </BarBtn>
 
         <BarBtn
-          disabled={locked || !selectedCutout}
+          disabled={locked}
           busy={busy === 'RemoveBG'}
           icon={ImageMinus}
-          title={selectedCutout
-            ? `Remove background on “${selectedCutout.name}” only · base stays untouched · ${cutoutLabel}`
-            : 'Select a cutout layer first'}
-          onClick={() => run('RemoveBG', () => runMatteCutout({
-            target: 'selection',
-          }))}
+          title={`Remove background from “${removeBackgroundTarget?.name || 'current image'}” only · no subject selection needed · ${cutoutLabel}`}
+          onClick={() => run('RemoveBG', () => removeBackgroundFromSelectedImage())}
         >
           Remove background
         </BarBtn>

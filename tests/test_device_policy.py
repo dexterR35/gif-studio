@@ -45,6 +45,7 @@ def test_torch_device_falls_back_to_cpu(monkeypatch):
 def test_onnx_providers_prefer_cuda_then_cpu(monkeypatch):
     monkeypatch.delenv("IMAGE_STUDIO_TORCH_DEVICE", raising=False)
     monkeypatch.setattr(paths, "nvidia_present", lambda: True)
+    monkeypatch.setattr(paths, "prepare_onnx_cuda_runtime", lambda: True)
     monkeypatch.setitem(
         sys.modules,
         "onnxruntime",
@@ -69,6 +70,24 @@ def test_onnx_providers_fall_back_to_cpu(monkeypatch):
         sys.modules,
         "onnxruntime",
         SimpleNamespace(get_available_providers=lambda: ["CPUExecutionProvider"]),
+    )
+
+    assert paths.onnx_providers() == ["CPUExecutionProvider"]
+
+
+def test_onnx_providers_fall_back_when_cuda_runtime_is_broken(monkeypatch):
+    monkeypatch.delenv("IMAGE_STUDIO_TORCH_DEVICE", raising=False)
+    monkeypatch.setattr(paths, "nvidia_present", lambda: True)
+    monkeypatch.setattr(paths, "prepare_onnx_cuda_runtime", lambda: False)
+    monkeypatch.setitem(
+        sys.modules,
+        "onnxruntime",
+        SimpleNamespace(
+            get_available_providers=lambda: [
+                "CUDAExecutionProvider",
+                "CPUExecutionProvider",
+            ]
+        ),
     )
 
     assert paths.onnx_providers() == ["CPUExecutionProvider"]

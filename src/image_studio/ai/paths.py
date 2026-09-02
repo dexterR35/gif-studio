@@ -6,9 +6,15 @@ import os
 import shutil
 import subprocess
 import sys
+import warnings
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+# ``os.add_dll_directory`` returns handles whose lifetime controls whether the
+# directory remains in Windows' DLL search path. Keep them alive for the API
+# process; local variables would be closed before cuDNN lazily loads engines.
+_ONNX_CUDA_DLL_DIRECTORY_HANDLES: list[Any] = []
 
 
 def project_root() -> Path:
@@ -118,6 +124,45 @@ def torch_device():
     return torch.device("cpu")
 
 
+@lru_cache(maxsize=1)
+def prepare_onnx_cuda_runtime() -> bool:
+    """Make wheel-bundled CUDA/cuDNN libraries discoverable by ONNX Runtime.
+
+    cuDNN 9 loads several engine DLLs lazily. On Windows, loading the main
+    ``cudnn64_9.dll`` by absolute path is not enough: its later ``LoadLibrary``
+    calls still need every ``nvidia/*/bin`` directory registered. ONNX
+    Runtime's preload helper does not retain those registrations in all Python
+    and package combinations.
+    """
+    try:
+        import onnxruntime as ort
+
+        if os.name == "nt":
+            site_packages = Path(ort.__file__).resolve().parent.parent
+            nvidia_root = site_packages / "nvidia"
+            add_dll_directory = getattr(os, "add_dll_directory", None)
+            if nvidia_root.is_dir() and add_dll_directory is not None:
+                for bin_dir in sorted(nvidia_root.glob("*/bin")):
+                    if bin_dir.is_dir():
+                        _ONNX_CUDA_DLL_DIRECTORY_HANDLES.append(
+                            add_dll_directory(str(bin_dir))
+                        )
+
+        preload = getattr(ort, "preload_dlls", None)
+        if preload is not None:
+            # Empty string tells ORT to use NVIDIA runtime wheels in
+            # site-packages instead of relying on a machine-wide CUDA install.
+            preload(directory="")
+        return True
+    except Exception as exc:  # noqa: BLE001 - CUDA is optional; CPU remains valid
+        warnings.warn(
+            f"ONNX CUDA runtime could not be prepared; using CPU instead: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return False
+
+
 def onnx_providers() -> list[str]:
     """Return ONNX providers in CUDA-first, CPU-fallback order.
 
@@ -135,7 +180,11 @@ def onnx_providers() -> list[str]:
     except Exception:  # noqa: BLE001
         return ["CPUExecutionProvider"]
 
-    if "CUDAExecutionProvider" in available and nvidia_present():
+    if (
+        "CUDAExecutionProvider" in available
+        and nvidia_present()
+        and prepare_onnx_cuda_runtime()
+    ):
         return ["CUDAExecutionProvider", "CPUExecutionProvider"]
     return ["CPUExecutionProvider"]
 

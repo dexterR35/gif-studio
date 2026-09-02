@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from inspect import signature
 
+import cv2
+import numpy as np
 import pytest
 
 from image_studio import ai_pipeline
 from image_studio.ai import realesrgan_runner
+from image_studio.ai.paths import encode_png
 from image_studio.web_api import ai_upscale
 
 
@@ -56,3 +60,59 @@ def test_only_fixed_scales_are_accepted(scale):
 
 def test_upscale_endpoint_has_no_model_parameter():
     assert list(signature(ai_upscale).parameters) == ["image", "scale"]
+
+
+def test_rgba_upscale_preserves_soft_alpha(monkeypatch):
+    source = np.zeros((2, 2, 4), dtype=np.uint8)
+    source[:, :, :3] = (20, 40, 80)
+    source[:, :, 3] = np.array([[0, 64], [128, 255]], dtype=np.uint8)
+    opaque_upscale = np.full((4, 4, 3), (30, 60, 120), dtype=np.uint8)
+    seen: dict[str, np.ndarray] = {}
+
+    def fake_spandrel(image, scale):
+        seen["image"] = image
+        assert scale == 2
+        return encode_png(opaque_upscale), "fake-realesrgan-x2"
+
+    monkeypatch.setattr(realesrgan_runner, "spandrel_ready", lambda: True)
+    monkeypatch.setattr(realesrgan_runner, "_upscale_spandrel", fake_spandrel)
+    monkeypatch.setattr(realesrgan_runner, "_upscale_resource_limits", nullcontext)
+
+    output, engine = realesrgan_runner.upscale_with_realesrgan(
+        encode_png(source),
+        scale=2,
+    )
+    decoded = cv2.imdecode(np.frombuffer(output, np.uint8), cv2.IMREAD_UNCHANGED)
+    expected_alpha = cv2.resize(
+        source[:, :, 3],
+        (4, 4),
+        interpolation=cv2.INTER_LINEAR,
+    )
+
+    assert engine == "fake-realesrgan-x2"
+    assert seen["image"].shape == (2, 2, 3)
+    assert decoded.shape == (4, 4, 4)
+    np.testing.assert_array_equal(decoded[:, :, 3], expected_alpha)
+    assert 0 < decoded[1, 1, 3] < 255
+
+
+def test_rgb_upscale_remains_rgb(monkeypatch):
+    source = np.full((2, 2, 3), (20, 40, 80), dtype=np.uint8)
+    opaque_upscale = np.full((4, 4, 3), (30, 60, 120), dtype=np.uint8)
+    encoded_upscale = encode_png(opaque_upscale)
+
+    monkeypatch.setattr(realesrgan_runner, "spandrel_ready", lambda: True)
+    monkeypatch.setattr(
+        realesrgan_runner,
+        "_upscale_spandrel",
+        lambda image, scale: (encoded_upscale, "fake-realesrgan-x2"),
+    )
+    monkeypatch.setattr(realesrgan_runner, "_upscale_resource_limits", nullcontext)
+
+    output, _engine = realesrgan_runner.upscale_with_realesrgan(
+        encode_png(source),
+        scale=2,
+    )
+    decoded = cv2.imdecode(np.frombuffer(output, np.uint8), cv2.IMREAD_UNCHANGED)
+
+    assert decoded.shape == (4, 4, 3)

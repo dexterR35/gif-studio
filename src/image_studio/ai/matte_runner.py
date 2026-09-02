@@ -21,8 +21,8 @@ def matte_ready() -> bool:
     return resolve_matte() is not None
 
 
-@lru_cache(maxsize=1)
-def _birefnet_session():
+@lru_cache(maxsize=2)
+def _birefnet_session(force_cpu: bool = False):
     """Load the one supported matte model from the workspace, never the network."""
     if importlib.util.find_spec("rembg") is None:
         raise RuntimeError("rembg is not installed. pip install rembg")
@@ -33,12 +33,7 @@ def _birefnet_session():
             "BiRefNet is unavailable. Run: python scripts/setup_ai_models.py"
         )
     os.environ["U2NET_HOME"] = str(os.path.dirname(spec["path"]))
-    providers = onnx_providers()
-    if providers[0] == "CUDAExecutionProvider":
-        import onnxruntime as ort
-
-        if hasattr(ort, "preload_dlls"):
-            ort.preload_dlls(directory="")
+    providers = ["CPUExecutionProvider"] if force_cpu else onnx_providers()
     from rembg import new_session
 
     return new_session(spec["rembg"], providers=providers)
@@ -48,7 +43,27 @@ def matte_with_model(payload: bytes) -> dict[str, Any]:
     """Return a soft BiRefNet alpha mask and RGBA cutout."""
     from rembg import remove
 
-    result = remove(payload, session=_birefnet_session(), post_process_mask=False)
+    session = _birefnet_session()
+    try:
+        result = remove(payload, session=session, post_process_mask=False)
+    except Exception as exc:  # noqa: BLE001 - retry only known GPU runtime failures
+        message = str(exc).lower()
+        cuda_failure = any(
+            marker in message
+            for marker in ("cuda", "cudnn", "cublas", "cudaexecutionprovider", ".dll")
+        )
+        inner_session = getattr(session, "inner_session", session)
+        active_providers = set(getattr(inner_session, "get_providers", lambda: [])())
+        if not cuda_failure or "CUDAExecutionProvider" not in active_providers:
+            raise
+        # CPUExecutionProvider does not automatically retry a CUDA kernel that
+        # fails at runtime. Recreate the session on CPU so a broken/mismatched
+        # local CUDA stack degrades gracefully instead of failing the request.
+        result = remove(
+            payload,
+            session=_birefnet_session(force_cpu=True),
+            post_process_mask=False,
+        )
     decoded = cv2.imdecode(np.frombuffer(result, np.uint8), cv2.IMREAD_UNCHANGED)
     if decoded is None or decoded.ndim < 3 or decoded.shape[2] < 4:
         raise RuntimeError("Matte failed — no alpha channel returned")

@@ -1561,6 +1561,116 @@ export function StudioProvider({ children }) {
     }
   }
 
+  /**
+   * Remove the background from the currently selected image without requiring a
+   * Select Subject pass. Added image layers are updated in place; otherwise the
+   * current upload/base image is used. Existing cutouts keep their editable-mask
+   * rematte workflow above.
+   */
+  const removeBackgroundFromSelectedImage = async () => {
+    const selectedCutout = elements.find(
+      (item) => item.id === selectedElement && (item.sourceBitmap || item.bitmap),
+    )
+    if (selectedCutout) return rematteSelectedLayer()
+
+    const selectedImage = overlays.find((item) => item.id === selectedOverlay && item.image)
+    const targetImage = selectedImage?.image || image
+    const targetName = selectedImage?.name || source?.name || 'image'
+    if (!targetImage) {
+      setToast('Open an image first')
+      return null
+    }
+    if (!assertStudioIdle()) return null
+
+    const width = targetImage.naturalWidth || targetImage.width
+    const height = targetImage.naturalHeight || targetImage.height
+    if (width < 2 || height < 2) {
+      setToast('Image is too small to remove its background')
+      return null
+    }
+
+    // Give transparent source pixels a neutral plate so they do not confuse the matte.
+    const sourceCanvas = document.createElement('canvas')
+    sourceCanvas.width = width
+    sourceCanvas.height = height
+    const sourceContext = sourceCanvas.getContext('2d')
+    sourceContext.fillStyle = '#808080'
+    sourceContext.fillRect(0, 0, width, height)
+    sourceContext.drawImage(targetImage, 0, 0, width, height)
+
+    beginBusy('Removing background…')
+    setToast(`Removing background from ${targetName}…`)
+    let nextUrl = null
+    try {
+      const { matteWithModel } = await import('../ai/matte')
+      const result = await matteWithModel({ imageCanvas: sourceCanvas })
+      const bitmap = document.createElement('canvas')
+      bitmap.width = width
+      bitmap.height = height
+      const bitmapContext = bitmap.getContext('2d')
+
+      if (result.rgba_png_base64) {
+        const matteImage = await imageFromUrl(`data:image/png;base64,${result.rgba_png_base64}`)
+        bitmapContext.drawImage(matteImage, 0, 0, width, height)
+      } else if (result.mask_png_base64) {
+        const maskImage = await imageFromUrl(`data:image/png;base64,${result.mask_png_base64}`)
+        const maskCanvas = visibleMaskCanvas(maskImage, width, height)
+        // Preserve the selected image's own RGB pixels; only its alpha is replaced.
+        bitmapContext.drawImage(targetImage, 0, 0, width, height)
+        bitmapContext.globalCompositeOperation = 'destination-in'
+        bitmapContext.drawImage(maskCanvas, 0, 0)
+        bitmapContext.globalCompositeOperation = 'source-over'
+      } else {
+        throw new Error('Background removal returned no transparent image')
+      }
+
+      nextUrl = await blobUrlFromCanvas(bitmap)
+      const nextImage = await imageFromUrl(nextUrl)
+      const engine = result.engine || 'BiRefNet'
+
+      if (selectedImage) {
+        const previousUrl = selectedImage.url
+        setOverlays((current) => current.map((item) => (
+          item.id === selectedImage.id
+            ? {
+                ...item,
+                image: nextImage,
+                url: nextUrl,
+                backgroundRemoved: true,
+                matteEngine: engine,
+              }
+            : item
+        )))
+        revokeBlobUrl(previousUrl)
+        setSelectedOverlay(selectedImage.id)
+      } else {
+        replaceSource({
+          ...source,
+          url: nextUrl,
+          width,
+          height,
+          mimeType: 'image/png',
+          backgroundRemoved: true,
+          matteEngine: engine,
+        }, { preserveCanvasSize: true })
+        setImageVisible(true)
+        setSettings((current) => ({ ...current, transparent: true }))
+        selectBaseImage()
+      }
+
+      nextUrl = null
+      trackCutoutApplied({ method: 'ai', kind: selectedImage ? 'overlay-background' : 'image-background' })
+      setToast(`Background removed from ${targetName} only · ${engine}`)
+      return selectedImage?.id || 'base-image'
+    } catch (err) {
+      if (nextUrl) revokeBlobUrl(nextUrl)
+      setToast(err?.message || 'Remove background failed')
+      return null
+    } finally {
+      endBusy()
+    }
+  }
+
   /** Layer from the backend selection cutout; rect is in canvas pixels. */
   const addElementFromDetectCutout = async (result, { name = 'AI layer', engine = 'ai' } = {}) => {
     const sourceCanvas = canvasRef.current
@@ -2475,6 +2585,132 @@ export function StudioProvider({ children }) {
     }
   }
 
+  /**
+   * Per-upload finish workflow: remove the source background, then upscale the
+   * resulting transparent PNG. The original source stays available for rollback.
+   */
+  const runRemoveBackgroundAndUpscale = async ({ scale = 2 } = {}) => {
+    if (!image) {
+      setToast('Open an image first')
+      return null
+    }
+    if (!assertStudioIdle()) return null
+    const normalizedScale = Number(scale)
+    if (![2, 4].includes(normalizedScale)) throw new Error('Real-ESRGAN scale must be 2 or 4.')
+
+    const gen = ++enhanceGenRef.current
+    ioLockRef.current = true
+    setScaleBusy(true)
+    setBusyLabel('Removing background...')
+    setToast('Removing background...')
+
+    try {
+      return await runStudioTask({
+        kind: 'upscale',
+        backend: 'server',
+        run: async ({ setProgress }) => {
+          const sourceCanvas = document.createElement('canvas')
+          sourceCanvas.width = image.naturalWidth || image.width
+          sourceCanvas.height = image.naturalHeight || image.height
+          sourceCanvas.getContext('2d').drawImage(image, 0, 0)
+
+          const { runBackgroundRemovalUpscaleWorkflow } = await import('../ai/layer-workflow')
+          const workflow = await runBackgroundRemovalUpscaleWorkflow({
+            scale: normalizedScale,
+            removeBackground: async () => {
+              setProgress(0.05)
+              const { matteWithModel } = await import('../ai/matte')
+              const matte = await matteWithModel({ imageCanvas: sourceCanvas })
+              if (gen !== enhanceGenRef.current) return null
+
+              const cutout = document.createElement('canvas')
+              cutout.width = sourceCanvas.width
+              cutout.height = sourceCanvas.height
+              const cutoutContext = cutout.getContext('2d')
+
+              if (matte.rgba_png_base64) {
+                const matteImage = await imageFromUrl(`data:image/png;base64,${matte.rgba_png_base64}`)
+                cutoutContext.drawImage(matteImage, 0, 0, cutout.width, cutout.height)
+              } else if (matte.mask_png_base64) {
+                const maskImage = await imageFromUrl(`data:image/png;base64,${matte.mask_png_base64}`)
+                cutoutContext.drawImage(sourceCanvas, 0, 0)
+                cutoutContext.globalCompositeOperation = 'destination-in'
+                cutoutContext.drawImage(maskImage, 0, 0, cutout.width, cutout.height)
+                cutoutContext.globalCompositeOperation = 'source-over'
+              } else {
+                throw new Error('Background removal returned no transparent image')
+              }
+              setProgress(0.4)
+              return { canvas: cutout, matte }
+            },
+            upscale: async ({ source: removed, scale: nextScale }) => {
+              if (!removed || gen !== enhanceGenRef.current) return null
+              setBusyLabel(`Upscaling transparent PNG ${nextScale}x...`)
+              setToast(`Background removed - upscaling ${nextScale}x...`)
+              const { upscaleWithRealESRGAN } = await import('../ai/realesrgan')
+              return upscaleWithRealESRGAN({
+                imageCanvas: removed.canvas,
+                scale: nextScale,
+              })
+            },
+          })
+          setProgress(0.88)
+          if (gen !== enhanceGenRef.current || !workflow?.enhanced) return null
+          const { removed, enhanced: result } = workflow
+          if (!result.url && !result.blob) throw new Error('Upscale returned no image')
+
+          const blob = result.blob || await (await fetch(result.url)).blob()
+          const url = result.url || URL.createObjectURL(blob)
+          const enhancedImage = await imageFromUrl(url)
+          if (gen !== enhanceGenRef.current) {
+            if (url.startsWith('blob:')) revokeBlobUrl(url)
+            return null
+          }
+
+          const engine = result.engine || `Real-ESRGAN x${normalizedScale}`
+          const nextLayer = {
+            id: newStudioId(),
+            name: `Background removed + ${normalizedScale}x`,
+            url,
+            image: enhancedImage,
+            width: enhancedImage.naturalWidth || enhancedImage.width,
+            height: enhancedImage.naturalHeight || enhancedImage.height,
+            scale: normalizedScale,
+            engine,
+            matteEngine: removed.matte.engine || 'BiRefNet',
+            fit: 'Contain',
+            visible: true,
+            bytes: blob.size,
+            rollbackKept: true,
+            backgroundRemoved: true,
+            sourceName: source?.name || 'image',
+          }
+          setEnhancedLayer((previous) => {
+            if (previous?.url && previous.url !== url) revokeBlobUrl(previous.url)
+            return nextLayer
+          })
+          setEnhancedSelected(true)
+          setBaseImageSelected(false)
+          setImageVisible(false)
+          setProgress(1)
+          setToast(`Transparent PNG ready - background removed - ${normalizedScale}x`)
+          return nextLayer
+        },
+      })
+    } catch (err) {
+      if (err?.code !== 'CANCELLED' && err?.code !== 'STALE') {
+        setToast(err?.message || 'Remove background and upscale failed')
+      }
+      return null
+    } finally {
+      if (gen === enhanceGenRef.current) {
+        ioLockRef.current = false
+        setScaleBusy(false)
+        setBusyLabel('')
+      }
+    }
+  }
+
   const downloadEnhancedPng = async () => {
     if (!enhancedLayer?.image) {
       setToast('Upscale an image first')
@@ -2498,7 +2734,8 @@ export function StudioProvider({ children }) {
       const link = document.createElement('a')
       link.href = objectUrl
       const baseName = (source?.name || 'image').replace(/\.[^.]+$/, '')
-      link.download = `${baseName}-enhanced-${enhancedLayer.scale || 2}x.png`
+      const resultKind = enhancedLayer.backgroundRemoved ? 'background-removed' : 'enhanced'
+      link.download = `${baseName}-${resultKind}-${enhancedLayer.scale || 2}x.png`
       link.click()
       setToast(`Enhanced PNG · ${fmtBytes(blob.size)}`)
     } catch (err) {
@@ -2696,7 +2933,7 @@ export function StudioProvider({ children }) {
     imageVisible, setImageVisible,
     enhancedLayer, enhancedSelected, enhancedTransformBox,
     selectEnhancedLayer, updateEnhancedLayer, removeEnhancedLayer,
-    runUpscaleToEnhanced, downloadEnhancedPng, matchEnhancedSize,
+    runUpscaleToEnhanced, runRemoveBackgroundAndUpscale, downloadEnhancedPng, matchEnhancedSize,
     artboardSelected, setArtboardSelected, selectArtboard,
     canvasLocked, setCanvasLocked, toggleCanvasLock,
     imageLocked, setImageLocked, imageTransformBox,
@@ -2721,7 +2958,7 @@ export function StudioProvider({ children }) {
     addOverlay, updateOverlay, updateOverlayById, selectOverlay, selectStageOverlay, overlayBounds, toggleOverlayVisible, removeOverlay, saveCurrentPng,
     beginAnchorDrag, moveAnchorDrag, endAnchorDrag, resetTransformAnchor,
     addElementFromMask, runTextDetect,
-    runMatteCutout, cleanBackgroundFromSelected,
+    runMatteCutout, removeBackgroundFromSelectedImage, cleanBackgroundFromSelected,
     textBounds, setKonvaStageApi, konvaStageApiRef,
   }
 

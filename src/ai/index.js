@@ -6,6 +6,7 @@ export {
 } from './prompt-selection'
 export { upscaleWithRealESRGAN, probeRealESRGAN } from './realesrgan'
 export { matteWithModel, probeMatte } from './matte'
+export { runBackgroundRemovalUpscaleWorkflow } from './layer-workflow'
 export {
   inpaintRegion,
   inpaintWithLama,

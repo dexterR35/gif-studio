@@ -296,24 +296,55 @@ def upscale_with_realesrgan(
     h, w = image.shape[:2]
     check_upscale_limits(w, h, scale)
 
+    # Real-ESRGAN enhances color, not transparency. Preserve the source matte
+    # separately so RGBA cutout layers do not become opaque after upscaling.
+    source_alpha = None
+    model_image = image
+    if image.ndim == 3 and image.shape[2] == 4:
+        source_alpha = image[:, :, 3].copy()
+        model_image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+
     with _upscale_resource_limits():
         # Prefer Spandrel — works on modern Python without broken basicsr builds.
         if spandrel_ready():
-            return _upscale_spandrel(image, scale)
-
-        if realesrgan_package_ready():
+            output, engine = _upscale_spandrel(model_image, scale)
+        elif realesrgan_package_ready():
             upsampler, engine = _realesrganer(scale)
-            if image.ndim == 2:
-                bgr = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            if model_image.ndim == 2:
+                bgr = cv2.cvtColor(model_image, cv2.COLOR_GRAY2BGR)
             else:
-                bgr = image
+                bgr = model_image
             out, _ = upsampler.enhance(bgr, outscale=float(scale))
-            return encode_png(out), engine
+            output = encode_png(out)
+        else:
+            raise RuntimeError(
+                "AI upscale not available. Install with: pip install spandrel torch "
+                "(or realesrgan + basicsr on older Python) and place weights under models/realesrgan/."
+            )
 
-    raise RuntimeError(
-        "AI upscale not available. Install with: pip install spandrel torch "
-        "(or realesrgan + basicsr on older Python) and place weights under models/realesrgan/."
+    if source_alpha is not None:
+        output = _attach_upscaled_alpha(output, source_alpha)
+    return output, engine
+
+
+def _attach_upscaled_alpha(output_png: bytes, source_alpha: np.ndarray) -> bytes:
+    """Resize a source soft matte to the model output and attach it as PNG alpha."""
+    output = decode_bgr(output_png)
+    if output.ndim == 2:
+        output = cv2.cvtColor(output, cv2.COLOR_GRAY2BGRA)
+    elif output.shape[2] == 3:
+        output = cv2.cvtColor(output, cv2.COLOR_BGR2BGRA)
+    elif output.shape[2] != 4:
+        raise RuntimeError("Upscale returned an unsupported channel layout")
+
+    out_height, out_width = output.shape[:2]
+    alpha = cv2.resize(
+        source_alpha,
+        (out_width, out_height),
+        interpolation=cv2.INTER_LINEAR,
     )
+    output[:, :, 3] = alpha
+    return encode_png(output)
 
 
 def _upscale_spandrel(image: np.ndarray, outscale: int) -> tuple[bytes, str]:
